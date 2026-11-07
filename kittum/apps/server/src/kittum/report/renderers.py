@@ -921,8 +921,13 @@ def _method_paragraphs(d: dict[str, Any]) -> list[str]:
                 + " the reveal setting is before: people saw the AI's reading, once there was "
                 f"one, before deciding. {shown} "
                 + ("decision was" if shown == 1 else "decisions were")
-                + " made with it on screen, so the "
-                "agreement between people and the AI in those stages is not independent."
+                + " made with it on screen"
+                + (
+                    ", so the agreement between people and the AI in those stages is not "
+                    "independent."
+                    if shown
+                    else "."
+                )
             )
         lines += [text, ""]
     return lines

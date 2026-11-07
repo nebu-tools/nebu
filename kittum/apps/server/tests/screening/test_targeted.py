@@ -265,3 +265,21 @@ def test_complete_topics_refuse_what_only_working_topics_allow(database: Databas
     assert len(items) == len(s.records) and not queue(s, s.people.b)
     with pytest.raises(InvalidDecision, match="Nobody else"):
         decide(s, s.people.a, items[0], UNSURE)
+
+
+def test_asking_a_second_opinion_settles_at_once_even_where_the_ai_would_be_revealed(
+    database: Database,
+) -> None:
+    world = build_world(database, "S")
+    a, b = world.people.a, world.people.b
+    open_s(world, (a, b), reveal="always")
+    world.backend = recorded_backend(world.records, world.criteria())
+    world.run_judge_jobs(world.backend)
+
+    unsure = queue(world, a)[0]
+    result = decide(world, a, unsure, UNSURE)
+    # No reveal to keep or revise: the colleague's decision settles the record, so the ask
+    # cannot wait on a final decision that might drop it.
+    assert result.phase == "final" and result.reveal is None
+    consult = queue(world, b)[0]
+    assert consult.title == unsure.title and consult.second_opinion is not None

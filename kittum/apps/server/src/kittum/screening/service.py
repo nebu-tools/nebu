@@ -800,7 +800,8 @@ class Screening:
                     )
                 reveal = (
                     None
-                    if a["revealed"] or reading is None
+                    # Asking a colleague settles at once: their decision settles the record.
+                    if a["revealed"] or reading is None or decision.second_opinion
                     else reveal_for(row["reveal"], decision, reading)
                 )
                 if reveal is not None:
