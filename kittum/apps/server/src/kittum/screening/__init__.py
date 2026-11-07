@@ -52,7 +52,10 @@ evenly in the seeded order. A screener who is unsure decides with `second_opinio
 screener of the pool then gets the record with that decision and its comment, and their decision
 settles it. There is no auditor, sentinel, audit sample, extra screen, or adjudication, and the
 queue does not wait for the AI judge. Only an S stage may reveal the AI's reading `before` the
-decision; the decision records whether it was on screen (`ai_shown_before`).
+decision; the decision records whether it was on screen (`ai_shown_before`). A working topic
+also takes decisions in bulk from the table (`bulk_decide`) and from a working export the
+reviewer edited in a spreadsheet (`preview_import`, then `import_decisions`): one batch event,
+then one decision per record with its origin and the batch.
 
 Full-text outcomes are include, exclude, and insufficient information. An exclusion names the
 criterion the report fails, read `not_met` with evidence anchor IDs from `kittum.documents` (held
@@ -85,6 +88,7 @@ from kittum.screening.service import (
     JUDGING_REQUESTED,
     REJUDGED,
     SECOND_OPINION_REQUESTED,
+    SPREADSHEET_IMPORTED,
     STAGE_OPENED,
     UNDONE,
     Screening,
@@ -110,6 +114,11 @@ from kittum.screening.types import (
     DecisionOrigin,
     DecisionTiming,
     Highlight,
+    ImportFile,
+    ImportPreview,
+    ImportRefusal,
+    ImportResult,
+    ImportRow,
     InvalidDecision,
     KnownIncludes,
     NotAssigned,
@@ -131,6 +140,9 @@ from kittum.screening.types import (
     SecondOpinionContext,
     SecondOpinionGauge,
     Sentinel,
+    SheetDecision,
+    SheetExported,
+    SheetRow,
     StageInfo,
     StageMetrics,
     StageSpec,
@@ -158,6 +170,7 @@ __all__ = [
     "JUDGING_REQUESTED",
     "REJUDGED",
     "SECOND_OPINION_REQUESTED",
+    "SPREADSHEET_IMPORTED",
     "STAGE_OPENED",
     "UNDONE",
     "AdjudicationItem",
@@ -178,6 +191,11 @@ __all__ = [
     "DecisionOrigin",
     "DecisionTiming",
     "Highlight",
+    "ImportFile",
+    "ImportPreview",
+    "ImportRefusal",
+    "ImportResult",
+    "ImportRow",
     "InvalidDecision",
     "JudgeRunner",
     "KnownIncludes",
@@ -203,6 +221,9 @@ __all__ = [
     "SecondOpinionContext",
     "SecondOpinionGauge",
     "Sentinel",
+    "SheetDecision",
+    "SheetExported",
+    "SheetRow",
     "StageInfo",
     "StageMetrics",
     "StageSpec",

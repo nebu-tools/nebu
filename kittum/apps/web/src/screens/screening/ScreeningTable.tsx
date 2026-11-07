@@ -5,8 +5,9 @@
 // A reviewer decides the selected row with the queue's keys, or opens it in the queue with Enter.
 // In a topic with working documentation (mode S) the table is also where a screener decides many
 // records at once: mark rows (Shift or Ctrl click, Shift+↑/↓, a for every row in view), then
-// include them, exclude them on a criterion, or accept the AI's proposal for each. The server
-// refuses bulk decisions in complete topics.
+// include them, exclude them on a criterion, or accept the AI's proposal for each. A screener
+// there may also export their records, decide them in Excel, and import the file again. The
+// server refuses bulk decisions and imports in complete topics.
 import { Popover } from "@base-ui/react/popover";
 import { useNavigate, useRouteContext } from "@tanstack/react-router";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
@@ -39,6 +40,7 @@ import type { Haystack } from "./table/fuzzy.ts";
 import { describe, view } from "./table/grid.ts";
 import type { Column, ViewState } from "./table/grid.ts";
 import { Grid } from "./table/Grid.tsx";
+import { ImportDecisions } from "./table/ImportDecisions.tsx";
 import { loadViews, storeViews } from "./table/views.ts";
 import type { SavedViews } from "./table/views.ts";
 
@@ -974,7 +976,7 @@ function StageTable({
 
   return (
     <div className="grid h-full grid-rows-[auto_minmax(0,1fr)_auto]" data-testid="screening-table">
-      <div className="flex h-9 items-center gap-3 border-b border-rule bg-paper px-3 text-xs">
+      <div className="relative flex h-9 items-center gap-3 border-b border-rule bg-paper px-3 text-xs">
         {stages.length > 1 ? (
           <select
             aria-label="Stage"
@@ -1078,6 +1080,21 @@ function StageTable({
           <ToolButton onClick={() => void exportRows("stage")} disabled={exporting !== null}>
             {exporting === "stage" ? "Exporting…" : "Export stage"}
           </ToolButton>
+          {kind === "reviewer" &&
+          table.documentation === "working" &&
+          stage.stage === "title_abstract" ? (
+            <ImportDecisions
+              workbench={workbench}
+              caller={caller}
+              stageId={stage.stage_id}
+              criteria={criteria}
+              onImported={(message) => {
+                setError(null);
+                setNotice(message);
+                setReload((n) => n + 1);
+              }}
+            />
+          ) : null}
         </span>
       </div>
       <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_400px]">

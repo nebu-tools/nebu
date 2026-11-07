@@ -274,8 +274,9 @@ class DecideResult(Record):
 type BulkAction = Literal["include", "exclude", "accept_ai"]
 """What a bulk decision decides: include every selected record, exclude them all on one
 criterion, or give each the outcome and reason the AI proposes for it."""
-type DecisionOrigin = Literal["keyboard", "bulk"]
-"""Where a decision came from: a key on one record, or a bulk decision from the table."""
+type DecisionOrigin = Literal["keyboard", "bulk", "spreadsheet"]
+"""Where a decision came from: a key on one record, a bulk decision from the table, or a row of a
+working export the reviewer edited in a spreadsheet and imported."""
 
 
 class BulkRow(Record):
@@ -292,6 +293,94 @@ class BulkResult(Record):
     decided: int
     """Records the batch decided; a reveal may leave some waiting for a final decision."""
     awaiting_final: int
+    recorded_at: datetime
+
+
+class SheetDecision(Record):
+    """What the editable columns of a working export's row say: the decision, the criterion it
+    excludes on, and a comment. Empty cells are `None`."""
+
+    outcome: Outcome | None = None
+    reason_criterion_id: str | None = None
+    comment: str | None = None
+
+
+class SheetExported(Record):
+    """What a row showed when Kittum exported it, kept by Kittum beside the export."""
+
+    state: Literal["pending", "awaiting_final", "decided"]
+    decision: SheetDecision
+    ai: bool = False
+    """The file carried the AI's reading of the record."""
+
+
+class SheetRow(Record):
+    """One row of an edited working export, as `kittum.report` read it."""
+
+    row: int
+    """The row's number in the spreadsheet, for the reviewer to find it."""
+    ref: str
+    decision: SheetDecision
+    problem: str | None = None
+    """A cell Kittum could not read (an outcome or criterion it does not know), in words."""
+    exported: SheetExported | None = None
+    """The row as exported; empty when the export had no row with this Ref."""
+
+
+type ImportRefusal = Literal[
+    "unknown_ref",  # not a row of the export, or not a record of the stage
+    "not_yours",  # another reviewer's assignment
+    "duplicate",  # the Ref is in the file twice, with different decisions
+    "unreadable",  # an outcome or criterion Kittum does not know
+    "no_decision",  # a reason or comment without a decision
+    "invalid",  # the decision breaks a rule of the stage
+    "stale",  # decided differently in Kittum after the export
+    "decided",  # decided in Kittum already; a change needs an undo there
+    "second_opinion",  # a consult, decided in Kittum beside the first decision
+    "withdrawn",  # the record left the screening
+]
+"""Why a row of an imported spreadsheet does not change anything."""
+
+
+class ImportRow(Record):
+    row: int
+    ref: str
+    title: str | None = None
+    """The record's title, where the ref names one of the reviewer's records."""
+    decision: SheetDecision
+    """What the file says."""
+    refusal: ImportRefusal | None = None
+    message: str | None = None
+    """Why the row is refused, in words."""
+
+
+class ImportPreview(Record):
+    """What importing a spreadsheet would do: nothing is recorded yet."""
+
+    changes: tuple[ImportRow, ...]
+    """Rows that would be decided, one decision each."""
+    unchanged: int
+    """Rows that change nothing: blank, as exported, or already so in Kittum."""
+    refused: tuple[ImportRow, ...]
+    preview_hash: str
+    """Names the changes; applying needs it, so an import records what its preview showed."""
+
+
+class ImportFile(Record):
+    sha256: str
+    """The uploaded file, in the artifact store."""
+    name: str | None = None
+    export_id: Id
+    """The working export the file was made from."""
+
+
+class ImportResult(Record):
+    batch_id: Id
+    decided: int
+    """Records the import decided; a reveal may leave some waiting for a final decision."""
+    awaiting_final: int
+    unchanged: int
+    refused: int
     recorded_at: datetime
 
 

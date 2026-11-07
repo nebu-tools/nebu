@@ -146,7 +146,9 @@ class HumanDecision(Record):
     revealed: bool  # the AI was shown after this provisional decision
     ai_shown_before: bool = False  # the AI's reading was on screen while deciding (reveal before)
     second_opinion: bool = False  # mode S: the screener asked for a second opinion
-    origin: str = "keyboard"  # `bulk`: decided with others from the table, in a working topic
+    origin: str = "keyboard"
+    """`bulk`: decided with others from the table; `spreadsheet`: a row of an imported working
+    export. Both only in working topics."""
     batch_id: Id | None = None
     ai_proposal_accepted: bool = False
     """A bulk "accept the AI's proposals" gave this decision the AI's outcome and reason."""
@@ -154,7 +156,8 @@ class HumanDecision(Record):
     """For an accepted exclusion: whether the quote filter had confirmed its quote."""
     event_id: Id
     event_seq: int
-    decided_at: datetime
+    decided_at: datetime | None
+    """The client's time of the decision; empty for a spreadsheet decision, which has none."""
 
 
 class Adjudication(Record):
@@ -324,6 +327,11 @@ class StageResult(Record):
     """Standing bulk decisions that took over the AI's proposal."""
     bulk_accepted_unverified: int = 0
     """Of those, exclusions on a quote the filter could not verify."""
+    spreadsheet_decisions: int = 0
+    """Standing decisions imported from edited working exports (working topics)."""
+    spreadsheet_imports: int = 0
+    spreadsheet_uploaders: int = 0
+    """People who imported them. Kittum cannot know who decided each row of a file."""
 
     @property
     def documentation(self) -> DocumentationLevel:
@@ -859,6 +867,7 @@ def _stage(
         else opened_version
     )
     standing = [d for i in results for d in i.final if d.origin == "bulk"]
+    sheet = [d for i in results for d in i.final if d.origin == "spreadsheet"]
     # Reveals and revisions over every assignment, the auditor's and sentinels' included.
     reveals = [d for d in provisional.values() if d is not None and d.revealed]
     revised = [
@@ -889,6 +898,9 @@ def _stage(
         bulk_batches=len({d.batch_id for d in standing}),
         bulk_accepted_ai=sum(d.ai_proposal_accepted for d in standing),
         bulk_accepted_unverified=sum(d.ai_proposal_verified is False for d in standing),
+        spreadsheet_decisions=len(sheet),
+        spreadsheet_imports=len({d.batch_id for d in sheet}),
+        spreadsheet_uploaders=len({d.reviewer_id for d in sheet}),
         screeners=tuple(stage["screeners"]),
         auditor_id=stage["auditor_id"],
         opened_event_id=stage["opened_event_id"],

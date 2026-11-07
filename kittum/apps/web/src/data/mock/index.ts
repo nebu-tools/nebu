@@ -522,6 +522,8 @@ export const makeMockWorkbench = (
             : [],
       })),
     workingExport: unavailable,
+    previewDecisionImport: unavailable,
+    importDecisions: unavailable,
     bulkDecide: unavailable,
     recordPrompt: unavailable,
     promptTemplate: unavailable,

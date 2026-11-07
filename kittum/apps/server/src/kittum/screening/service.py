@@ -3,6 +3,7 @@ decider, one ledger event or more, the module's rows, and a receipt, in the call
 A replayed command returns the stored outcome and writes nothing."""
 
 import uuid
+from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
@@ -63,6 +64,9 @@ from kittum.screening.types import (
     BulkResult,
     DecideResult,
     Decision,
+    ImportPreview,
+    ImportResult,
+    ImportRow,
     InvalidDecision,
     NotAssigned,
     QueueItem,
@@ -72,6 +76,8 @@ from kittum.screening.types import (
     ReviewerColumn,
     ScopeStatus,
     SecondOpinionContext,
+    SheetDecision,
+    SheetExported,
     StageInfo,
     StaleRevision,
     UndoResult,
@@ -88,13 +94,18 @@ if TYPE_CHECKING:
     from kittum.runs import JobQueue, Receipt, ReceiptStore
     from kittum.screening.metrics import RecordOutcome
     from kittum.screening.types import (
+        AiProposal,
         BulkAction,
         BulkRow,
         ConflictKind,
+        DecisionOrigin,
         DecisionTiming,
+        ImportFile,
+        ImportRefusal,
         Phase,
         RescreenReason,
         ScreeningRecord,
+        SheetRow,
         StageSpec,
         WithdrawReason,
     )
@@ -113,6 +124,7 @@ ADJUDICATED = "screening.adjudicated"
 SECOND_OPINION_REQUESTED = "screening.second_opinion_requested"
 REJUDGED = "screening.rejudged"
 BULK_DECIDED = "screening.bulk_decided"
+SPREADSHEET_IMPORTED = "screening.spreadsheet_imported"
 BENCH_REQUESTED = "screening.bench_requested"
 BENCH_FINISHED = "screening.bench_finished"
 JUDGE_JOB = "screening.judge"
@@ -1654,59 +1666,26 @@ class Screening:
                 else:
                     decision = Decision(outcome="include")
                 validate(decision, row["stage"], st["criteria"])
-                reveal = (
-                    None
-                    if a["revealed"] or reading is None
-                    else reveal_for(row["reveal"], decision, reading)
+                event, change = _batch_decision(
+                    project_id,
+                    reviewer_id,
+                    row,
+                    a,
+                    decision,
+                    reading,
+                    st["items"][a["item_ref"]],
+                    command_id=command_id,
+                    ai_shown_before=row["reveal"] == "before" and reading is not None,
+                    payload={
+                        "timing": timing.model_dump(mode="json"),
+                        "origin": "bulk",
+                        "batch_id": str(batch_id),
+                        "filter": filter_description,
+                        "ai_proposal": _json(accepted),
+                    },
                 )
-                if reveal is not None:
-                    item = st["items"][a["item_ref"]]
-                    reveal = locate(reveal, item["title"], item["text"])
-                decision_id = new_id()
-                state = "awaiting_final" if reveal else "decided"
-                ai_shown_before = row["reveal"] == "before" and reading is not None
-                revision = a["revision"] + 1
-                events.append(
-                    _event(
-                        project_id,
-                        DECIDED,
-                        reviewer_id,
-                        {
-                            "decision_id": str(decision_id),
-                            "assignment_id": str(a["id"]),
-                            "stage_id": str(stage_id),
-                            "item_ref": a["item_ref"],
-                            "phase": "provisional",
-                            "outcome": decision.outcome,
-                            "reason_criterion_id": decision.reason_criterion_id,
-                            "criteria": [],
-                            "evidence_anchor_ids": [],
-                            "revision": revision,
-                            "reveal": _json(reveal),
-                            "settled": state == "decided",
-                            "second_opinion": False,
-                            "ai_shown_before": ai_shown_before,
-                            "timing": timing.model_dump(mode="json"),
-                            "origin": "bulk",
-                            "batch_id": str(batch_id),
-                            "filter": filter_description,
-                            "ai_proposal": _json(accepted),
-                        },
-                    )
-                )
-                changes.append(
-                    {
-                        "assignment_id": a["id"],
-                        "decision_id": decision_id,
-                        "command_id": uuid.uuid5(command_id, str(a["id"])),
-                        "decision": decision,
-                        "reveal": reveal,
-                        "state": state,
-                        "revision": revision,
-                        "ai_shown_before": ai_shown_before,
-                        "accepted": accepted,
-                    }
-                )
+                events.append(event)
+                changes.append({**change, "accepted": accepted})
             return RunDecision(
                 events=tuple(events), changes={"batch_id": batch_id, "rows": changes}
             )
@@ -1733,49 +1712,14 @@ class Screening:
                 ),
             )
             for change, event in zip(c["rows"], decided, strict=True):
-                d: Decision = change["decision"]
-                etag = _etag()
-                tx.execute(
-                    "insert into screening_decision (id, assignment_id, command_id, event_id,"
-                    " phase, outcome, reason_criterion_id, criteria, evidence_anchor_ids,"
-                    " comment, revision, etag, reveal, shown_at, first_key_at, decided_at,"
-                    " reveal_shown_at, recorded_at, second_opinion, ai_shown_before, origin,"
-                    " batch_id, ai_proposal) values (%s, %s, %s, %s, 'provisional', %s, %s,"
-                    " '[]', '{}', null, %s, %s, %s, %s, %s, %s, %s, %s, false, %s, 'bulk', %s, %s)",
-                    (
-                        change["decision_id"],
-                        change["assignment_id"],
-                        change["command_id"],
-                        event.event_id,
-                        d.outcome,
-                        d.reason_criterion_id,
-                        change["revision"],
-                        etag,
-                        Jsonb(_json(change["reveal"])) if change["reveal"] else None,
-                        timing.shown_at,
-                        timing.first_key_at,
-                        timing.decided_at,
-                        timing.reveal_shown_at,
-                        event.recorded_at,
-                        change["ai_shown_before"],
-                        c["batch_id"],
-                        Jsonb(_json(change["accepted"])) if change["accepted"] else None,
-                    ),
-                )
-                decided_now = change["state"] == "decided"
-                tx.execute(
-                    "update screening_assignment set state = %s, revealed = revealed or %s,"
-                    " revision = %s, etag = %s, provisional_decision_id = %s,"
-                    " final_decision_id = %s where id = %s",
-                    (
-                        change["state"],
-                        change["reveal"] is not None,
-                        change["revision"],
-                        etag,
-                        change["decision_id"],
-                        change["decision_id"] if decided_now else None,
-                        change["assignment_id"],
-                    ),
+                _write_batch_decision(
+                    tx,
+                    change,
+                    event,
+                    batch_id=c["batch_id"],
+                    origin="bulk",
+                    timing=timing,
+                    ai_proposal=change["accepted"],
                 )
 
         self._commands.execute(tx, command, decide, load=load, apply=apply)
@@ -1795,6 +1739,200 @@ class Screening:
             awaiting_final=batch["waiting"],
             recorded_at=batch["recorded_at"],
         )
+
+    def preview_import(
+        self, tx: Tx, project_id: Id, reviewer_id: Id, stage_id: Id, rows: Sequence[SheetRow]
+    ) -> ImportPreview:
+        """What importing the rows of an edited working export would do; records nothing.
+
+        A row changes something only where the reviewer edited it: blank cells, cells as they
+        were exported, and decisions Kittum already has change nothing. An edited row is refused
+        when it is not a row of the export or not the reviewer's own record, when Kittum's
+        decision changed since the export (stale), when the record is decided already (a change
+        needs an undo in Kittum), when it is a second opinion asked of the reviewer (a consult is
+        decided beside the first decision), or when its decision breaks a rule of the stage. A
+        complete topic, and a full-text stage, refuse the import."""
+        st = self._import_state(tx, project_id, stage_id, rows, lock=False)
+        changes, unchanged, refused = _classify_import(reviewer_id, st, rows)
+        return ImportPreview(
+            changes=tuple(c.row for c in changes),
+            unchanged=unchanged,
+            refused=tuple(refused),
+            preview_hash=_import_hash(changes),
+        )
+
+    def import_decisions(
+        self,
+        tx: Tx,
+        *,
+        command_id: Id,
+        project_id: Id,
+        reviewer_id: Id,
+        stage_id: Id,
+        rows: Sequence[SheetRow],
+        file: ImportFile,
+        expected_preview: str,
+    ) -> ImportResult:
+        """Decide the rows `preview_import` accepts, as its preview (`expected_preview`) showed
+        them: one `screening.spreadsheet_imported` event with the file's hash, the export it came
+        from, and the counts, then one decision per row through the path of a bulk decision,
+        with `origin: spreadsheet` and the batch. The uploader is the decision's actor; Kittum
+        cannot know who decided a row in the file, nor when, so the decisions have no timing. If
+        anything changed since the preview, nothing is recorded (409)."""
+        command = Command(
+            command_id=command_id,
+            project_id=project_id,
+            type="screening.import_decisions",
+            actor_id=reviewer_id,
+            payload={
+                "stage_id": str(stage_id),
+                "file": file.model_dump(mode="json"),
+                "expected_preview": expected_preview,
+            },
+        )
+
+        def load(tx: Tx, _: Command) -> dict[str, Any]:
+            return self._import_state(tx, project_id, stage_id, rows, lock=True)
+
+        def decide(_: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
+            changes, unchanged, refused = _classify_import(reviewer_id, st, rows)
+            if _import_hash(changes) != expected_preview:
+                raise StaleRevision(
+                    "Kittum changed since the preview of this file. Preview it again."
+                )
+            if not changes:
+                raise InvalidDecision("The file changes no decision: there is nothing to import.")
+            batch_id = uuid.uuid5(command_id, "batch")
+            row = st["stage"]
+            events = [
+                _event(
+                    project_id,
+                    SPREADSHEET_IMPORTED,
+                    reviewer_id,
+                    {
+                        "batch_id": str(batch_id),
+                        "stage_id": str(stage_id),
+                        "file_sha256": file.sha256,
+                        "file_name": file.name,
+                        "export_id": str(file.export_id),
+                        "decisions": len(changes),
+                        "unchanged": unchanged,
+                        "refused": len(refused),
+                        "refusals": dict(Counter(str(r.refusal) for r in refused)),
+                        "assignment_ids": [str(c.a["id"]) for c in changes],
+                    },
+                )
+            ]
+            out = []
+            for c in changes:
+                reading: Reading | None = st["readings"].get(c.a["item_ref"])
+                event, change = _batch_decision(
+                    project_id,
+                    reviewer_id,
+                    row,
+                    c.a,
+                    c.decision,
+                    reading,
+                    st["items"][c.a["item_ref"]],
+                    command_id=command_id,
+                    ai_shown_before=c.ai_in_file,
+                    payload={
+                        "timing": None,
+                        "origin": "spreadsheet",
+                        "batch_id": str(batch_id),
+                        "export_id": str(file.export_id),
+                        "sheet_row": c.row.row,
+                    },
+                )
+                events.append(event)
+                out.append(change)
+            return RunDecision(
+                events=tuple(events),
+                changes={
+                    "batch_id": batch_id,
+                    "rows": out,
+                    "unchanged": unchanged,
+                    "refused": len(refused),
+                },
+            )
+
+        def apply(tx: Tx, result: RunDecision[dict[str, Any]], events: tuple[AuditEvent, ...]):
+            c = result.changes
+            assert c is not None
+            batch, *decided = events
+            tx.execute(
+                "insert into screening_batch (id, stage_id, reviewer_id, command_id, event_id,"
+                " action, decisions, recorded_at, file_sha256, file_name, export_id, unchanged,"
+                " refused) values (%s, %s, %s, %s, %s, 'spreadsheet', %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    c["batch_id"],
+                    stage_id,
+                    reviewer_id,
+                    command_id,
+                    batch.event_id,
+                    len(c["rows"]),
+                    batch.recorded_at,
+                    file.sha256,
+                    file.name,
+                    file.export_id,
+                    c["unchanged"],
+                    c["refused"],
+                ),
+            )
+            for change, event in zip(c["rows"], decided, strict=True):
+                _write_batch_decision(
+                    tx, change, event, batch_id=c["batch_id"], origin="spreadsheet", timing=None
+                )
+
+        self._commands.execute(tx, command, decide, load=load, apply=apply)
+        batch = tx.execute(
+            "select b.id, b.reviewer_id, b.recorded_at, b.unchanged, b.refused,"
+            " count(*) as decisions, count(*) filter (where d.reveal is not null) as waiting"
+            " from screening_batch b join screening_decision d on d.batch_id = b.id"
+            " where b.command_id = %s group by b.id",
+            (command_id,),
+        ).fetchone()
+        if batch is None or batch["reviewer_id"] != reviewer_id:
+            raise NotAssigned(f"command {command_id} recorded no import of this reviewer")
+        return ImportResult(
+            batch_id=batch["id"],
+            decided=batch["decisions"] - batch["waiting"],
+            awaiting_final=batch["waiting"],
+            unchanged=batch["unchanged"],
+            refused=batch["refused"],
+            recorded_at=batch["recorded_at"],
+        )
+
+    def _import_state(
+        self, tx: Tx, project_id: Id, stage_id: Id, rows: Sequence[SheetRow], *, lock: bool
+    ) -> dict[str, Any]:
+        row = store.stage_row(tx, project_id, stage_id)
+        ids = list({i for r in rows if (i := _uuid(r.ref)) is not None})
+        found = {
+            a["id"]: a
+            for a in tx.execute(
+                store.ASSIGNMENT_SQL
+                + " where a.id = any(%s) and a.stage_id = %s"
+                + (" for update of a" if lock else ""),
+                (ids, stage_id),
+            ).fetchall()
+        }
+        refs = [a["item_ref"] for a in found.values()]
+        items = {
+            i["item_ref"]: i
+            for i in tx.execute(
+                "select item_ref, title, text from screening_item"
+                " where stage_id = %s and item_ref = any(%s)",
+                (stage_id, refs),
+            ).fetchall()
+        }
+        return {
+            "stage": row,
+            "criteria": self._criteria(tx, row),
+            "found": found,
+            "items": items,
+            "readings": store.readings(tx, stage_id, refs),
+        }
 
     def _own_assignment(
         self, tx: Tx, project_id: Id, reviewer_id: Id, assignment_id: Id, *, lock: bool = False
@@ -2532,6 +2670,312 @@ def _second_opinion(
 
 def _records(n: int) -> str:
     return "1 record" if n == 1 else f"{n} records"
+
+
+@dataclass(frozen=True)
+class _SheetChange:
+    row: ImportRow
+    a: dict[str, Any]
+    decision: Decision
+    ai_in_file: bool
+
+
+def _uuid(ref: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(ref.strip())
+    except ValueError:
+        return None
+
+
+def _note(text: str | None) -> str | None:
+    return (text or "").strip() or None
+
+
+def _same(a: SheetDecision, b: SheetDecision) -> bool:
+    return (a.outcome, a.reason_criterion_id, _note(a.comment)) == (
+        b.outcome,
+        b.reason_criterion_id,
+        _note(b.comment),
+    )
+
+
+def _blank(r: SheetRow) -> bool:
+    d = r.decision
+    return (
+        r.problem is None
+        and d.outcome is None
+        and not d.reason_criterion_id
+        and not _note(d.comment)
+    )
+
+
+def _kittum_now(a: dict[str, Any]) -> SheetExported:
+    """The assignment's decision as the reviewer's table shows it, in the export's terms."""
+    p = "f_" if a["final_decision_id"] else "p_" if a["provisional_decision_id"] else None
+    decision = (
+        SheetDecision(
+            outcome=a[f"{p}outcome"],
+            reason_criterion_id=a[f"{p}reason_criterion_id"],
+            comment=a[f"{p}comment"],
+        )
+        if p
+        else SheetDecision()
+    )
+    return SheetExported(state=a["state"], decision=decision)
+
+
+_OUTCOME_WORDS = {
+    "include": "Include",
+    "exclude": "Exclude",
+    "unclear": "Unclear",
+    "insufficient_information": "Insufficient information",
+}
+
+
+def _now_words(now: SheetExported) -> str:
+    d = now.decision
+    if now.state == "pending" or d.outcome is None:
+        return "now not decided"
+    reason = f" on {d.reason_criterion_id}" if d.reason_criterion_id else ""
+    return f"now {_OUTCOME_WORDS[d.outcome]}{reason}"
+
+
+def _classify_import(
+    reviewer_id: Id, st: dict[str, Any], rows: Sequence[SheetRow]
+) -> tuple[list[_SheetChange], int, list[ImportRow]]:
+    """Sort the rows of an edited working export into changes, unchanged rows, and refusals."""
+    stage = st["stage"]
+    if documentation_level(ScreeningMode(stage["mode"])) != "working":
+        raise InvalidDecision(
+            "Importing decisions from a spreadsheet is for topics with working documentation "
+            "(mode S). In a topic with complete documentation every record is decided in "
+            "Kittum, on its own."
+        )
+    if stage["stage"] != "title_abstract":
+        raise InvalidDecision(
+            "Importing decisions from a spreadsheet is for title and abstract screening. At full "
+            "text an exclusion needs its evidence, so decide full text in Kittum."
+        )
+    found, items = st["found"], st["items"]
+    edited = Counter(r.ref.strip() for r in rows if not _blank(r))
+    changes: list[_SheetChange] = []
+    refused: list[ImportRow] = []
+    unchanged = 0
+    for r in rows:
+        d, exported = r.decision, r.exported
+        a = found.get(_uuid(r.ref)) if _uuid(r.ref) else None
+        mine = a is not None and a["reviewer_id"] == reviewer_id
+        title = items[a["item_ref"]]["title"] if mine and a["item_ref"] in items else None
+
+        def refuse(kind: ImportRefusal, message: str, *, r: SheetRow = r, title=title) -> None:
+            refused.append(
+                ImportRow(
+                    row=r.row,
+                    ref=r.ref,
+                    title=title,
+                    decision=r.decision,
+                    refusal=kind,
+                    message=message,
+                )
+            )
+
+        if _blank(r):
+            unchanged += 1
+            continue
+        if exported is None:
+            refuse("unknown_ref", "This Ref is not a row of the export.")
+            continue
+        if r.problem is None and d.outcome is None:
+            was = exported.decision
+            as_exported = (d.reason_criterion_id, _note(d.comment)) == (
+                was.reason_criterion_id,
+                _note(was.comment),
+            )
+            if as_exported or (not d.reason_criterion_id and not _note(d.comment)):
+                unchanged += 1  # a cleared decision is a blank one: unchanged
+            else:
+                refuse("no_decision", "A reason or a comment needs a decision in Your decision.")
+            continue
+        if r.problem is None and _same(d, exported.decision):
+            unchanged += 1
+            continue
+        if edited[r.ref.strip()] > 1:
+            refuse("duplicate", f"This Ref is in the file {edited[r.ref.strip()]} times.")
+            continue
+        if a is None:
+            refuse("unknown_ref", "No record of this stage has this Ref.")
+            continue
+        if not mine:
+            refuse("not_yours", "This is another reviewer's record. Only its screener decides it.")
+            continue
+        if r.problem is not None:
+            refuse("unreadable", r.problem)
+            continue
+        now = _kittum_now(a)
+        if now.state != "pending" and _same(d, now.decision):
+            unchanged += 1  # Kittum has this decision already
+            continue
+        if a["withdrawn_event_id"] is not None:
+            refuse("withdrawn", "This record was taken out of screening.")
+            continue
+        if now.state != exported.state or not _same(now.decision, exported.decision):
+            refuse("stale", f"Decided differently in Kittum after the export ({_now_words(now)}).")
+            continue
+        if a["role"] != "screener":
+            refuse(
+                "second_opinion",
+                "A second opinion asked of you. Decide it in Kittum, beside the first decision.",
+            )
+            continue
+        if now.state == "awaiting_final":
+            refuse("decided", "This record waits for your final decision in Kittum.")
+            continue
+        if now.state == "decided":
+            refuse(
+                "decided",
+                f"Decided in Kittum already ({_now_words(now)[4:]}). To change it, undo it there.",
+            )
+            continue
+        assert d.outcome is not None
+        decision = Decision(
+            outcome=d.outcome, reason_criterion_id=d.reason_criterion_id, comment=_note(d.comment)
+        )
+        try:
+            validate(decision, stage["stage"], st["criteria"])
+        except InvalidDecision as e:
+            refuse("invalid", str(e))
+            continue
+        changes.append(
+            _SheetChange(
+                ImportRow(row=r.row, ref=r.ref, title=title, decision=d), a, decision, exported.ai
+            )
+        )
+    return changes, unchanged, refused
+
+
+def _import_hash(changes: Sequence[_SheetChange]) -> str:
+    return content_hash(
+        [[str(c.a["id"]), c.decision.model_dump(mode="json")] for c in changes],
+        domain="kittum.screening.import_preview",
+    )
+
+
+def _batch_decision(
+    project_id: Id,
+    reviewer_id: Id,
+    row: dict[str, Any],
+    a: dict[str, Any],
+    decision: Decision,
+    reading: Reading | None,
+    item: dict[str, Any],
+    *,
+    command_id: Id,
+    ai_shown_before: bool,
+    payload: dict[str, Any],
+) -> tuple[EventDraft, dict[str, Any]]:
+    """One record's decision of a batch (a bulk decision or a spreadsheet import), under the rules
+    of `decide` for a provisional decision: the reveal the stage calls for, or settled at once.
+    `payload` adds the batch's fields (origin, batch, timing) to the decision's event."""
+    reveal = (
+        None if a["revealed"] or reading is None else reveal_for(row["reveal"], decision, reading)
+    )
+    if reveal is not None:
+        reveal = locate(reveal, item["title"], item["text"])
+    decision_id = new_id()
+    state = "awaiting_final" if reveal else "decided"
+    revision = a["revision"] + 1
+    event = _event(
+        project_id,
+        DECIDED,
+        reviewer_id,
+        {
+            "decision_id": str(decision_id),
+            "assignment_id": str(a["id"]),
+            "stage_id": str(row["id"]),
+            "item_ref": a["item_ref"],
+            "phase": "provisional",
+            "outcome": decision.outcome,
+            "reason_criterion_id": decision.reason_criterion_id,
+            "criteria": [],
+            "evidence_anchor_ids": [],
+            "revision": revision,
+            "reveal": _json(reveal),
+            "settled": state == "decided",
+            "second_opinion": False,
+            "ai_shown_before": ai_shown_before,
+            **payload,
+        },
+    )
+    change = {
+        "assignment_id": a["id"],
+        "decision_id": decision_id,
+        "command_id": uuid.uuid5(command_id, str(a["id"])),
+        "decision": decision,
+        "reveal": reveal,
+        "state": state,
+        "revision": revision,
+        "ai_shown_before": ai_shown_before,
+    }
+    return event, change
+
+
+def _write_batch_decision(
+    tx: Tx,
+    change: dict[str, Any],
+    event: AuditEvent,
+    *,
+    batch_id: Id,
+    origin: DecisionOrigin,
+    timing: DecisionTiming | None,
+    ai_proposal: AiProposal | None = None,
+) -> None:
+    """The rows of one `_batch_decision`: the decision and its assignment's new state."""
+    d: Decision = change["decision"]
+    etag = _etag()
+    tx.execute(
+        "insert into screening_decision (id, assignment_id, command_id, event_id,"
+        " phase, outcome, reason_criterion_id, criteria, evidence_anchor_ids,"
+        " comment, revision, etag, reveal, shown_at, first_key_at, decided_at,"
+        " reveal_shown_at, recorded_at, second_opinion, ai_shown_before, origin,"
+        " batch_id, ai_proposal) values (%s, %s, %s, %s, 'provisional', %s, %s,"
+        " '[]', '{}', %s, %s, %s, %s, %s, %s, %s, %s, %s, false, %s, %s, %s, %s)",
+        (
+            change["decision_id"],
+            change["assignment_id"],
+            change["command_id"],
+            event.event_id,
+            d.outcome,
+            d.reason_criterion_id,
+            d.comment,
+            change["revision"],
+            etag,
+            Jsonb(_json(change["reveal"])) if change["reveal"] else None,
+            timing.shown_at if timing else None,
+            timing.first_key_at if timing else None,
+            timing.decided_at if timing else None,
+            timing.reveal_shown_at if timing else None,
+            event.recorded_at,
+            change["ai_shown_before"],
+            origin,
+            batch_id,
+            Jsonb(_json(ai_proposal)) if ai_proposal else None,
+        ),
+    )
+    decided_now = change["state"] == "decided"
+    tx.execute(
+        "update screening_assignment set state = %s, revealed = revealed or %s,"
+        " revision = %s, etag = %s, provisional_decision_id = %s,"
+        " final_decision_id = %s where id = %s",
+        (
+            change["state"],
+            change["reveal"] is not None,
+            change["revision"],
+            etag,
+            change["decision_id"],
+            change["decision_id"] if decided_now else None,
+            change["assignment_id"],
+        ),
+    )
 
 
 def _refuse_withdrawn(a: dict[str, Any]) -> None:

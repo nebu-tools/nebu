@@ -12,6 +12,8 @@ blinding, so a screener or auditor exports only their own rows. Until the API ha
 the body or in the `X-Kittum-Reviewer` header; that is a stand-in, not a security boundary.
 """
 
+import base64
+import binascii
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Annotated, Literal
 
@@ -26,11 +28,14 @@ from kittum.report import (
     CORE_TARGETS,
     XLSX,
     Artifact,
+    DecisionImportPreview,
     ExportView,
     NotTheLead,
     ReportRequestError,
     RightsProfile,
+    apply_decision_import,
     head_seq,
+    preview_decision_import,
     record_render,
     render,
     rendered_file,
@@ -39,7 +44,8 @@ from kittum.report import (
     targets,
     working_export,
 )
-from kittum.screening import InvalidDecision, NotAssigned
+from kittum.runs import CommandIdReused
+from kittum.screening import ImportResult, InvalidDecision, NotAssigned, Screening, StaleRevision
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -103,6 +109,21 @@ class WorkingExportRequest(Record):
     """The table view to export; the whole stage as the caller may see it when empty."""
 
 
+class DecisionImportRequest(Record):
+    stage_id: Id
+    """The stage whose table the file is imported on; it must be the export's stage."""
+    data: str = Field(max_length=50_000_000)
+    """The edited working export (XLSX), its bytes in base64."""
+    file_name: str | None = Field(default=None, max_length=255)
+
+
+class DecisionImportApply(DecisionImportRequest):
+    command_id: Id
+    """Chosen by the client; a retry with the same ID returns the first result."""
+    preview_hash: str
+    """`preview.preview_hash` of the preview the caller saw: if anything changed since, 409."""
+
+
 def _ledger(ctx: AppContext) -> Ledger:
     if ctx.ledger is None:
         raise HTTPException(status_code=503, detail="no ledger is configured")
@@ -121,6 +142,8 @@ def _errors() -> Generator[None]:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except InvalidDecision as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except (StaleRevision, CommandIdReused) as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.get("/targets", operation_id="listReportTargets")
@@ -221,6 +244,57 @@ def export_working(
             "X-Kittum-Sha256": exported.sha256,
         },
     )
+
+
+def _upload(data: str) -> bytes:
+    try:
+        return base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise HTTPException(status_code=400, detail="the file is not valid base64") from e
+
+
+@router.post("/working-export/import-preview", operation_id="previewDecisionImport")
+def preview_import(
+    project_id: Id, body: DecisionImportRequest, reviewer: Reviewer, ctx: Context
+) -> DecisionImportPreview:
+    """What importing an edited working export would decide: the rows that change, the unchanged
+    ones, and the refused ones with their reasons. Records nothing. Only a screener's export of a
+    title and abstract stage in a working topic brings decisions back; a complete topic refuses
+    (422)."""
+    data = _upload(body.data)
+    with _errors(), ctx.db.transaction() as tx:
+        return preview_decision_import(
+            tx,
+            project_id,
+            reviewer,
+            body.stage_id,
+            data,
+            screening=Screening.postgres(_ledger(ctx), ctx.clock),
+            store=ctx.artifacts,
+        )
+
+
+@router.post("/working-export/import", operation_id="importDecisions")
+def import_decisions(
+    project_id: Id, body: DecisionImportApply, reviewer: Reviewer, ctx: Context
+) -> ImportResult:
+    """Import an edited working export as its preview showed it: the file is stored by hash, one
+    batch event names it, its export, and the counts, and each changed row becomes one decision
+    with `origin: spreadsheet`. If anything changed since the preview, nothing is recorded (409)."""
+    data = _upload(body.data)
+    with _errors(), ctx.db.transaction() as tx:
+        return apply_decision_import(
+            tx,
+            project_id,
+            reviewer,
+            body.stage_id,
+            data,
+            command_id=body.command_id,
+            expected_preview=body.preview_hash,
+            file_name=body.file_name,
+            screening=Screening.postgres(_ledger(ctx), ctx.clock),
+            store=ctx.artifacts,
+        )
 
 
 @router.post("/bundle", operation_id="sealReportBundle")

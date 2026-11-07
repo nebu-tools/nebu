@@ -18,7 +18,9 @@ The working export (`working_export`) is not a report target: an XLSX of one sta
 reviewer's table view, for working in a spreadsheet. It follows the screening table's blinding,
 so a reviewer may export their own rows. It is stored by hash in `report_artifact` under
 `working_export` with a `report.working_exported` event (`kittum.report.working`), so the bundle
-records that it was made; no report reads it.
+records that it was made; no report reads it. In a working topic a screener's export brings
+decisions back: `preview_decision_import` shows what an edited copy would change, and
+`apply_decision_import` records it through `kittum.screening`.
 
 The audit trail answers an assessor from the same ledger: `trace` lists one record's events from
 search to extraction, each with the model calls behind an AI step (`model_calls`), `events` pages through the ledger, `milestones` names cutoffs, and `as_of`
@@ -122,8 +124,11 @@ from kittum.report.working import (
     WORKING_EXPORT,
     WORKING_EXPORTED_EVENT,
     XLSX,
+    DecisionImportPreview,
     ExportView,
     WorkingExport,
+    apply_decision_import,
+    preview_decision_import,
     working_export,
 )
 from kittum.screening import sees_lead_data
@@ -467,6 +472,7 @@ __all__ = [
     "Check",
     "Conflict",
     "CoreTarget",
+    "DecisionImportPreview",
     "EventPage",
     "ExportView",
     "ExtractedValue",
@@ -499,6 +505,7 @@ __all__ = [
     "TracedEvent",
     "TracedOccurrence",
     "WorkingExport",
+    "apply_decision_import",
     "as_of",
     "bundle_reports",
     "calls_of",
@@ -515,6 +522,7 @@ __all__ = [
     "media_type",
     "milestones",
     "one_line",
+    "preview_decision_import",
     "prompt_cards",
     "read_request",
     "record_render",

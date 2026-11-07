@@ -505,6 +505,11 @@ def disclosure(review: Review) -> dict[str, Any]:
                     "accepted_ai_proposals": s.bulk_accepted_ai,
                     "accepted_unverified": s.bulk_accepted_unverified,
                 },
+                "spreadsheet": {
+                    "decisions": s.spreadsheet_decisions,
+                    "imports": s.spreadsheet_imports,
+                    "uploaders": s.spreadsheet_uploaders,
+                },
             }
         )
     assistant = {
@@ -988,6 +993,19 @@ def _method_paragraphs(d: dict[str, Any]) -> list[str]:
                     if accepted
                     else "None of them took over the AI's proposals."
                 )
+            )
+        sheet = sum(s["spreadsheet"]["decisions"] for s in s_stages)
+        if sheet:
+            imports = sum(s["spreadsheet"]["imports"] for s in s_stages)
+            text += (
+                f" {sheet} "
+                + ("decision" if sheet == 1 else "decisions")
+                + f" came from {imports} "
+                + ("spreadsheet" if imports == 1 else "spreadsheets")
+                + ": working exports of the screener's own records that were edited outside "
+                "Kittum and imported again, one decision per changed row. Kittum knows who "
+                "imported each file, not who decided each row in it, and it has no timing for "
+                "these decisions."
             )
         lines += [text, ""]
     return lines

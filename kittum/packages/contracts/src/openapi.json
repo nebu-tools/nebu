@@ -2757,6 +2757,115 @@
         "title": "Decision",
         "type": "object"
       },
+      "DecisionImportApply": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "data": {
+            "maxLength": 50000000,
+            "title": "Data",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "preview_hash": {
+            "title": "Preview Hash",
+            "type": "string"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "stage_id",
+          "data",
+          "command_id",
+          "preview_hash"
+        ],
+        "title": "DecisionImportApply",
+        "type": "object"
+      },
+      "DecisionImportPreview": {
+        "additionalProperties": false,
+        "description": "What importing an edited working export would do, and the export it came from.",
+        "properties": {
+          "export_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "exported_at": {
+            "format": "date-time",
+            "title": "Exported At",
+            "type": "string"
+          },
+          "exported_by": {
+            "title": "Exported By",
+            "type": "string"
+          },
+          "preview": {
+            "$ref": "#/components/schemas/ImportPreview"
+          },
+          "rows": {
+            "title": "Rows",
+            "type": "integer"
+          },
+          "sha256": {
+            "$ref": "#/components/schemas/Sha256"
+          }
+        },
+        "required": [
+          "export_id",
+          "exported_by",
+          "exported_at",
+          "sha256",
+          "rows",
+          "preview"
+        ],
+        "title": "DecisionImportPreview",
+        "type": "object"
+      },
+      "DecisionImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "maxLength": 50000000,
+            "title": "Data",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "maxLength": 255,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "stage_id",
+          "data"
+        ],
+        "title": "DecisionImportRequest",
+        "type": "object"
+      },
       "DecisionTiming": {
         "additionalProperties": false,
         "description": "Client-side timing of one decision (DESIGN.md, \"Metrics\").",
@@ -4066,6 +4175,151 @@
           "project_id"
         ],
         "title": "IdentityRevision",
+        "type": "object"
+      },
+      "ImportPreview": {
+        "additionalProperties": false,
+        "description": "What importing a spreadsheet would do: nothing is recorded yet.",
+        "properties": {
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            },
+            "title": "Changes",
+            "type": "array"
+          },
+          "preview_hash": {
+            "title": "Preview Hash",
+            "type": "string"
+          },
+          "refused": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRow"
+            },
+            "title": "Refused",
+            "type": "array"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "changes",
+          "unchanged",
+          "refused",
+          "preview_hash"
+        ],
+        "title": "ImportPreview",
+        "type": "object"
+      },
+      "ImportRefusal": {
+        "enum": [
+          "unknown_ref",
+          "not_yours",
+          "duplicate",
+          "unreadable",
+          "no_decision",
+          "invalid",
+          "stale",
+          "decided",
+          "second_opinion",
+          "withdrawn"
+        ],
+        "type": "string"
+      },
+      "ImportResult": {
+        "additionalProperties": false,
+        "properties": {
+          "awaiting_final": {
+            "title": "Awaiting Final",
+            "type": "integer"
+          },
+          "batch_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decided": {
+            "title": "Decided",
+            "type": "integer"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "refused": {
+            "title": "Refused",
+            "type": "integer"
+          },
+          "unchanged": {
+            "title": "Unchanged",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "batch_id",
+          "decided",
+          "awaiting_final",
+          "unchanged",
+          "refused",
+          "recorded_at"
+        ],
+        "title": "ImportResult",
+        "type": "object"
+      },
+      "ImportRow": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/SheetDecision"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImportRefusal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "row": {
+            "title": "Row",
+            "type": "integer"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "row",
+          "ref",
+          "decision"
+        ],
+        "title": "ImportRow",
         "type": "object"
       },
       "ImportSearchRequest": {
@@ -9186,6 +9440,46 @@
       "Sha256": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "SheetDecision": {
+        "additionalProperties": false,
+        "description": "What the editable columns of a working export's row say: the decision, the criterion it\nexcludes on, and a comment. Empty cells are `None`.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/kittum__screening__types__Outcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_criterion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Criterion Id"
+          }
+        },
+        "title": "SheetDecision",
+        "type": "object"
       },
       "SignCheckpointRequest": {
         "additionalProperties": false,
@@ -15789,6 +16083,134 @@
           }
         },
         "summary": "Export Working",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/reports/working-export/import": {
+      "post": {
+        "description": "Import an edited working export as its preview showed it: the file is stored by hash, one\nbatch event names it, its export, and the counts, and each changed row becomes one decision\nwith `origin: spreadsheet`. If anything changed since the preview, nothing is recorded (409).",
+        "operationId": "importDecisions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionImportApply"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Decisions",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/reports/working-export/import-preview": {
+      "post": {
+        "description": "What importing an edited working export would decide: the rows that change, the unchanged\nones, and the refused ones with their reasons. Records nothing. Only a screener's export of a\ntitle and abstract stage in a working topic brings decisions back; a complete topic refuses\n(422).",
+        "operationId": "previewDecisionImport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionImportPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Import",
         "tags": [
           "reports"
         ]

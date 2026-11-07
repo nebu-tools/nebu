@@ -44,6 +44,10 @@ export type RecordPrompt = KittumApi.RecordPrompt;
 export type PromptTemplate = KittumApi.PromptTemplate;
 export type BenchResult = KittumApi.BenchResult;
 export type ExportView = KittumApi.ExportView;
+/** What importing an edited working export would decide, before anything is recorded. */
+export type DecisionImportPreview = KittumApi.DecisionImportPreview;
+export type ImportRow = KittumApi.ImportRow;
+export type ImportResult = KittumApi.ImportResult;
 export type StageInfo = KittumApi.StageInfo;
 export type ProjectSummary = KittumApi.ProjectSummary;
 export type Member = KittumApi.Member;
