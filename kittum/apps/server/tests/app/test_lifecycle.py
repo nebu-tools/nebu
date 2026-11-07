@@ -23,7 +23,7 @@ from kittum.ledger import PostgresLedger
 from kittum.models import ModelRegistry
 from kittum.models.testing import RecordedBackend
 from kittum.runs import PostgresJobQueue, PostgresReceipts, Worker
-from kittum.screening import JUDGE_JOB
+from kittum.screening import BENCH_JOB, JUDGE_JOB
 from kittum.settings import Settings
 from kittum.storage import MemoryStore
 
@@ -143,14 +143,15 @@ def test_a_project_from_nothing_to_an_open_stage(database: Database, tmp_path: P
             backend=other,
         ),
     )
-    assert set(job_handlers(stranger)) == {JUDGE_JOB}  # no job queue, so no extraction
+    # No job queue, so no extraction: the judge's jobs, its stages' and the test bench's.
+    assert set(job_handlers(stranger)) == {JUDGE_JOB, BENCH_JOB}
     with_models = replace(
         stranger,
         backends={"qwen3.5-4b-ollama": other},
         queue=PostgresJobQueue(),
         receipts=PostgresReceipts(),
     )
-    assert set(job_handlers(with_models)) == {JUDGE_JOB, EXTRACTION_JOB}
+    assert set(job_handlers(with_models)) == {JUDGE_JOB, BENCH_JOB, EXTRACTION_JOB}
     with database.transaction() as tx:
         jobs = tx.execute(
             "select id from job where project_id = %s and kind = %s", (pid, JUDGE_JOB)

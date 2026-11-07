@@ -24,7 +24,7 @@ from itertools import combinations
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from kittum.core import Id, KittumError, NotFoundError, Record
-from kittum.judge import USER_TEMPLATE
+from kittum.judge import USER_TEMPLATE, instructions_hash
 from kittum.ledger import PostgresLedger
 from kittum.protocol import (
     DocumentationLevel,
@@ -146,6 +146,12 @@ class HumanDecision(Record):
     revealed: bool  # the AI was shown after this provisional decision
     ai_shown_before: bool = False  # the AI's reading was on screen while deciding (reveal before)
     second_opinion: bool = False  # mode S: the screener asked for a second opinion
+    origin: str = "keyboard"  # `bulk`: decided with others from the table, in a working topic
+    batch_id: Id | None = None
+    ai_proposal_accepted: bool = False
+    """A bulk "accept the AI's proposals" gave this decision the AI's outcome and reason."""
+    ai_proposal_verified: bool | None = None
+    """For an accepted exclusion: whether the quote filter had confirmed its quote."""
     event_id: Id
     event_seq: int
     decided_at: datetime
@@ -268,6 +274,21 @@ class ItemResult(Record):
         return self.rescreen is not None
 
 
+class ReadingVersion(Record):
+    """The AI readings of a stage under one protocol version, as of the cutoff."""
+
+    protocol_hash: str
+    version_label: str | None
+    """The protocol's version label, or None for a version Kittum has no row of."""
+    strictness: str | None
+    guidance: str | None
+    instructions_hash: str | None
+    records: int
+    """Items the AI read under this version, replaced readings included."""
+    current: int
+    """Items whose reading at the cutoff is this version's."""
+
+
 class StageResult(Record):
     id: Id
     topic_id: str
@@ -290,6 +311,19 @@ class StageResult(Record):
     second_opinions: SecondOpinionGauge | None = None  # mode S only
     ai_shown_before: int = 0
     """Standing decisions made with the AI's reading on screen (reveal `before`)."""
+    opened_protocol_hash: str | None = None
+    """The version the stage was opened under, if a re-judge has moved it since."""
+    rejudges: int = 0
+    """Re-judges in place through the cutoff."""
+    reading_versions: tuple[ReadingVersion, ...] = ()
+    """The protocol versions the AI read the stage's items with, oldest first."""
+    bulk_decisions: int = 0
+    """Standing decisions made in bulk from the table (working topics)."""
+    bulk_batches: int = 0
+    bulk_accepted_ai: int = 0
+    """Standing bulk decisions that took over the AI's proposal."""
+    bulk_accepted_unverified: int = 0
+    """Of those, exclusions on a quote the filter could not verify."""
 
     @property
     def documentation(self) -> DocumentationLevel:
@@ -656,6 +690,7 @@ def _stage(
         if kind == "undo":
             provisional[a["id"]] = final[a["id"]] = None
             continue
+        accepted = row["ai_proposal"]
         decision = HumanDecision(
             id=row["id"],
             assignment_id=a["id"],
@@ -667,6 +702,12 @@ def _stage(
             revealed=row["reveal"] is not None,
             ai_shown_before=row["ai_shown_before"],
             second_opinion=row["second_opinion"],
+            origin=row["origin"],
+            batch_id=row["batch_id"],
+            ai_proposal_accepted=accepted is not None,
+            ai_proposal_verified=accepted["verified"]
+            if accepted and accepted.get("outcome") == "exclude"
+            else None,
             event_id=row["event_id"],
             event_seq=seq,
             decided_at=row["decided_at"],
@@ -677,16 +718,25 @@ def _stage(
         else:
             final[a["id"]] = decision
 
-    readings = {
-        r["item_ref"]: r
-        for r in tx.execute(
-            "select item_ref, excludes, criteria, flags, event_id, raw_output_hash"
-            " from screening_ai_reading"
-            " where stage_id = %s",
-            (stage_id,),
-        ).fetchall()
-        if r["event_id"] in seq_of
-    }
+    # Every reading through the cutoff, oldest first: a re-judge's reading replaces the one
+    # before it, and the replaced one still counts for the version it was read under.
+    logged = sorted(
+        (
+            r
+            for r in tx.execute(
+                "select item_ref, protocol_hash, excludes, criteria, flags, event_id,"
+                " raw_output_hash from screening_ai_reading_log where stage_id = %s",
+                (stage_id,),
+            ).fetchall()
+            if r["event_id"] in seq_of and r["item_ref"] in refs
+        ),
+        key=lambda r: seq_of[r["event_id"]],
+    )
+    readings: dict[str, dict[str, Any]] = {}
+    read_under: dict[str, set[str]] = defaultdict(set)
+    for r in logged:
+        readings[r["item_ref"]] = r
+        read_under[r["protocol_hash"]].add(r["item_ref"])
     adjudications = {
         j["conflict_id"]: j
         for j in tx.execute(
@@ -789,6 +839,26 @@ def _stage(
         )
     mode = ScreeningMode(stage["mode"])
     agreement = _agreement(mode, stage["screeners"], results)
+    rejudged = sorted(
+        tx.execute(
+            "select from_protocol_version_id, to_protocol_version_id, from_protocol_hash,"
+            " to_protocol_hash, event_id from screening_rejudge where stage_id = %s",
+            (stage_id,),
+        ).fetchall(),
+        key=lambda r: seq_of.get(r["event_id"], 1 << 62),
+    )
+    opened_version = (
+        (rejudged[0]["from_protocol_version_id"], rejudged[0]["from_protocol_hash"])
+        if rejudged
+        else (stage["protocol_version_id"], stage["protocol_hash"])
+    )
+    through = [r for r in rejudged if r["event_id"] in seq_of]
+    version_id, version_hash = (
+        (through[-1]["to_protocol_version_id"], through[-1]["to_protocol_hash"])
+        if through
+        else opened_version
+    )
+    standing = [d for i in results for d in i.final if d.origin == "bulk"]
     # Reveals and revisions over every assignment, the auditor's and sentinels' included.
     reveals = [d for d in provisional.values() if d is not None and d.revealed]
     revised = [
@@ -804,8 +874,21 @@ def _stage(
         mode=ScreeningMode(stage["mode"]),
         reveal=stage["reveal"],
         judge_config_id=stage["judge_config_id"],
-        protocol_version_id=stage["protocol_version_id"],
-        protocol_hash=stage["protocol_hash"],
+        protocol_version_id=version_id,
+        protocol_hash=version_hash,
+        opened_protocol_hash=opened_version[1] if through else None,
+        rejudges=len(through),
+        reading_versions=_reading_versions(
+            tx,
+            stage,
+            list(dict.fromkeys(r["protocol_hash"] for r in logged)),
+            read_under,
+            readings,
+        ),
+        bulk_decisions=len(standing),
+        bulk_batches=len({d.batch_id for d in standing}),
+        bulk_accepted_ai=sum(d.ai_proposal_accepted for d in standing),
+        bulk_accepted_unverified=sum(d.ai_proposal_verified is False for d in standing),
         screeners=tuple(stage["screeners"]),
         auditor_id=stage["auditor_id"],
         opened_event_id=stage["opened_event_id"],
@@ -824,6 +907,52 @@ def _stage(
             }
         ),
     )
+
+
+def _reading_versions(
+    tx: Tx,
+    stage: dict[str, Any],
+    hashes: list[str],
+    read_under: Mapping[str, set[str]],
+    readings: Mapping[str, dict[str, Any]],
+) -> tuple[ReadingVersion, ...]:
+    """Each protocol version the stage's items were read under, with the topic's instructions in
+    it: what the AI disclosure lists as the prompt versions used."""
+    if not hashes:
+        return ()
+    rows = {
+        r["content_hash"]: r["id"]
+        for r in tx.execute(
+            "select id, content_hash from protocol_version where project_id = %s"
+            " and content_hash = any(%s) order by created_at",
+            (stage["project_id"], hashes),
+        ).fetchall()
+    }
+    out = []
+    for h in hashes:
+        label = strictness = guidance = found_hash = None
+        if h in rows:
+            stored = get_protocol_version(tx, stage["project_id"], rows[h])
+            label = stored.version.protocol.version_label
+            topic = next(
+                (t for t in stored.version.protocol.search_topics if t.id == stage["topic_id"]),
+                None,
+            )
+            if topic is not None:
+                strictness, guidance = topic.judge.strictness, topic.judge.guidance
+                found_hash = instructions_hash(topic.judge)
+        out.append(
+            ReadingVersion(
+                protocol_hash=h,
+                version_label=label,
+                strictness=strictness,
+                guidance=guidance,
+                instructions_hash=found_hash,
+                records=len(read_under[h]),
+                current=sum(1 for r in readings.values() if r["protocol_hash"] == h),
+            )
+        )
+    return tuple(out)
 
 
 def _by_seq(decision: HumanDecision) -> int:

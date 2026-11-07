@@ -9,9 +9,15 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from psycopg.types.json import Jsonb
 
 from kittum.core import SystemClock, content_hash, new_id, sha256_hex
-from kittum.judge import CriterionVerdict, ScreeningItem
+from kittum.judge import (
+    CriterionVerdict,
+    ScreeningItem,
+    Verdict,
+    instructions_hash,
+    rendered_prompt,
+)
 from kittum.ledger import EventDraft
-from kittum.protocol import ScreeningMode, get_version
+from kittum.protocol import ReviewProtocol, ScreeningMode, documentation_level, get_version
 from kittum.runs import (
     Command,
     Commands,
@@ -26,14 +32,18 @@ from kittum.screening import store
 from kittum.screening.metrics import record_outcomes, stage_metrics
 from kittum.screening.rules import (
     SCREENERS_PER_MODE,
+    Reading,
     ai_rank,
     conflict_kinds,
     criteria_for,
     default_seed,
     highlights,
+    known_include_refs,
     locate,
     locate_quote,
     percent_of,
+    proposal,
+    rejudge_changes,
     rescreen_reason,
     reveal_for,
     second_opinion_reviewer,
@@ -48,11 +58,16 @@ from kittum.screening.types import (
     AdjudicationItem,
     AdjudicationResult,
     AiColumn,
+    BenchResult,
+    BenchRow,
+    BulkResult,
     DecideResult,
     Decision,
     InvalidDecision,
     NotAssigned,
     QueueItem,
+    RecordFacts,
+    RecordPrompt,
     Reveal,
     ReviewerColumn,
     ScopeStatus,
@@ -68,13 +83,13 @@ if TYPE_CHECKING:
 
     from kittum.core import Clock, Id
     from kittum.db import Tx
-    from kittum.judge import Verdict
     from kittum.ledger import AuditEvent, Ledger
-    from kittum.protocol import Criterion, ReviewProtocol, Stage
+    from kittum.protocol import Criterion, JudgeInstructions, ProtocolVersion, SearchTopic, Stage
     from kittum.runs import JobQueue, Receipt, ReceiptStore
     from kittum.screening.metrics import RecordOutcome
-    from kittum.screening.rules import Reading
     from kittum.screening.types import (
+        BulkAction,
+        BulkRow,
         ConflictKind,
         DecisionTiming,
         Phase,
@@ -96,7 +111,12 @@ CONFLICT_WITHDRAWN = "screening.conflict_withdrawn"
 AI_DISAGREEMENT_RESCREEN = "screening.ai_disagreement_rescreen"
 ADJUDICATED = "screening.adjudicated"
 SECOND_OPINION_REQUESTED = "screening.second_opinion_requested"
+REJUDGED = "screening.rejudged"
+BULK_DECIDED = "screening.bulk_decided"
+BENCH_REQUESTED = "screening.bench_requested"
+BENCH_FINISHED = "screening.bench_finished"
 JUDGE_JOB = "screening.judge"
+BENCH_JOB = "screening.bench"
 
 
 def _event(project_id: Id, type: str, actor_id: Id, payload: dict[str, Any]) -> EventDraft:
@@ -232,10 +252,12 @@ class Screening:
             self._protocols[version_id] = get_version(tx, project_id, version_id).version.protocol
         return self._protocols[version_id]
 
-    def _criteria(self, tx: Tx, row: dict[str, Any]) -> tuple[Criterion, ...]:
+    def _topic(self, tx: Tx, row: dict[str, Any]) -> SearchTopic:
         protocol = self._protocol(tx, row["project_id"], row["protocol_version_id"])
-        topic = topic_for(protocol, row["scope_id"], row["topic_id"])
-        return criteria_for(topic, row["scope_id"], row["stage"])
+        return topic_for(protocol, row["scope_id"], row["topic_id"])
+
+    def _criteria(self, tx: Tx, row: dict[str, Any]) -> tuple[Criterion, ...]:
+        return criteria_for(self._topic(tx, row), row["scope_id"], row["stage"])
 
     def open_stage(
         self, tx: Tx, *, command_id: Id, project_id: Id, actor_id: Id, spec: StageSpec
@@ -539,26 +561,16 @@ class Screening:
 
     def judge_items(
         self, tx: Tx, project_id: Id, stage_id: Id, item_refs: Sequence[str]
-    ) -> tuple[StageInfo, list[ScreeningItem], tuple[Criterion, ...]]:
-        """What a judge job sends to `kittum.judge`: the items and the scope's criteria."""
+    ) -> tuple[StageInfo, list[ScreeningItem], tuple[Criterion, ...], JudgeInstructions]:
+        """What a judge job sends to `kittum.judge`: the items, the scope's criteria, and the
+        topic's instructions, all under the protocol version the stage reads with now."""
         row = store.stage_row(tx, project_id, stage_id)
-        rows = tx.execute(
-            "select item_ref, title, text from screening_item where stage_id = %s"
-            " and item_ref = any(%s)",
-            (stage_id, list(item_refs)),
-        ).fetchall()
-        by_ref = {r["item_ref"]: r for r in rows}
-        items = [
-            ScreeningItem(
-                item_ref=ref,
-                stage=row["stage"],
-                title=by_ref[ref]["title"],
-                text=by_ref[ref]["text"],
-            )
-            for ref in item_refs
-            if ref in by_ref
-        ]
-        return store.stage_info(row), items, self._criteria(tx, row)
+        return (
+            store.stage_info(row),
+            _items(tx, row, item_refs),
+            self._criteria(tx, row),
+            self._topic(tx, row).judge,
+        )
 
     def attach_verdicts(
         self,
@@ -569,21 +581,33 @@ class Screening:
         actor_id: Id,
         stage_id: Id,
         verdicts: Sequence[Verdict],
+        protocol_hash: str | None = None,
     ) -> Receipt:
-        """Record the judge's verdicts as the stage's AI readings. Items already read keep their
-        reading."""
+        """Record the judge's verdicts as the stage's AI readings.
+
+        `protocol_hash` is the protocol version the verdicts were judged under (the stage's,
+        when left out). Verdicts of a version the stage no longer reads with are dropped: a
+        re-judge enqueued newer ones. An item already read under this version keeps its reading;
+        one read under another version gets the new reading in its place, and the old one stays
+        in `screening_ai_reading_log` and the ledger. Human decisions are never touched, and a
+        reveal a reviewer saw stays what it was.
+        """
         command = Command(
             command_id=command_id,
             project_id=project_id,
             type="screening.attach_verdicts",
             actor_id=actor_id,
-            payload={"stage_id": str(stage_id), "items": [v.item_ref for v in verdicts]},
+            payload={
+                "stage_id": str(stage_id),
+                "items": [v.item_ref for v in verdicts],
+                **({"protocol_hash": protocol_hash} if protocol_hash else {}),
+            },
         )
 
-        def load(tx: Tx, _: Command) -> tuple[dict[str, Any], set[str], set[str]]:
+        def load(tx: Tx, _: Command) -> tuple[dict[str, Any], set[str], dict[str, str]]:
             row = store.stage_row(tx, project_id, stage_id)
             items = tx.execute(
-                "select i.item_ref, r.item_ref is not null as read from screening_item i"
+                "select i.item_ref, r.protocol_hash from screening_item i"
                 " left join screening_ai_reading r"
                 " on r.stage_id = i.stage_id and r.item_ref = i.item_ref where i.stage_id = %s",
                 (stage_id,),
@@ -591,65 +615,523 @@ class Screening:
             return (
                 row,
                 {r["item_ref"] for r in items},
-                {r["item_ref"] for r in items if r["read"]},
+                {r["item_ref"]: r["protocol_hash"] for r in items if r["protocol_hash"]},
             )
 
         def decide(
-            command: Command, state: tuple[dict[str, Any], set[str], set[str]]
-        ) -> RunDecision[list[Verdict]]:
+            command: Command, state: tuple[dict[str, Any], set[str], dict[str, str]]
+        ) -> RunDecision[tuple[str, list[Verdict]]]:
             row, refs, read = state
+            judged_under = protocol_hash or row["protocol_hash"]
             new: dict[str, Verdict] = {}
             for v in verdicts:
                 if v.item_ref not in refs or v.scope_id != row["scope_id"]:
                     raise InvalidDecision(f"verdict for {v.item_ref} is not for this stage")
                 if v.judge_config_id != row["judge_config_id"]:
                     raise InvalidDecision(f"the stage is judged by {row['judge_config_id']}")
-                if v.item_ref not in read:
+                if read.get(v.item_ref) != judged_under:
                     new.setdefault(v.item_ref, v)
-            if not new:
+            if not new or judged_under != row["protocol_hash"]:
                 return RunDecision()
             payload = {
                 "stage_id": str(stage_id),
                 "judge_config_id": row["judge_config_id"],
+                "protocol_hash": judged_under,
                 "readings": [
                     {
                         "item_ref": v.item_ref,
                         "excludes": v.excludes,
                         "rank": ai_rank(v),
                         "raw_output_hash": v.raw_output_hash,
+                        **({"replaces": read[v.item_ref]} if v.item_ref in read else {}),
                     }
                     for v in new.values()
                 ],
             }
             return RunDecision(
                 events=(_event(project_id, AI_READ, command.actor_id, payload),),
-                changes=list(new.values()),
+                changes=(judged_under, list(new.values())),
             )
 
-        def apply(tx: Tx, decision: RunDecision[list[Verdict]], events: tuple[AuditEvent, ...]):
+        def apply(
+            tx: Tx,
+            decision: RunDecision[tuple[str, list[Verdict]]],
+            events: tuple[AuditEvent, ...],
+        ):
+            if decision.changes is None:
+                return  # nothing new: read already, or under a version the stage left
+            judged_under, new = decision.changes
+            rows = [
+                (
+                    stage_id,
+                    v.item_ref,
+                    v.judge_config_id,
+                    judged_under,
+                    v.excludes,
+                    ai_rank(v),
+                    Jsonb([c.model_dump(mode="json") for c in v.criteria]),
+                    list(v.flags),
+                    v.raw_output_hash,
+                    events[0].event_id,
+                    events[0].recorded_at,
+                )
+                for v in new
+            ]
+            columns = (
+                "(stage_id, item_ref, judge_config_id, protocol_hash, excludes, rank, criteria,"
+                " flags, raw_output_hash, event_id, recorded_at)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            )
             with tx.cursor() as cur:
                 cur.executemany(
-                    "insert into screening_ai_reading (stage_id, item_ref, judge_config_id,"
-                    " excludes, rank, criteria, flags, raw_output_hash, event_id, recorded_at)"
-                    " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    [
-                        (
-                            stage_id,
-                            v.item_ref,
-                            v.judge_config_id,
-                            v.excludes,
-                            ai_rank(v),
-                            Jsonb([c.model_dump(mode="json") for c in v.criteria]),
-                            list(v.flags),
-                            v.raw_output_hash,
-                            events[0].event_id,
-                            events[0].recorded_at,
-                        )
-                        for v in decision.changes or ()
-                    ],
+                    "insert into screening_ai_reading "
+                    + columns
+                    + " on conflict (stage_id, item_ref) do update set"
+                    " judge_config_id = excluded.judge_config_id,"
+                    " protocol_hash = excluded.protocol_hash, excludes = excluded.excludes,"
+                    " rank = excluded.rank, criteria = excluded.criteria, flags = excluded.flags,"
+                    " raw_output_hash = excluded.raw_output_hash, event_id = excluded.event_id,"
+                    " recorded_at = excluded.recorded_at",
+                    rows,
                 )
+                cur.executemany("insert into screening_ai_reading_log " + columns, rows)
 
         return self._commands.execute(tx, command, decide, load=load, apply=apply)
+
+    # Re-judging in place, the test bench, and the prompt of a record
+
+    def rejudge_stage(
+        self,
+        tx: Tx,
+        *,
+        command_id: Id,
+        project_id: Id,
+        actor_id: Id,
+        stage_id: Id,
+        protocol_version_id: Id,
+    ) -> StageInfo:
+        """Re-judge an open stage under another published protocol version, in place.
+
+        The new version may change only what the AI reads: the topic's instructions (strictness
+        and guidance) and the criteria's keywords and examples (`rules.rejudge_changes`). Anything
+        else (a criterion's wording, a scope, the mode) changes what people decide on, and needs
+        a new stage. M3 screens in the AI's order and its stop test assumes that order is fixed,
+        so an M3 stage is never re-judged.
+
+        The stage reads with the new version from then on, and judge jobs read every item again.
+        Each new reading replaces the old one for display (`attach_verdicts`); the old readings
+        stay in the reading log and the ledger. Human decisions stay as they are, and a reveal a
+        reviewer saw stays what they saw: a re-judge never reveals anything retroactively.
+        """
+        command = Command(
+            command_id=command_id,
+            project_id=project_id,
+            type="screening.rejudge_stage",
+            actor_id=actor_id,
+            payload={"stage_id": str(stage_id), "protocol_version_id": str(protocol_version_id)},
+        )
+
+        def load(tx: Tx, _: Command) -> dict[str, Any]:
+            row = store.stage_row(tx, project_id, stage_id)
+            refs = tx.execute(
+                "select item_ref from screening_item where stage_id = %s"
+                " and withdrawn_event_id is null order by item_ref",
+                (stage_id,),
+            ).fetchall()
+            return {
+                "stage": row,
+                "before": self._topic(tx, row),
+                "stored": get_version(tx, project_id, protocol_version_id),
+                "refs": [r["item_ref"] for r in refs],
+            }
+
+        def decide(command: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
+            row, stored = st["stage"], st["stored"]
+            if stored.status != "published":
+                raise InvalidDecision(
+                    "A stage is re-judged only under a published protocol version."
+                )
+            after_hash = stored.version.content_hash
+            if after_hash == row["protocol_hash"]:
+                raise InvalidDecision("The stage reads with this protocol version already.")
+            if ScreeningMode(row["mode"]) == ScreeningMode.M3:
+                raise InvalidDecision(
+                    "M3 screens in the AI's order, and its stop test needs that order fixed. "
+                    "Open a new stage to judge with other instructions."
+                )
+            before: SearchTopic = st["before"]
+            after = topic_for(stored.version.protocol, row["scope_id"], row["topic_id"])
+            changes = rejudge_changes(before, after)
+            if changes:
+                raise InvalidDecision(
+                    "Re-judging in place takes changes to what the AI reads only: the topic's "
+                    "strictness and guidance, and the criteria's keywords and examples. This "
+                    "version also changes " + ", ".join(changes) + ". Open a new stage for that."
+                )
+            rejudge_id = new_id()
+            refs = st["refs"]
+            batches = [refs[i : i + self._batch] for i in range(0, len(refs), self._batch)]
+            jobs = tuple(
+                JobSpec(
+                    project_id=project_id,
+                    kind=JUDGE_JOB,
+                    stage_key=f"{JUDGE_JOB}:{stage_id}:rejudge:{rejudge_id}:{n}",
+                    payload={"stage_id": str(stage_id), "item_refs": batch},
+                )
+                for n, batch in enumerate(batches)
+            )
+            payload = {
+                "rejudge_id": str(rejudge_id),
+                "stage_id": str(stage_id),
+                "from_protocol_version_id": str(row["protocol_version_id"]),
+                "to_protocol_version_id": str(stored.id),
+                "from_protocol_hash": row["protocol_hash"],
+                "to_protocol_hash": after_hash,
+                "from_instructions_hash": instructions_hash(before.judge),
+                "to_instructions_hash": instructions_hash(after.judge),
+                "strictness": after.judge.strictness,
+                "items": len(refs),
+                "jobs": [j.stage_key for j in jobs],
+            }
+            return RunDecision(
+                events=(_event(project_id, REJUDGED, command.actor_id, payload),),
+                changes={"rejudge_id": rejudge_id, "stored": stored},
+                jobs=jobs,
+            )
+
+        def apply(tx: Tx, decision: RunDecision[dict[str, Any]], events: tuple[AuditEvent, ...]):
+            assert decision.changes is not None
+            stored = decision.changes["stored"]
+            row = tx.execute(
+                "select protocol_version_id, protocol_hash from screening_stage where id = %s",
+                (stage_id,),
+            ).fetchone()
+            assert row is not None
+            tx.execute(
+                "insert into screening_rejudge (id, stage_id, from_protocol_version_id,"
+                " to_protocol_version_id, from_protocol_hash, to_protocol_hash, actor_id,"
+                " event_id, recorded_at) values (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    decision.changes["rejudge_id"],
+                    stage_id,
+                    row["protocol_version_id"],
+                    stored.id,
+                    row["protocol_hash"],
+                    stored.version.content_hash,
+                    actor_id,
+                    events[0].event_id,
+                    events[0].recorded_at,
+                ),
+            )
+            tx.execute(
+                "update screening_stage set protocol_version_id = %s, protocol_hash = %s"
+                " where id = %s",
+                (stored.id, stored.version.content_hash, stage_id),
+            )
+
+        self._commands.execute(tx, command, decide, load=load, apply=apply)
+        return self.stage(tx, project_id, stage_id)
+
+    def request_bench(
+        self,
+        tx: Tx,
+        *,
+        command_id: Id,
+        project_id: Id,
+        actor_id: Id,
+        stage_id: Id,
+        protocol: ProtocolVersion,
+        limit: int = 50,
+    ) -> Id:
+        """Run the judge with a draft protocol's instructions on some of a stage's records: the
+        topic's known includes (its reference set, as the draft states it) among them, and up to
+        `limit` records people have settled, in a seeded order. A job judges them through the
+        stage's judge config; `bench` lists what the draft would change. The verdicts are the
+        judge's own rows and events; they never become the stage's readings. Returns the run's
+        ID, which derives from `command_id`, so a retry returns the same run."""
+        bench_id = uuid.uuid5(command_id, "bench")
+        command = Command(
+            command_id=command_id,
+            project_id=project_id,
+            type="screening.request_bench",
+            actor_id=actor_id,
+            payload={
+                "stage_id": str(stage_id),
+                "protocol_hash": protocol.content_hash,
+                "limit": limit,
+            },
+        )
+
+        def load(tx: Tx, _: Command) -> dict[str, Any]:
+            row = store.stage_row(tx, project_id, stage_id)
+            items = tx.execute(
+                "select item_ref, facts from screening_item where stage_id = %s"
+                " and kind = 'record' and withdrawn_event_id is null",
+                (stage_id,),
+            ).fetchall()
+            return {
+                "stage": row,
+                "facts": {i["item_ref"]: RecordFacts.model_validate(i["facts"]) for i in items},
+                "outcomes": record_outcomes(tx, row),
+            }
+
+        def decide(command: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
+            row = st["stage"]
+            topic = topic_for(protocol.protocol, row["scope_id"], row["topic_id"])
+            if not criteria_for(topic, row["scope_id"], row["stage"]):
+                raise InvalidDecision(f"no criterion of {topic.id} is decidable at {row['stage']}")
+            known = known_include_refs(topic.reference_set, st["facts"])
+            settled = sorted(
+                (
+                    ref
+                    for ref, outcome in st["outcomes"].items()
+                    if outcome in ("include", "exclude") and ref in st["facts"] and ref not in known
+                ),
+                key=lambda ref: sort_key(row["seed"], ref, "bench"),
+            )[: max(0, limit)]
+            refs = [*sorted(known), *settled]
+            if not refs:
+                raise InvalidDecision(
+                    "Nothing to test on yet: no known include of the topic is among the stage's "
+                    "records, and nobody has settled a record."
+                )
+            job = JobSpec(
+                project_id=project_id,
+                kind=BENCH_JOB,
+                stage_key=f"{BENCH_JOB}:{bench_id}",
+                payload={"bench_id": str(bench_id), "stage_id": str(stage_id)},
+            )
+            payload = {
+                "bench_id": str(bench_id),
+                "stage_id": str(stage_id),
+                "topic_id": topic.id,
+                "protocol_hash": protocol.content_hash,
+                "instructions_hash": instructions_hash(topic.judge),
+                "strictness": topic.judge.strictness,
+                "records": len(refs),
+                "known_includes": len(known),
+            }
+            return RunDecision(
+                events=(_event(project_id, BENCH_REQUESTED, command.actor_id, payload),),
+                changes={
+                    "bench_id": bench_id,
+                    "refs": refs,
+                    "known": sorted(known),
+                    "topic": topic.id,
+                },
+                jobs=(job,),
+            )
+
+        def apply(tx: Tx, decision: RunDecision[dict[str, Any]], events: tuple[AuditEvent, ...]):
+            c = decision.changes
+            assert c is not None
+            tx.execute(
+                "insert into screening_bench (id, project_id, stage_id, topic_id, protocol,"
+                " protocol_hash, item_refs, known_refs, requested_by, requested_event_id,"
+                " recorded_at) values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    c["bench_id"],
+                    project_id,
+                    stage_id,
+                    c["topic"],
+                    Jsonb(protocol.protocol.model_dump(mode="json")),
+                    protocol.content_hash,
+                    c["refs"],
+                    c["known"],
+                    actor_id,
+                    events[0].event_id,
+                    events[0].recorded_at,
+                ),
+            )
+
+        self._commands.execute(tx, command, decide, load=load, apply=apply)
+        return bench_id
+
+    def bench_items(
+        self, tx: Tx, project_id: Id, bench_id: Id
+    ) -> tuple[StageInfo, list[ScreeningItem], tuple[Criterion, ...], JudgeInstructions, str]:
+        """What a bench job sends to `kittum.judge`: the items, and the draft's criteria,
+        instructions, and content hash."""
+        bench = store.bench_row(tx, project_id, bench_id)
+        row = store.stage_row(tx, project_id, bench["stage_id"])
+        protocol = ReviewProtocol.model_validate(bench["protocol"])
+        topic = topic_for(protocol, row["scope_id"], bench["topic_id"])
+        return (
+            store.stage_info(row),
+            _items(tx, row, bench["item_refs"]),
+            criteria_for(topic, row["scope_id"], row["stage"]),
+            topic.judge,
+            bench["protocol_hash"],
+        )
+
+    def finish_bench(
+        self,
+        tx: Tx,
+        *,
+        command_id: Id,
+        project_id: Id,
+        actor_id: Id,
+        bench_id: Id,
+        verdicts: Sequence[Verdict],
+    ) -> Receipt:
+        """Keep a bench job's verdicts with the run."""
+        command = Command(
+            command_id=command_id,
+            project_id=project_id,
+            type="screening.finish_bench",
+            actor_id=actor_id,
+            payload={"bench_id": str(bench_id), "items": [v.item_ref for v in verdicts]},
+        )
+
+        def load(tx: Tx, _: Command) -> dict[str, Any]:
+            return store.bench_row(tx, project_id, bench_id)
+
+        def decide(command: Command, bench: dict[str, Any]) -> RunDecision[None]:
+            if bench["finished_at"] is not None:
+                return RunDecision()
+            payload = {
+                "bench_id": str(bench_id),
+                "stage_id": str(bench["stage_id"]),
+                "protocol_hash": bench["protocol_hash"],
+                "verdicts": len(verdicts),
+                "proposed_exclusions": sum(v.excludes for v in verdicts),
+            }
+            return RunDecision(
+                events=(_event(project_id, BENCH_FINISHED, command.actor_id, payload),)
+            )
+
+        def apply(tx: Tx, _: RunDecision[None], events: tuple[AuditEvent, ...]):
+            if not events:
+                return  # the run has its verdicts already
+            tx.execute(
+                "update screening_bench set verdicts = %s, finished_event_id = %s,"
+                " finished_at = %s where id = %s",
+                (
+                    Jsonb([v.model_dump(mode="json") for v in verdicts]),
+                    events[0].event_id,
+                    events[0].recorded_at,
+                    bench_id,
+                ),
+            )
+
+        return self._commands.execute(tx, command, decide, load=load, apply=apply)
+
+    def bench(self, tx: Tx, project_id: Id, viewer_id: Id, bench_id: Id) -> BenchResult:
+        """A bench run's flips, for the methods lead: per record the settled human outcome, the
+        current reading's proposal, and the draft's, known includes first, then the records
+        whose proposal the draft flips, then those it decides against people."""
+        if not store.sees_lead_data(tx, project_id, viewer_id):
+            raise NotAssigned(f"actor {viewer_id} is not a methods lead who sees the stage")
+        bench = store.bench_row(tx, project_id, bench_id)
+        row = store.stage_row(tx, project_id, bench["stage_id"])
+        documentation = documentation_level(ScreeningMode(row["mode"]))
+        refs: list[str] = bench["item_refs"]
+        known = set(bench["known_refs"])
+        titles = {
+            r["item_ref"]: r["title"]
+            for r in tx.execute(
+                "select item_ref, title from screening_item where stage_id = %s and item_ref = any(%s)",
+                (row["id"], refs),
+            ).fetchall()
+        }
+        current = store.readings(tx, row["id"], refs)
+        outcomes = record_outcomes(tx, row)
+        drafts = {
+            v.item_ref: Reading(excludes=v.excludes, criteria=v.criteria, flags=v.flags)
+            for v in (Verdict.model_validate(x) for x in bench["verdicts"] or ())
+        }
+        out: list[BenchRow] = []
+        for ref in refs:
+            now = proposal(current.get(ref), documentation)
+            draft = proposal(drafts.get(ref), documentation) if ref in drafts else None
+            human = outcomes.get(ref)
+            human_outcome = human if human in ("include", "exclude") else None
+            out.append(
+                BenchRow(
+                    item_ref=ref,
+                    title=titles.get(ref, ""),
+                    known_include=ref in known,
+                    human=human_outcome,
+                    current=now,
+                    draft=draft,
+                    flip=draft is not None and now is not None and draft.outcome != now.outcome,
+                    against_human=draft is not None
+                    and human_outcome is not None
+                    and draft.outcome != human_outcome,
+                )
+            )
+        out.sort(key=lambda r: (not r.known_include, not r.flip, not r.against_human, r.title))
+        state: Literal["running", "done", "failed"] = "done"
+        error = None
+        if bench["finished_at"] is None:
+            job = tx.execute(
+                "select status, last_error from job where stage_key = %s",
+                (f"{BENCH_JOB}:{bench_id}",),
+            ).fetchone()
+            failed = job is not None and job["status"] in ("failed", "dead")
+            state = "failed" if failed else "running"
+            error = job["last_error"] if failed and job else None
+        return BenchResult(
+            bench_id=bench_id,
+            stage_id=row["id"],
+            protocol_hash=bench["protocol_hash"],
+            state=state,
+            error=error,
+            requested_at=bench["recorded_at"],
+            finished_at=bench["finished_at"],
+            records=len(refs),
+            known=len(known),
+            flips=sum(r.flip for r in out),
+            against_human=sum(r.against_human for r in out),
+            known_proposed_exclude=sum(
+                r.known_include and r.draft is not None and r.draft.outcome == "exclude"
+                for r in out
+            ),
+            rows=tuple(out),
+        )
+
+    def record_prompt(
+        self,
+        tx: Tx,
+        project_id: Id,
+        viewer_id: Id,
+        stage_id: Id,
+        *,
+        assignment_id: Id | None = None,
+        item_ref: str | None = None,
+    ) -> RecordPrompt:
+        """The prompt the AI judge reads one record with under the stage's protocol version.
+        The methods lead names any record by its reference; a screener of a topic with working
+        documentation names one of their own assignments. In a complete topic a screener gets
+        nothing of the AI, its prompt included."""
+        row = store.stage_row(tx, project_id, stage_id)
+        if assignment_id is not None:
+            a = store.assignment(tx, assignment_id)
+            if a is None or a["reviewer_id"] != viewer_id or a["stage_id"] != row["id"]:
+                raise NotAssigned(f"assignment {assignment_id} not found")
+            if documentation_level(ScreeningMode(row["mode"])) != "working":
+                raise NotAssigned("in a topic with complete documentation the prompt is the lead's")
+            ref = a["item_ref"]
+        elif item_ref is not None and store.sees_lead_data(tx, project_id, viewer_id):
+            ref = item_ref
+        else:
+            raise NotAssigned(f"actor {viewer_id} may not see the AI's prompt for this record")
+        (item,) = _items(tx, row, [ref]) or (None,)
+        if item is None:
+            raise NotAssigned(f"record {ref} is not in this stage")
+        topic = self._topic(tx, row)
+        prompt = rendered_prompt(
+            item, criteria_for(topic, row["scope_id"], row["stage"]), topic.judge
+        )
+        return RecordPrompt(
+            protocol_hash=row["protocol_hash"],
+            strictness=topic.judge.strictness,
+            guidance=topic.judge.guidance,
+            instructions_hash=instructions_hash(topic.judge),
+            system=prompt.system,
+            user=prompt.user,
+            json_schema=prompt.json_schema,
+        )
 
     # The reviewer's queue
 
@@ -1010,6 +1492,308 @@ class Screening:
             reveal=reveal,
             recorded_at=row["recorded_at"],
             etag=row["etag"],
+        )
+
+    def bulk_decide(
+        self,
+        tx: Tx,
+        *,
+        command_id: Id,
+        project_id: Id,
+        reviewer_id: Id,
+        stage_id: Id,
+        rows: Sequence[BulkRow],
+        action: BulkAction,
+        reason_criterion_id: str | None = None,
+        filter_description: str | None = None,
+        timing: DecisionTiming,
+    ) -> BulkResult:
+        """Decide many of the reviewer's own records at once, from the table, in a topic with
+        working documentation, at title and abstract.
+
+        `action` includes them all, excludes them all on `reason_criterion_id`, or gives each
+        the outcome and reason the AI proposes for it (`accept_ai`, only in a stage that showed
+        the AI's reading before the decision). Each record gets its own decision, under the rules
+        of `decide`, with `origin: bulk`, the batch, and `filter_description` (the table's
+        filter, in the reviewer's words); `accept_ai` rows carry the proposal the table showed,
+        and one a re-judge changed since counts as stale. The batch is one `screening.bulk_decided` event. The
+        batch decides all its records or none: a stale `etag`, a record decided already, a
+        second opinion (a consult, decided on its own), or a record without an AI proposal
+        rejects it. A complete topic refuses bulk decisions.
+        """
+        command = Command(
+            command_id=command_id,
+            project_id=project_id,
+            type="screening.bulk_decide",
+            actor_id=reviewer_id,
+            payload={
+                "stage_id": str(stage_id),
+                "rows": [r.model_dump(mode="json") for r in rows],
+                "action": action,
+                "reason_criterion_id": reason_criterion_id,
+                "filter": filter_description,
+                "timing": timing.model_dump(mode="json"),
+            },
+        )
+        ids = [r.assignment_id for r in rows]
+
+        def load(tx: Tx, _: Command) -> dict[str, Any]:
+            row = store.stage_row(tx, project_id, stage_id)
+            found = {
+                a["id"]: a
+                for a in tx.execute(
+                    store.ASSIGNMENT_SQL + " where a.id = any(%s) for update of a", (ids,)
+                ).fetchall()
+            }
+            refs = [a["item_ref"] for a in found.values()]
+            items = {
+                i["item_ref"]: i
+                for i in tx.execute(
+                    "select item_ref, title, text from screening_item"
+                    " where stage_id = %s and item_ref = any(%s)",
+                    (stage_id, refs),
+                ).fetchall()
+            }
+            return {
+                "stage": row,
+                "criteria": self._criteria(tx, row),
+                "found": found,
+                "items": items,
+                "readings": store.readings(tx, stage_id, refs),
+            }
+
+        def decide(_: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
+            row = st["stage"]
+            if documentation_level(ScreeningMode(row["mode"])) != "working":
+                raise InvalidDecision(
+                    "Bulk decisions are for topics with working documentation (mode S). In a "
+                    "topic with complete documentation every record is decided on its own."
+                )
+            if row["stage"] != "title_abstract":
+                raise InvalidDecision(
+                    "Bulk decisions are for title and abstract screening. At full text an "
+                    "exclusion needs its evidence."
+                )
+            if not rows:
+                raise InvalidDecision("Select the records to decide.")
+            if len(set(ids)) != len(ids):
+                raise InvalidDecision("A record is selected twice.")
+            if action == "exclude":
+                if reason_criterion_id is None:
+                    raise InvalidDecision("An exclusion needs the criterion it excludes on.")
+            elif reason_criterion_id is not None:
+                raise InvalidDecision("Only an exclusion names a criterion.")
+            if action == "accept_ai" and row["reveal"] != "before":
+                raise InvalidDecision(
+                    "This stage shows the AI's reading only after a decision, so nobody saw its "
+                    "proposals. Accepting them in bulk needs a stage that shows them before."
+                )
+            found, readings = st["found"], st["readings"]
+            stale = taken = consults = without = 0
+            for r in rows:
+                a = found.get(r.assignment_id)
+                if a is None or a["reviewer_id"] != reviewer_id or a["stage_id"] != stage_id:
+                    raise NotAssigned(f"assignment {r.assignment_id} not found")
+                _refuse_withdrawn(a)
+                stale += a["etag"] != r.expected_etag
+                if action == "accept_ai" and r.proposal != proposal(
+                    readings.get(a["item_ref"]), "working"
+                ):
+                    stale += 1  # a re-judge renewed the reading since the table showed it
+                taken += a["state"] != "pending"
+                consults += a["role"] != "screener"
+                if action == "accept_ai":
+                    without += proposal(readings.get(a["item_ref"]), "working") is None
+            if stale:
+                raise StaleRevision(
+                    f"{_records(stale)} changed since you loaded the table. Reload it."
+                )
+            if taken:
+                raise InvalidDecision(
+                    f"{_records(taken)} of the selection {'is' if taken == 1 else 'are'} decided "
+                    "already, or wait for a final decision. Take them out of the selection."
+                )
+            if consults:
+                raise InvalidDecision(
+                    f"{_records(consults)} of the selection {'is a' if consults == 1 else 'are'} "
+                    f"second opinion{'s' if consults > 1 else ''}: a consult is decided on its own."
+                )
+            if without:
+                raise InvalidDecision(
+                    f"The AI has no proposal for {_records(without)} of the selection. Take "
+                    f"{'it' if without == 1 else 'them'} out, or decide {'it' if without == 1 else 'them'} yourself."
+                )
+            batch_id = uuid.uuid5(command_id, "batch")
+            events = [
+                _event(
+                    project_id,
+                    BULK_DECIDED,
+                    reviewer_id,
+                    {
+                        "batch_id": str(batch_id),
+                        "stage_id": str(stage_id),
+                        "action": action,
+                        "reason_criterion_id": reason_criterion_id,
+                        "filter": filter_description,
+                        "decisions": len(rows),
+                        "assignment_ids": [str(i) for i in ids],
+                    },
+                )
+            ]
+            changes = []
+            for r in rows:
+                a = found[r.assignment_id]
+                reading: Reading | None = readings.get(a["item_ref"])
+                accepted = proposal(reading, "working") if action == "accept_ai" else None
+                if accepted is not None:
+                    decision = Decision(
+                        outcome=accepted.outcome, reason_criterion_id=accepted.reason_criterion_id
+                    )
+                elif action == "exclude":
+                    decision = Decision(outcome="exclude", reason_criterion_id=reason_criterion_id)
+                else:
+                    decision = Decision(outcome="include")
+                validate(decision, row["stage"], st["criteria"])
+                reveal = (
+                    None
+                    if a["revealed"] or reading is None
+                    else reveal_for(row["reveal"], decision, reading)
+                )
+                if reveal is not None:
+                    item = st["items"][a["item_ref"]]
+                    reveal = locate(reveal, item["title"], item["text"])
+                decision_id = new_id()
+                state = "awaiting_final" if reveal else "decided"
+                ai_shown_before = row["reveal"] == "before" and reading is not None
+                revision = a["revision"] + 1
+                events.append(
+                    _event(
+                        project_id,
+                        DECIDED,
+                        reviewer_id,
+                        {
+                            "decision_id": str(decision_id),
+                            "assignment_id": str(a["id"]),
+                            "stage_id": str(stage_id),
+                            "item_ref": a["item_ref"],
+                            "phase": "provisional",
+                            "outcome": decision.outcome,
+                            "reason_criterion_id": decision.reason_criterion_id,
+                            "criteria": [],
+                            "evidence_anchor_ids": [],
+                            "revision": revision,
+                            "reveal": _json(reveal),
+                            "settled": state == "decided",
+                            "second_opinion": False,
+                            "ai_shown_before": ai_shown_before,
+                            "timing": timing.model_dump(mode="json"),
+                            "origin": "bulk",
+                            "batch_id": str(batch_id),
+                            "filter": filter_description,
+                            "ai_proposal": _json(accepted),
+                        },
+                    )
+                )
+                changes.append(
+                    {
+                        "assignment_id": a["id"],
+                        "decision_id": decision_id,
+                        "command_id": uuid.uuid5(command_id, str(a["id"])),
+                        "decision": decision,
+                        "reveal": reveal,
+                        "state": state,
+                        "revision": revision,
+                        "ai_shown_before": ai_shown_before,
+                        "accepted": accepted,
+                    }
+                )
+            return RunDecision(
+                events=tuple(events), changes={"batch_id": batch_id, "rows": changes}
+            )
+
+        def apply(tx: Tx, result: RunDecision[dict[str, Any]], events: tuple[AuditEvent, ...]):
+            c = result.changes
+            assert c is not None
+            batch, *decided = events
+            tx.execute(
+                "insert into screening_batch (id, stage_id, reviewer_id, command_id, event_id,"
+                " action, reason_criterion_id, filter, decisions, recorded_at)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    c["batch_id"],
+                    stage_id,
+                    reviewer_id,
+                    command_id,
+                    batch.event_id,
+                    action,
+                    reason_criterion_id,
+                    filter_description,
+                    len(c["rows"]),
+                    batch.recorded_at,
+                ),
+            )
+            for change, event in zip(c["rows"], decided, strict=True):
+                d: Decision = change["decision"]
+                etag = _etag()
+                tx.execute(
+                    "insert into screening_decision (id, assignment_id, command_id, event_id,"
+                    " phase, outcome, reason_criterion_id, criteria, evidence_anchor_ids,"
+                    " comment, revision, etag, reveal, shown_at, first_key_at, decided_at,"
+                    " reveal_shown_at, recorded_at, second_opinion, ai_shown_before, origin,"
+                    " batch_id, ai_proposal) values (%s, %s, %s, %s, 'provisional', %s, %s,"
+                    " '[]', '{}', null, %s, %s, %s, %s, %s, %s, %s, %s, false, %s, 'bulk', %s, %s)",
+                    (
+                        change["decision_id"],
+                        change["assignment_id"],
+                        change["command_id"],
+                        event.event_id,
+                        d.outcome,
+                        d.reason_criterion_id,
+                        change["revision"],
+                        etag,
+                        Jsonb(_json(change["reveal"])) if change["reveal"] else None,
+                        timing.shown_at,
+                        timing.first_key_at,
+                        timing.decided_at,
+                        timing.reveal_shown_at,
+                        event.recorded_at,
+                        change["ai_shown_before"],
+                        c["batch_id"],
+                        Jsonb(_json(change["accepted"])) if change["accepted"] else None,
+                    ),
+                )
+                decided_now = change["state"] == "decided"
+                tx.execute(
+                    "update screening_assignment set state = %s, revealed = revealed or %s,"
+                    " revision = %s, etag = %s, provisional_decision_id = %s,"
+                    " final_decision_id = %s where id = %s",
+                    (
+                        change["state"],
+                        change["reveal"] is not None,
+                        change["revision"],
+                        etag,
+                        change["decision_id"],
+                        change["decision_id"] if decided_now else None,
+                        change["assignment_id"],
+                    ),
+                )
+
+        self._commands.execute(tx, command, decide, load=load, apply=apply)
+        # From the batch's own decisions, so a retry gets the answer the first call got.
+        batch = tx.execute(
+            "select b.id, b.reviewer_id, b.recorded_at, count(*) as decisions,"
+            " count(*) filter (where d.reveal is not null) as waiting"
+            " from screening_batch b join screening_decision d on d.batch_id = b.id"
+            " where b.command_id = %s group by b.id",
+            (command_id,),
+        ).fetchone()
+        if batch is None or batch["reviewer_id"] != reviewer_id:
+            raise NotAssigned(f"command {command_id} recorded no batch of this reviewer")
+        return BulkResult(
+            batch_id=batch["id"],
+            decided=batch["decisions"] - batch["waiting"],
+            awaiting_final=batch["waiting"],
+            recorded_at=batch["recorded_at"],
         )
 
     def _own_assignment(
@@ -1681,6 +2465,23 @@ class Screening:
         )
 
 
+def _items(tx: Tx, row: dict[str, Any], item_refs: Sequence[str]) -> list[ScreeningItem]:
+    """The stage's items for the judge, in the order of `item_refs`."""
+    rows = tx.execute(
+        "select item_ref, title, text from screening_item where stage_id = %s"
+        " and item_ref = any(%s)",
+        (row["id"], list(item_refs)),
+    ).fetchall()
+    by_ref = {r["item_ref"]: r for r in rows}
+    return [
+        ScreeningItem(
+            item_ref=ref, stage=row["stage"], title=by_ref[ref]["title"], text=by_ref[ref]["text"]
+        )
+        for ref in item_refs
+        if ref in by_ref
+    ]
+
+
 def _ai_column(tx: Tx, stage_id: Id, item_ref: str) -> AiColumn:
     """The AI's reading of an item, with each verified quote placed in it."""
     reading = store.reading(tx, stage_id, item_ref)
@@ -1727,6 +2528,10 @@ def _second_opinion(
         reactivate=existing is not None,
         sort_key=sort_key(row["seed"], a["item_ref"], str(reviewer)),
     )
+
+
+def _records(n: int) -> str:
+    return "1 record" if n == 1 else f"{n} records"
 
 
 def _refuse_withdrawn(a: dict[str, Any]) -> None:

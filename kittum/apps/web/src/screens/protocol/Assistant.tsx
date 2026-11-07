@@ -22,6 +22,7 @@ import type {
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
 import { Button, Field, Select, TextArea, TextInput, failure } from "../../ui/Form.tsx";
+import { Instructions } from "./Instructions.tsx";
 import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { useProject } from "../project.tsx";
@@ -1405,6 +1406,20 @@ function FormView({
                     : null}
                 </div>
               </div>
+
+              <Instructions
+                topic={topic}
+                disabled={suggestion}
+                source={() => forSaving(d)}
+                onChange={({ strictness, guidance }) =>
+                  editTopic((x) => {
+                    const text = guidance.trim() ? guidance : null;
+                    // The defaults stay out of the document, as the server leaves them out.
+                    if (strictness === "conservative" && !text) delete x.judge;
+                    else x.judge = { strictness, ...(text ? { guidance } : {}) };
+                  })
+                }
+              />
 
               <h3 className="mt-6 text-md font-semibold">Sources and their queries</h3>
               <ul className="mt-2 grid gap-5">

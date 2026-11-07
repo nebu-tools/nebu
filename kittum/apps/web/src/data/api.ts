@@ -430,6 +430,56 @@ export const makeApiWorkbench = (): Workbench => ({
       }),
     ),
 
+  bulkDecide: ({ projectId, as, stageId, rows, action, reasonCriterionId, filter, timing }) =>
+    call((api) =>
+      api.bulkDecideScreening(projectId, stageId, {
+        params: reviewer(as),
+        payload: {
+          command_id: commandId(),
+          rows,
+          action,
+          reason_criterion_id: reasonCriterionId,
+          filter,
+          timing: timingBody(timing),
+        },
+      }),
+    ),
+
+  recordPrompt: ({ projectId, as, stageId, assignmentId, itemRef }) =>
+    call((api) =>
+      api.getScreeningRecordPrompt(projectId, stageId, {
+        params: {
+          ...reviewer(as),
+          ...(assignmentId ? { assignment_id: assignmentId } : {}),
+          ...(itemRef ? { item_ref: itemRef } : {}),
+        },
+      }),
+    ),
+
+  promptTemplate: () => call((api) => api.getJudgePromptTemplate(undefined)),
+
+  runBench: ({ projectId, as, stageId, source, limit }) =>
+    call((api) =>
+      api.runScreeningBench(projectId, stageId, {
+        payload: {
+          actor_id: as,
+          command_id: commandId(),
+          source,
+          ...(limit !== undefined ? { limit } : {}),
+        },
+      }),
+    ),
+
+  bench: ({ projectId, as, benchId }) =>
+    call((api) => api.getScreeningBench(projectId, benchId, { params: reviewer(as) })),
+
+  rejudgeStage: ({ projectId, as, stageId }) =>
+    call((api) =>
+      api.rejudgeScreeningStage(projectId, stageId, {
+        payload: { actor_id: as, command_id: commandId() },
+      }),
+    ),
+
   workingExport: ({ projectId, as, scopeId, stage, view }) =>
     call((api) =>
       api.exportWorkingSpreadsheet(projectId, {

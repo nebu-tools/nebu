@@ -33,6 +33,16 @@ export type ScopeStatus = KittumApi.ScopeStatus;
 export type ScreeningTable = KittumApi.ScreeningTable;
 export type TableRow = KittumApi.TableRow;
 export type TableDecision = KittumApi.TableDecision;
+/** What the AI proposes for a record; an unverified exclusion only in a working topic. */
+export type AiProposal = KittumApi.AiProposal;
+export type BulkAction = KittumApi.BulkAction;
+export type BulkRow = KittumApi.BulkRow;
+export type BulkResult = KittumApi.BulkResult;
+/** The prompt the AI judge reads a record with, as the server renders it. */
+export type RecordPrompt = KittumApi.RecordPrompt;
+/** The judge's fixed prompt around the parts a topic's instructions fill in. */
+export type PromptTemplate = KittumApi.PromptTemplate;
+export type BenchResult = KittumApi.BenchResult;
 export type ExportView = KittumApi.ExportView;
 export type StageInfo = KittumApi.StageInfo;
 export type ProjectSummary = KittumApi.ProjectSummary;

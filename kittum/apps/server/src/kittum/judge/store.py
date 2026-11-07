@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from kittum.judge.types import JudgeConfig, ScreeningItem
     from kittum.ledger import Ledger
     from kittum.models import LlmBackend, ModelRecipe
-    from kittum.protocol import Criterion
+    from kittum.protocol import Criterion, JudgeInstructions
     from kittum.storage import ArtifactStore
 
 STAGE_VERSION = "judge.stage.v1"
@@ -106,9 +106,13 @@ def cache_key(
     config: JudgeConfig,
     recipe: ModelRecipe,
     protocol_hash: str,
+    instructions: JudgeInstructions | None = None,
 ) -> str:
-    """Stage version, input, protocol, rendered prompt, weights, decoding, and schema."""
-    request = build_request(item, applicable(criteria, scope_id, item), config)
+    """Stage version, input, protocol, rendered prompt, weights, decoding, and schema. The
+    topic's instructions are in the rendered prompt."""
+    request = build_request(
+        item, applicable(criteria, scope_id, item), config, instructions=instructions
+    )
     return content_hash(
         {
             "stage_version": STAGE_VERSION,
@@ -261,17 +265,21 @@ def judge_many(
     store: ArtifactStore,
     clock: Clock,
     concurrency: int = 4,
+    instructions: JudgeInstructions | None = None,
 ) -> list[Verdict]:
     """Judge every item once, in input order, at most `concurrency` model calls at a time.
 
     A verdict already recorded under the same cache key is returned without a model call, so a
     rerun of a finished batch costs nothing. If a concurrent batch records the same key first,
-    its verdict is returned and no second row or event is written. New verdicts, their artifacts, and one
-    `judge.verdict_recorded` event each are written through `tx`.
+    its verdict is returned and no second row or event is written. New verdicts, their
+    artifacts, and one `judge.verdict_recorded` event each are written through `tx`.
+    `instructions` are the topic's strictness and guidance (`kittum.protocol.JudgeInstructions`).
     """
     _check_recipe(config, recipe)
     register_config(tx, config, recipe, clock)
-    keys = [cache_key(i, scope_id, criteria, config, recipe, protocol_hash) for i in items]
+    keys = [
+        cache_key(i, scope_id, criteria, config, recipe, protocol_hash, instructions) for i in items
+    ]
     rows = tx.execute(
         "select * from verdict where project_id = %s and cache_key = any(%s)",
         (project_id, list(set(keys))),
@@ -282,7 +290,7 @@ def judge_many(
         with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
             runs = list(
                 pool.map(
-                    lambda item: run_judge(item, scope_id, criteria, config, backend),
+                    lambda item: run_judge(item, scope_id, criteria, config, backend, instructions),
                     todo.values(),
                 )
             )

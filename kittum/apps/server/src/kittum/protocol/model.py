@@ -262,6 +262,36 @@ class FreshnessPolicy(Record):
     deadline: date | None = None
 
 
+type JudgeStrictness = Literal["conservative", "decisive"]
+"""How readily the AI judge answers `not_met` (DESIGN.md, "Screening and the AI judge").
+
+`conservative` excludes only what a record certainly fails ("when in doubt, unclear").
+`decisive` also excludes what the record makes improbable, not only impossible. Either way a
+`not_met` needs words copied from the record, and the quote filter still checks them."""
+
+type Guidance = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)
+]
+
+
+class JudgeInstructions(Record):
+    """The editable part of the AI judge's prompt for one search topic.
+
+    Everything else in the prompt is fixed: the status definitions, the quote rules, the text
+    that tells the model the record is data, the record's hashed tag, and the answer schema. A
+    topic that sets neither field leaves them out of the protocol, so its content hash stays as
+    it was before topics had instructions."""
+
+    strictness: JudgeStrictness = "conservative"
+    guidance: Guidance | None = None
+    """The review team's own words for the model, slotted into the prompt after the stage rule:
+    which records the team counts as relevant, terms it uses, cases it wants read one way."""
+
+
+def _default_instructions(value: JudgeInstructions) -> bool:
+    return value == JudgeInstructions()
+
+
 class SearchTopic(Record):
     id: Identifier
     kind: Identifier  # from the profile's "topic_kind" vocabulary, if it has one
@@ -276,6 +306,11 @@ class SearchTopic(Record):
     audit: AuditPlan = AuditPlan()
     stopping: StoppingPlan | None = None  # required for M3, forbidden otherwise
     freshness: FreshnessPolicy
+    judge: JudgeInstructions = Field(
+        default_factory=JudgeInstructions, exclude_if=_default_instructions
+    )
+    """The AI judge's strictness and guidance. Left out of the protocol (and its hash) when
+    neither is set."""
     extensions: Extensions = Field(default_factory=dict)
 
     @property

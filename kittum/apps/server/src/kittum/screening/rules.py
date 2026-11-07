@@ -5,22 +5,30 @@ import math
 import re
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from kittum.core import find_quote, sha256_hex
 from kittum.protocol import ScreeningMode
-from kittum.screening.types import InvalidDecision, QuoteSpan, Reveal
+from kittum.screening.types import AiProposal, InvalidDecision, QuoteSpan, Reveal
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
     from kittum.core import Id
     from kittum.judge import CriterionVerdict, Verdict
-    from kittum.protocol import Criterion, ReviewProtocol, SearchTopic, Stage
+    from kittum.protocol import (
+        Criterion,
+        DocumentationLevel,
+        ReferenceSet,
+        ReviewProtocol,
+        SearchTopic,
+        Stage,
+    )
     from kittum.screening.types import (
         ConflictKind,
         Decision,
         Highlight,
+        RecordFacts,
         RescreenReason,
         RevealSetting,
     )
@@ -352,3 +360,104 @@ def sections(text: str) -> tuple[tuple[str, int, int], ...]:
         body = text[m.end() : end].rstrip()
         out.append((m.group(1), m.end(), m.end() + len(body)))
     return tuple(out)
+
+
+# AI proposals, known includes, and re-judging
+
+
+def proposal(reading: Reading | None, documentation: DocumentationLevel) -> AiProposal | None:
+    """What the AI proposes for a record (`AiProposal`), or None without a usable reading.
+
+    The first criterion in protocol order decides: a verified `not_met` anywhere wins, then, in
+    a working topic only, the model's own `not_met` with a quote, marked unverified. The quote
+    filter still gates every complete-topic and automatic path.
+    """
+    untrusted = {"injection_suspected", "invalid_output"}
+    if reading is None or untrusted & {*reading.flags, *(c.failed_check for c in reading.criteria)}:
+        return None
+    verified = excluding_criterion(reading)
+    if verified is not None:
+        return AiProposal(
+            outcome="exclude",
+            reason_criterion_id=verified.criterion_id,
+            verified=True,
+            quote=verified.quote,
+            rationale=verified.rationale,
+        )
+    if documentation == "working":
+        own = next(
+            (c for c in reading.criteria if _model_status(c) == "not_met" and c.quote),
+            None,
+        )
+        if own is not None:
+            return AiProposal(
+                outcome="exclude",
+                reason_criterion_id=own.criterion_id,
+                verified=False,
+                quote=own.quote,
+                rationale=own.rationale,
+            )
+    return AiProposal(outcome="include")
+
+
+def _identifier(kind: str, value: str) -> str:
+    folded = value.strip().casefold()
+    if kind == "doi":
+        folded = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", folded)
+    return f"{'registry' if kind not in ('doi', 'pmid') else kind}:{folded}"
+
+
+def known_include_refs(reference_set: ReferenceSet, facts: dict[str, RecordFacts]) -> set[str]:
+    """The items whose DOI, PMID, or registry ID is one of the topic's known includes (both
+    halves of its reference set)."""
+    wanted = {
+        _identifier(k.kind, k.value)
+        for k in (*reference_set.development, *reference_set.validation)
+    }
+    if not wanted:
+        return set()
+    found = set()
+    for ref, f in facts.items():
+        ids = {_identifier("registry", r) for r in f.registry_ids}
+        if f.doi:
+            ids.add(_identifier("doi", f.doi))
+        if f.pmid:
+            ids.add(_identifier("pmid", f.pmid))
+        if ids & wanted:
+            found.add(ref)
+    return found
+
+
+_JUDGE_ONLY_CRITERION_FIELDS = ("keywords", "positive_examples", "negative_examples")
+"""What a re-judge may change in a criterion: what the judge reads, not what reviewers decide
+on. Keywords also mark the protocol terms of records not decided yet."""
+
+
+def rejudge_changes(before: SearchTopic, after: SearchTopic) -> list[str]:
+    """What differs between two versions of a topic beyond the AI's instructions (`judge`) and
+    the criteria's keywords and examples: the changes a re-judge in place cannot take."""
+
+    def core(topic: SearchTopic) -> dict[str, Any]:
+        dumped = topic.model_dump(mode="json", exclude={"judge"})
+        dumped["criteria"] = [
+            {k: v for k, v in c.items() if k not in _JUDGE_ONLY_CRITERION_FIELDS}
+            for c in dumped["criteria"]
+        ]
+        return dumped
+
+    a, b = core(before), core(after)
+    changed = [k for k in dict.fromkeys([*a, *b]) if a.get(k) != b.get(k)]
+    if "criteria" in changed:
+        old = {c["id"]: c for c in a["criteria"]}
+        new = {c["id"]: c for c in b["criteria"]}
+        changed.remove("criteria")
+        if list(old) != list(new):
+            changed.append("criteria (added, removed, or reordered)")
+        changed += [
+            f"criteria[{cid}].{k}"
+            for cid in old
+            if cid in new
+            for k in dict.fromkeys([*old[cid], *new[cid]])
+            if old[cid].get(k) != new[cid].get(k)
+        ]
+    return changed

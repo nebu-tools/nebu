@@ -530,6 +530,63 @@
         "title": "AiMark",
         "type": "object"
       },
+      "AiProposal": {
+        "additionalProperties": false,
+        "description": "What the AI proposes for a record: include, or exclude on one criterion.\n\nIn a topic with complete documentation only a verified exclusion is a proposal to exclude\n(`Verdict.excludes`). In a working topic the model's own `not_met` with a quote is one too,\neven if the quote filter could not verify it; it is then marked `verified = False`, never\nquietly turned into an inclusion. A record whose text tried to instruct the model, or whose\nanswer was invalid, has no proposal.",
+        "properties": {
+          "outcome": {
+            "enum": [
+              "include",
+              "exclude"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "reason_criterion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Criterion Id"
+          },
+          "verified": {
+            "default": true,
+            "title": "Verified",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "AiProposal",
+        "type": "object"
+      },
       "Anchor": {
         "additionalProperties": false,
         "properties": {
@@ -1354,6 +1411,198 @@
         "title": "AuditStratum",
         "type": "object"
       },
+      "BenchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200.0,
+            "minimum": 0.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "source": {
+            "additionalProperties": true,
+            "title": "Source",
+            "type": "object"
+          }
+        },
+        "required": [
+          "actor_id",
+          "command_id",
+          "source"
+        ],
+        "title": "BenchRequest",
+        "type": "object"
+      },
+      "BenchResult": {
+        "additionalProperties": false,
+        "description": "A test bench run: the draft's readings against the current ones and the human\ndecisions, known includes first, then flips.",
+        "properties": {
+          "against_human": {
+            "title": "Against Human",
+            "type": "integer"
+          },
+          "bench_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "flips": {
+            "title": "Flips",
+            "type": "integer"
+          },
+          "known": {
+            "title": "Known",
+            "type": "integer"
+          },
+          "known_proposed_exclude": {
+            "title": "Known Proposed Exclude",
+            "type": "integer"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "records": {
+            "title": "Records",
+            "type": "integer"
+          },
+          "requested_at": {
+            "format": "date-time",
+            "title": "Requested At",
+            "type": "string"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BenchRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "state": {
+            "enum": [
+              "running",
+              "done",
+              "failed"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_id",
+          "stage_id",
+          "protocol_hash",
+          "state",
+          "requested_at",
+          "records",
+          "known",
+          "flips",
+          "against_human",
+          "known_proposed_exclude",
+          "rows"
+        ],
+        "title": "BenchResult",
+        "type": "object"
+      },
+      "BenchRow": {
+        "additionalProperties": false,
+        "properties": {
+          "against_human": {
+            "title": "Against Human",
+            "type": "boolean"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "draft": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "flip": {
+            "title": "Flip",
+            "type": "boolean"
+          },
+          "human": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/kittum__screening__types__Outcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "item_ref": {
+            "title": "Item Ref",
+            "type": "string"
+          },
+          "known_include": {
+            "title": "Known Include",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item_ref",
+          "title",
+          "known_include",
+          "human",
+          "current",
+          "draft",
+          "flip",
+          "against_human"
+        ],
+        "title": "BenchRow",
+        "type": "object"
+      },
       "Box": {
         "additionalProperties": false,
         "properties": {
@@ -1386,6 +1635,125 @@
           "y1"
         ],
         "title": "Box",
+        "type": "object"
+      },
+      "BulkAction": {
+        "enum": [
+          "include",
+          "exclude",
+          "accept_ai"
+        ],
+        "type": "string"
+      },
+      "BulkDecideRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/BulkAction"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "filter": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Filter"
+          },
+          "reason_criterion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Criterion Id"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkRow"
+            },
+            "maxItems": 5000,
+            "minItems": 1,
+            "title": "Rows",
+            "type": "array"
+          },
+          "timing": {
+            "$ref": "#/components/schemas/DecisionTiming"
+          }
+        },
+        "required": [
+          "command_id",
+          "rows",
+          "action",
+          "timing"
+        ],
+        "title": "BulkDecideRequest",
+        "type": "object"
+      },
+      "BulkResult": {
+        "additionalProperties": false,
+        "properties": {
+          "awaiting_final": {
+            "title": "Awaiting Final",
+            "type": "integer"
+          },
+          "batch_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "decided": {
+            "title": "Decided",
+            "type": "integer"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "batch_id",
+          "decided",
+          "awaiting_final",
+          "recorded_at"
+        ],
+        "title": "BulkResult",
+        "type": "object"
+      },
+      "BulkRow": {
+        "additionalProperties": false,
+        "properties": {
+          "assignment_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "expected_etag": {
+            "title": "Expected Etag",
+            "type": "string"
+          },
+          "proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "assignment_id",
+          "expected_etag"
+        ],
+        "title": "BulkRow",
         "type": "object"
       },
       "CallPart": {
@@ -3533,6 +3901,11 @@
         "title": "GroupAcceptBody",
         "type": "object"
       },
+      "Guidance": {
+        "maxLength": 4000,
+        "minLength": 1,
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -3822,6 +4195,35 @@
         "title": "ItemLabel",
         "type": "object"
       },
+      "JudgeInstructions": {
+        "additionalProperties": false,
+        "description": "The editable part of the AI judge's prompt for one search topic.\n\nEverything else in the prompt is fixed: the status definitions, the quote rules, the text\nthat tells the model the record is data, the record's hashed tag, and the answer schema. A\ntopic that sets neither field leaves them out of the protocol, so its content hash stays as\nit was before topics had instructions.",
+        "properties": {
+          "guidance": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Guidance"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strictness": {
+            "$ref": "#/components/schemas/JudgeStrictness",
+            "default": "conservative"
+          }
+        },
+        "title": "JudgeInstructions",
+        "type": "object"
+      },
+      "JudgeStrictness": {
+        "enum": [
+          "conservative",
+          "decisive"
+        ],
+        "type": "string"
+      },
       "KnownInclude": {
         "additionalProperties": false,
         "properties": {
@@ -3847,6 +4249,31 @@
           "value"
         ],
         "title": "KnownInclude",
+        "type": "object"
+      },
+      "KnownIncludes": {
+        "additionalProperties": false,
+        "description": "How many of the topic's known includes (its reference set) the rows hold, and how many\nof them the AI proposes to exclude. A warning, never a block.",
+        "properties": {
+          "known": {
+            "title": "Known",
+            "type": "integer"
+          },
+          "proposed_exclude": {
+            "title": "Proposed Exclude",
+            "type": "integer"
+          },
+          "read": {
+            "title": "Read",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "known",
+          "read",
+          "proposed_exclude"
+        ],
+        "title": "KnownIncludes",
         "type": "object"
       },
       "KnownPoolFile": {
@@ -5697,6 +6124,57 @@
         "title": "ProjectSummary",
         "type": "object"
       },
+      "PromptTemplate": {
+        "additionalProperties": false,
+        "description": "The judge's prompt as the protocol editor shows it: the fixed parts around the parts a\ntopic's instructions fill in.",
+        "properties": {
+          "guidance_frame": {
+            "title": "Guidance Frame",
+            "type": "string"
+          },
+          "instructions_version": {
+            "title": "Instructions Version",
+            "type": "string"
+          },
+          "prompt_version": {
+            "title": "Prompt Version",
+            "type": "string"
+          },
+          "stage_rules": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Stage Rules",
+            "type": "object"
+          },
+          "system_after": {
+            "title": "System After",
+            "type": "string"
+          },
+          "system_before": {
+            "title": "System Before",
+            "type": "string"
+          },
+          "user_template": {
+            "title": "User Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt_version",
+          "instructions_version",
+          "system_before",
+          "stage_rules",
+          "guidance_frame",
+          "system_after",
+          "user_template"
+        ],
+        "title": "PromptTemplate",
+        "type": "object"
+      },
       "Proposal": {
         "additionalProperties": false,
         "properties": {
@@ -6832,6 +7310,59 @@
           }
         ]
       },
+      "RecordPrompt": {
+        "additionalProperties": false,
+        "description": "The prompt the AI judge reads one record with under the stage's protocol version: the\ninstructions the topic sets, and the messages and schema exactly as `kittum.judge` renders\nthem. The Audit screen shows the requests that were sent.",
+        "properties": {
+          "guidance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Guidance"
+          },
+          "instructions_hash": {
+            "title": "Instructions Hash",
+            "type": "string"
+          },
+          "json_schema": {
+            "additionalProperties": true,
+            "title": "Json Schema",
+            "type": "object"
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "strictness": {
+            "title": "Strictness",
+            "type": "string"
+          },
+          "system": {
+            "title": "System",
+            "type": "string"
+          },
+          "user": {
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "protocol_hash",
+          "strictness",
+          "guidance",
+          "instructions_hash",
+          "system",
+          "user",
+          "json_schema"
+        ],
+        "title": "RecordPrompt",
+        "type": "object"
+      },
       "RecordTrace": {
         "additionalProperties": false,
         "properties": {
@@ -6945,6 +7476,33 @@
           }
         },
         "title": "ReferenceSet",
+        "type": "object"
+      },
+      "RejudgeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "protocol_version_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "actor_id",
+          "command_id"
+        ],
+        "title": "RejudgeRequest",
         "type": "object"
       },
       "Relation": {
@@ -8117,6 +8675,27 @@
       "ScreeningTable": {
         "additionalProperties": false,
         "properties": {
+          "documentation": {
+            "$ref": "#/components/schemas/DocumentationLevel"
+          },
+          "known_includes": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KnownIncludes"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "protocol_hash": {
+            "title": "Protocol Hash",
+            "type": "string"
+          },
+          "reveal": {
+            "title": "Reveal",
+            "type": "string"
+          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/TableRow"
@@ -8148,6 +8727,9 @@
           "scope_id",
           "stage",
           "view",
+          "documentation",
+          "reveal",
+          "protocol_hash",
           "rows"
         ],
         "title": "ScreeningTable",
@@ -8361,6 +8943,9 @@
           },
           "id": {
             "$ref": "#/components/schemas/Identifier"
+          },
+          "judge": {
+            "$ref": "#/components/schemas/JudgeInstructions"
           },
           "kind": {
             "$ref": "#/components/schemas/Identifier"
@@ -9741,6 +10326,27 @@
             "title": "Ai Not Met",
             "type": "array"
           },
+          "ai_proposal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiProposal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ai_protocol_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Protocol Hash"
+          },
           "assignment_id": {
             "anyOf": [
               {
@@ -9816,6 +10422,11 @@
               }
             ],
             "title": "Journal"
+          },
+          "known_include": {
+            "default": false,
+            "title": "Known Include",
+            "type": "boolean"
           },
           "outcome": {
             "$ref": "#/components/schemas/RecordOutcome"
@@ -11065,6 +11676,28 @@
           }
         },
         "summary": "Health"
+      }
+    },
+    "/api/judge/prompt-template": {
+      "get": {
+        "description": "The fixed parts of the judge's prompt around the parts a topic's instructions fill in:\nthe stage rule each strictness selects, and the frame of the team's guidance.",
+        "operationId": "getJudgePromptTemplate",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptTemplate"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Template",
+        "tags": [
+          "judge"
+        ]
       }
     },
     "/api/layers/{layer_id}/anchors": {
@@ -16350,6 +16983,70 @@
         ]
       }
     },
+    "/api/projects/{project_id}/screening/bench/{bench_id}": {
+      "get": {
+        "description": "A bench run's flips against the current readings and the human decisions, known includes\nfirst. The methods lead's only.",
+        "operationId": "getScreeningBench",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "bench_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Bench Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bench",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
     "/api/projects/{project_id}/screening/queue": {
       "get": {
         "description": "The reviewer's next undecided assignments in queue order, after `after`. Items can appear\nbehind `after`; re-read without it when `remaining` in the stage status is higher than the\nitems held.",
@@ -16631,6 +17328,308 @@
           }
         },
         "summary": "Open Stage",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/screening/stages/{stage_id}/bench": {
+      "post": {
+        "description": "The test bench: the stage's judge, with a draft protocol's instructions, on the topic's\nknown includes among the stage's records and up to `limit` records people have settled. A\njob judges them; read the result with `getScreeningBench`. 422 for a draft that does not\ncompile.",
+        "operationId": "runScreeningBench",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stage Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BenchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BenchResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Bench",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/screening/stages/{stage_id}/bulk-decide": {
+      "post": {
+        "description": "Decide many of the caller's own records at once, in a topic with working documentation:\ninclude them, exclude them on one criterion, or accept the AI's proposal for each. One\ndecision per record with `origin: bulk`, and one batch event with the filter. A complete\ntopic refuses (422).",
+        "operationId": "bulkDecideScreening",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stage Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDecideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Bulk Decide",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/screening/stages/{stage_id}/prompt": {
+      "get": {
+        "description": "The prompt the AI judge reads a record with under the stage's protocol version.",
+        "operationId": "getScreeningRecordPrompt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stage Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "One of the caller's assignments (working topics).",
+            "in": "query",
+            "name": "assignment_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Id"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "One of the caller's assignments (working topics).",
+              "title": "Assignment Id"
+            }
+          },
+          {
+            "description": "Any record, for the methods lead.",
+            "in": "query",
+            "name": "item_ref",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any record, for the methods lead.",
+              "title": "Item Ref"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordPrompt"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Prompt",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/screening/stages/{stage_id}/rejudge": {
+      "post": {
+        "description": "Re-judge an open stage under a newer published protocol version that changes only what\nthe AI reads (the topic's strictness and guidance, the criteria's keywords and examples).\nNew readings replace the old for display; the old stay in the ledger and the disclosure.\nHuman decisions stay as they are. 422 for a version that changes more.",
+        "operationId": "rejudgeScreeningStage",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "stage_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Stage Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejudgeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StageInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rejudge",
         "tags": [
           "screening"
         ]

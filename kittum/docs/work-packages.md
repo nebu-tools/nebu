@@ -19,15 +19,15 @@ The two-week spike in [DESIGN.md](../DESIGN.md#two-week-spike) picks from these 
 | 05 | `search` | Done |
 | 06 | `enrich` | Clients, stored enrichment, full-text waterfall, and jobs in the app done; local tagging open |
 | 07 | `corpus` | Dedupe, link proposals, immutable identity revisions, PRISMA counts, known pool done |
-| 08 | `judge` and `models` | Done; ledger store and job wiring wait for WP-01 and WP-02 |
-| 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, metrics, routes; open items listed |
+| 08 | `judge` and `models` | Done, with editable screening instructions (strictness and guidance); ledger store and job wiring wait for WP-01 and WP-02 |
+| 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, re-judging in place, the test bench, AI proposals, bulk decisions in working topics, metrics, routes; open items listed |
 | 10 | `documents` | Parsers, layers, anchors, re-anchoring, viewer routes, and acquisition done; source resolvers for the waterfall open |
 | 11 | `extraction` | Done: schema, both paths, validators, reconciliation, runs as jobs, acceptance, bundle exporter, routes, workbench screen; open items listed |
 | 12 | `appraisal` | Types done; open |
 | 13 | `stats` | Done: intervals, stopping, capture-recapture, conformal threshold, agreement |
 | 14 | `report` | Done: PRISMA flow, RIS, search report, AI disclosure, bundle exporters and `seal_bundle`, `gba_amnog` targets, routes; open items listed |
 | 15 | `api`, `app` | Done: composition root, project lifecycle (service, routes, CLI), `serve` with the workbench, `worker`, `demo seed`; authentication open |
-| 16 | Workbench | Done: wired to the API with a reviewer picker; setup from an empty review (people, protocol editor, searches, corpus, stages, full texts); screening, full text, adjudication, progress, protocol, search, studies, extraction runs and review, report rendering and sealing; end-to-end journeys in CI |
+| 16 | Workbench | Done: wired to the API with a reviewer picker; setup from an empty review (people, protocol editor with screening instructions and the test bench, searches, corpus, stages, full texts); screening and its table with bulk decisions in working topics, full text, adjudication, progress, protocol, search, studies, extraction runs and review, report rendering and sealing; end-to-end journeys in CI |
 | 17 | Evaluation harness | Open |
 
 ## WP-01 Ledger
@@ -410,6 +410,18 @@ Modules `kittum.judge` and `kittum.models`. Needs: `protocol`, `core`.
   `judge.verdict_recorded` events, and skips records already judged under the same cache key.
 - `judge.judge_metrics`, `pair_metrics` (double-fault rate, OR rule, Cohen's kappa), and
   `fleiss_kappa` for run-to-run agreement.
+- Screening instructions (branch `kittum/screening-instructions`): a search topic's `judge`
+  (`protocol.JudgeInstructions`: `strictness` `conservative` or `decisive`, and free-text
+  `guidance`, at most 4,000 characters) is the prompt's only editable part. `conservative` is
+  the stage rule every topic had; `decisive` also answers `not_met` when the record makes passing
+  improbable, still with words copied from it; the guidance follows the stage rule in a fixed
+  frame. `build_request`, `run_judge`, `judge_many`, and `cache_key` take the instructions; a
+  topic without them gets the exact prompt of before (the protocol leaves `judge` out of its
+  hash at its default, the assistant's schema leaves it out, and the template hash of
+  `judge.v2` stays, so registered configs and recorded answers keep working).
+  `INSTRUCTIONS_VERSION` and `instructions_hash` version the wordings; `prompt_template` gives
+  the editor the fixed parts (`GET /api/judge/prompt-template`), and `rendered_prompt` the
+  messages and schema for one record.
 - A small gold set (`tests/judge/fixtures/demo_gold.json`): the demo's 30 title and abstract
   items, the screeners' decisions from the end-to-end plan, and recorded answers from
   GLM-5.3-Flash and qwen3.5:4b. The filter verifies 2 of GLM's 5 correct `not_met` readings (was
@@ -454,6 +466,8 @@ Modules `kittum.judge` and `kittum.models`. Needs: `protocol`, `core`.
   German, becomes `unclear` (`language_unverifiable`). Add a language by adding its function
   words and negation cues.
 - A live test against Ollama or vLLM; the tests use recorded response bodies.
+- The decisive wording is not measured on gold data yet. Run the gold slices with it before
+  recommending it for any topic.
 
 ## WP-09 Screening
 
@@ -614,6 +628,39 @@ Module `kittum.screening`. Needs: `protocol`, `corpus`, `judge`, `ledger`, `runs
   only after the reviewer's own decision, and that a row decided from the table follows the
   queue's rules.
 
+- Screening instructions (branch `kittum/screening-instructions`, migration
+  `20261107050000_screening_instructions.sql`):
+  - `rejudge_stage` re-judges an open stage in place under another published version that
+    changes only what the AI reads (`rules.rejudge_changes`: the topic's `judge`, the criteria's
+    keywords and examples). It moves the stage to the version (`screening_rejudge`,
+    `screening.rejudged`) and enqueues judge jobs for every item. `attach_verdicts` takes the
+    protocol version a job judged under: it drops verdicts of a version the stage left, and
+    replaces a reading of another version (the event names what it replaces). Every reading
+    stays in `screening_ai_reading_log`. Human decisions and reveals stay as they were; M3 is
+    refused.
+  - The test bench: `request_bench` judges a draft protocol's instructions on the topic's known
+    includes (the draft's reference set, matched by DOI, PMID, or registry ID) and up to 50
+    settled records in a seeded order, as a `screening.bench` job through the stage's judge
+    config (`bench_handler`); `bench` lists flips against the current readings and the human
+    outcomes, known includes first, for the methods lead only. The verdicts are the judge's own
+    rows, so a draft published as tried re-judges those records from the cache.
+  - `rules.proposal`: what the AI proposes (`AiProposal`), with an unverified `not_met` counting
+    in working topics only and nothing for a record that tried to instruct the model. The table
+    shows it where the viewer may see the reading, marks known includes for the lead and in
+    working topics, and counts the known includes the AI proposes to exclude (`KnownIncludes`).
+  - `bulk_decide`: a batch of a screener's own pending title and abstract records in a working
+    topic, included, excluded on one criterion, or given the AI's proposals (only where the stage
+    showed them before). One `screening.bulk_decided` event and `screening_batch` row, then one
+    decision per record under `decide`'s rules with `origin: bulk`, the batch, the filter, and the
+    accepted proposal. The batch is all or nothing; a complete topic, a full-text stage, a stale
+    etag, a decided record, or a second opinion refuses it. `screening_decision.origin` is a text
+    check (`keyboard`, `bulk`) for a later `spreadsheet`.
+  - `record_prompt`: the prompt the AI reads a record with, for the lead and for a working topic's
+    screener.
+  `tests/screening/test_instructions.py` covers the prompt, a re-judge in S and in M1, the bench
+  and its cache reuse, proposals and bulk decisions with the ledger, the disclosure, and the
+  routes.
+
 Left open:
 
 - The protocol has no `reveal` field; it is set per stage when the stage opens and recorded in the
@@ -631,8 +678,12 @@ Left open:
 - M3 reports the stop test but does not stop the queues; stopping is the methods lead's decision.
 - One judge per stage. A second model family as an independent judge, and capture-recapture over
   the provisional decisions, are not wired.
-- Changing the mode or the reveal setting of an open stage, and new scopes on a screened corpus,
-  need a new stage; screening does not carry decisions across protocol versions yet.
+- Changing the mode or the reveal setting of an open stage, a criterion's wording, and new scopes
+  on a screened corpus, need a new stage; screening does not carry decisions across protocol
+  versions yet. Changes to what the AI reads re-judge in place.
+- A re-judge reads every item again, the records people decided included. Reading only the
+  undecided ones would be cheaper but would leave the disclosure with two prompts per stage for
+  good.
 - Reviewer metrics for themselves after a session, the time-to-first-key summaries, the
   disagreement rate per criterion, and break suggestions after a missed sentinel are not computed;
   the timings they need are stored.
@@ -1219,13 +1270,25 @@ Done (branch `kittum/wp-16-workbench-design`, then `kittum/wp-15-integration`):
   label (the protocol's optional `short_label`, or the start of the text), with the full wording
   on `c` or while choosing an exclusion reason; the record's facts are one muted line; the
   permanent legend is gone.
+- Screening instructions (branch `kittum/screening-instructions`): the protocol form has a
+  topic's "Screening instructions for the AI" (strictness, guidance, and the full prompt with
+  its fixed parts greyed out, at either stage) and the test bench (`Instructions.tsx`), which
+  sends the form's draft and lists the flips. The table shows "AI proposes" and "Known include"
+  columns, warns when the AI proposes to exclude known includes, lets the lead re-judge the
+  stage with the published version, and in working topics marks rows (Shift or Ctrl click,
+  `Shift+↑`/`↓`, `a`) for a bulk bar: `Shift+I`, `Shift+E` then a criterion, `Shift+A`
+  accepts the AI's proposals; the filter in words goes to the ledger. `p` shows the prompt of a
+  record (`Prompt.tsx`) in the table pane and, in working topics, on the title and abstract
+  screen. `apps/web/e2e/instructions.spec.ts` drives it all on the real stack.
 - Browser unit tests in Vitest browser mode on the mock, and screenshots in `apps/web/screenshots/`.
 
 Left:
 
-- The table: bulk decisions (working topics, PR C of the direction), the decision import (PR D),
-  deciding at full text from the table, and saving views on the server (they live in the
-  browser's storage now). Rows load whole; at Embase scale the abstracts are most of the payload.
+- The table: the decision import (PR D), deciding at full text from the table, and saving views
+  on the server (they live in the browser's storage now). Rows load whole; at Embase scale the
+  abstracts are most of the payload.
+- The bench has no key of its own, and its result is not kept in the browser after a reload (the
+  server keeps it, by ID).
 
 - The other report targets on the Reports screen, and the Risk of bias (WP-12 has no server
   implementation) and AI-exclusion audit screens; the full-text judge's per-criterion reading in
@@ -1250,7 +1313,7 @@ search topic, without a second product. DESIGN.md, "Documentation levels", has t
 | --- | --- | --- | --- |
 | A | `kittum/targeted-screening` | Mode S, documentation levels, the `before` reveal, the queue not waiting for the judge, presets in the protocol editor, the screener pool in stage setup, second opinions on both screening screens, methods text and disclosure | Done |
 | B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Done |
-| C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, AI proposals in working topics, bulk decisions from the table | Open |
+| C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, the test bench, AI proposals in working topics, bulk decisions from the table | Done |
 | D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers as a topic's known pool, the "Known pool" panel on the search screen, "In the known pool" in the table), NBIB, Scopus CSV, Web of Science, and a team's CSV or XLSX list as imports | Done |
 | E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open |
 | F | | The spreadsheet decision import (decision columns of a working export, working topics only) | Open |
