@@ -650,6 +650,11 @@ def _read_sheet(data: bytes) -> _Sheet:
                 )
             )
         return _Sheet(export_id=parsed_id, rows=tuple(rows))
+    except ReportRequestError:
+        raise
+    except (zipfile.BadZipFile, KeyError, OSError, SyntaxError) as e:
+        # Read-only workbooks parse sheets lazily: a broken sheet raises here, not on load.
+        raise ReportRequestError("This file is not an Excel workbook (.xlsx).") from e
     finally:
         wb.close()
 

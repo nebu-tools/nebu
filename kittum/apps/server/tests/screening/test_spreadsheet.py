@@ -4,6 +4,8 @@ other rows do not; applying records one batch event with the file's hash and one
 changed row with `origin: spreadsheet`. A complete topic refuses."""
 
 import base64
+import re
+import zipfile
 from io import BytesIO
 from typing import TYPE_CHECKING, Any
 
@@ -300,6 +302,16 @@ def test_only_the_screener_s_own_records_change_and_a_complete_topic_refuses(
         preview(world, lead, stage.stage_id, lead_data)
     with pytest.raises(ReportRequestError, match="not an Excel workbook"):
         preview(world, b, stage.stage_id, b"Ref,Your decision\n")
+    # A workbook that opens but whose Records sheet is cut off midway: openpyxl reads sheets
+    # lazily, so this breaks while the rows are read, and is still refused as no workbook.
+    cut = BytesIO()
+    with zipfile.ZipFile(BytesIO(data)) as src, zipfile.ZipFile(cut, "w") as dst:
+        records_xml = _sheet_path(src, "Records")
+        for info in src.infolist():
+            body = src.read(info.filename)
+            dst.writestr(info, body[: len(body) // 2] if info.filename == records_xml else body)
+    with pytest.raises(ReportRequestError, match="not an Excel workbook"):
+        preview(world, b, stage.stage_id, cut.getvalue())
     book = load_workbook(BytesIO(data))
     book["About"]["B3"].value = None
     out = BytesIO()
@@ -401,3 +413,15 @@ def test_the_routes_preview_and_import_a_file(database: Database, tmp_path: Any)
         )
         assert refused.status_code == 422
         assert "working documentation" in refused.json()["detail"]
+
+
+def _sheet_path(book: zipfile.ZipFile, name: str) -> str:
+    """The part of the zipped workbook that holds the sheet called `name`."""
+    workbook = book.read("xl/workbook.xml").decode()
+    rels = book.read("xl/_rels/workbook.xml.rels").decode()
+    (rid,) = re.findall(rf'<sheet[^>]*name="{name}"[^>]*r:id="([^"]+)"', workbook)
+    (target,) = re.findall(
+        rf'Id="{rid}"[^>]*Target="([^"]+)"|Target="([^"]+)"[^>]*Id="{rid}"', rels
+    )
+    path = next(t for t in target if t)
+    return path.lstrip("/") if path.startswith("/") else f"xl/{path}"
