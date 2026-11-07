@@ -439,6 +439,9 @@ function StageTable({
           )
         ).etag;
         phase = "provisional";
+        // The take-back stands even if the new decision fails: the row is pending again.
+        const pending = etag;
+        patch(target.ref, (r) => ({ ...r, etag: pending, decisions: [{ state: "pending" }] }));
       }
       const result = await run(
         workbench.decide({

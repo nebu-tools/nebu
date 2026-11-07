@@ -39,7 +39,7 @@ from kittum.report import (
     targets,
     working_export,
 )
-from kittum.screening import NotAssigned
+from kittum.screening import InvalidDecision, NotAssigned
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -119,6 +119,8 @@ def _errors() -> Generator[None]:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ReportRequestError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except InvalidDecision as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/targets", operation_id="listReportTargets")
