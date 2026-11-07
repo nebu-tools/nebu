@@ -9,8 +9,10 @@ import re
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
+from kittum.appraisal import instrument as appraisal_instrument
 from kittum.core import Id, Record
 from kittum.judge import VERIFIER_LIMITS, instructions_hash
+from kittum.report import appraised
 from kittum.report.extracted import as_csv, as_json
 from kittum.report.prisma import flows, svg
 from kittum.report.ris_format import ris_dumps, ris_entry
@@ -1106,10 +1108,60 @@ def render_extraction(review: Review, scope_id: str | None) -> list[RenderedFile
     ]
 
 
+# The risk-of-bias summary.
+
+
+def _risk_of_bias_md(review: Review) -> str:
+    """A table per instrument in use: one row per study and result."""
+    lines = [f"# Risk of bias\n\nAt ledger event {review.cutoff_seq}.\n"]
+    if not review.appraisals:
+        lines.append("\nNobody has appraised a result yet.\n")
+    for instrument_id in dict.fromkeys(a.instrument for a in review.appraisals):
+        definition = appraisal_instrument(instrument_id).definition
+        mine = [a for a in review.appraisals if a.instrument == instrument_id]
+        header = ["Study", "Result", *(d.id for d in definition.domains), "Overall"]
+        body = [
+            [
+                a.study_label,
+                a.result,
+                *(appraised.word(d.judgement, d.override is not None) for d in a.domains),
+                appraised.word(a.judgement, a.override is not None),
+            ]
+            for a in mine
+        ]
+        legend = "; ".join(f"{d.id} {d.title}" for d in definition.domains)
+        lines += [
+            f"\n## {definition.title}\n\n",
+            md_table(header, body),
+            f"\n{legend}. † Judged against the algorithm's proposal; the reason is in"
+            " risk_of_bias.csv.\n",
+            f"\nSource: {definition.source}\n",
+        ]
+    return "".join(lines)
+
+
+def render_risk_of_bias(review: Review, scope_id: str | None) -> list[RenderedFile]:
+    del scope_id  # appraisals belong to reports, which the scopes share
+    return [
+        text_file("risk_of_bias.md", _risk_of_bias_md(review)),
+        RenderedFile(
+            path="risk_of_bias.csv",
+            media_type="text/csv; charset=utf-8",
+            data=appraised.as_csv(review.appraisals),
+        ),
+        RenderedFile(
+            path="risk_of_bias.json",
+            media_type="application/json",
+            data=appraised.as_json(review.appraisals, review.cutoff_seq),
+        ),
+    ]
+
+
 CORE_RENDERERS: dict[str, Renderer] = {
     "prisma": render_prisma,
     "ris": render_ris,
     "search_report": render_search_report,
     "ai_disclosure": render_disclosure,
     "extraction": render_extraction,
+    "risk_of_bias": render_risk_of_bias,
 }

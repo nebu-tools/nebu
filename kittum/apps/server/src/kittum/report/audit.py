@@ -49,6 +49,7 @@ type TraceKind = Literal[
     "adjudication",
     "full_text",
     "extraction",
+    "appraisal",
     "report",
     "ledger",
     "project",
@@ -916,6 +917,35 @@ def _describe(
             ("Anchor", p.get("anchor_id")),
             ("Source on screen for", f"{p.get('source_viewed_ms')} ms"),
             ("Checks that failed", ", ".join(p.get("failed_checks", [])) or None),
+        ]
+    elif t == "appraisal.started":
+        kind = "appraisal"
+        summary = f"{who} started a risk-of-bias appraisal of {p.get('result')!r}"
+        facts += [("Instrument", p.get("instrument")), ("Document", p.get("document_id"))]
+    elif t == "appraisal.answered":
+        kind = "appraisal"
+        answer = str(p.get("answer")).replace("_", " ")
+        summary = f"{who} answered {p.get('question_id')} with {answer!r} for {p.get('result')!r}"
+        facts += [("Quote", '"' + " ".join(str(q).split()) + '"') for q in p.get("quotes", [])]
+        proposed = p.get("proposed")
+        facts.append(
+            (
+                f"Proposed judgement of {p.get('domain_id')}",
+                str(proposed).replace("_", " ").capitalize() if proposed else "Not yet",
+            )
+        )
+    elif t == "appraisal.overridden":
+        kind = "appraisal"
+        target = "the overall judgement" if p.get("target") == "overall" else p.get("target")
+        if p.get("judgement"):
+            judgement = str(p.get("judgement")).replace("_", " ")
+            summary = f"{who} judged {target} {judgement} against the algorithm"
+        else:
+            summary = f"{who} took back the override of {target}"
+        proposed = p.get("proposed")
+        facts += [
+            ("Reason", p.get("reason")),
+            ("Proposed", str(proposed).replace("_", " ").capitalize() if proposed else "Not yet"),
         ]
     elif t == "report.rendered":
         kind = "report"
