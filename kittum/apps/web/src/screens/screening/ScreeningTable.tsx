@@ -610,12 +610,11 @@ function StageTable({
     }
   };
 
-  // After a re-judge the lead's rows still read with the old version until the worker has read
-  // them again: re-read the table until every reading is the new one.
+  // The lead's rows the AI has not read with the stage's version yet: unread ones, and after a
+  // re-judge those still on the old version. The table is re-read until there are none.
   const renewing =
     kind === "lead" && table
-      ? table.rows.filter((r) => r.ai_protocol_hash && r.ai_protocol_hash !== table.protocol_hash)
-          .length
+      ? table.rows.filter((r) => r.ai_protocol_hash !== table.protocol_hash).length
       : 0;
   const refresh = useCallback(() => setReload((n) => n + 1), []);
   usePoll(renewing > 0, refresh, 4000);
@@ -1035,7 +1034,7 @@ function StageTable({
         ) : null}
         {renewing > 0 ? (
           <span className="whitespace-nowrap text-ink-3" role="status" data-testid="renewing">
-            {renewing} {renewing === 1 ? "record waits" : "records wait"} for the new reading
+            {renewing} {renewing === 1 ? "record waits" : "records wait"} for the AI's reading
           </span>
         ) : null}
         {kind === "lead" && published && published.hash !== table.protocol_hash ? (
