@@ -37,6 +37,7 @@ from kittum.protocol.model import (
     Comparator,
     Criterion,
     Deviation,
+    DocumentationLevel,
     EffectModifier,
     FreshnessPolicy,
     KnownInclude,
@@ -55,6 +56,7 @@ from kittum.protocol.model import (
     SourcePlan,
     Stage,
     StoppingPlan,
+    documentation_level,
 )
 from kittum.protocol.profile import (
     ExtensionPoint,
@@ -89,6 +91,7 @@ __all__ = [
     "Criterion",
     "CriterionQuestion",
     "Deviation",
+    "DocumentationLevel",
     "EffectModifier",
     "ExtensionPoint",
     "FieldChange",
@@ -123,6 +126,7 @@ __all__ = [
     "StrategyDialect",
     "compile",
     "diff",
+    "documentation_level",
     "get_profile",
     "get_version",
     "latest_published",

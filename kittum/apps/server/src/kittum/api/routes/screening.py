@@ -114,7 +114,10 @@ class OpenStageRequest(Record):
     topic_id: str | None = None
     sentinels: tuple[Sentinel, ...] = ()
     """Records with known labels for the queues; a full-text stage without any draws them from
-    the project's sentinel full texts."""
+    the project's sentinel full texts. Mode S takes none."""
+    screeners: tuple[Id, ...] | None = None
+    """Mode S only: the pool of reviewers who share the records; every reviewer of the project
+    if left out. The other modes take their screeners from the project's reviewers."""
 
 
 class SentinelFile(Record):
@@ -171,6 +174,7 @@ def open_stage(project_id: Id, body: OpenStageRequest, ctx: Context) -> StageInf
             reveal=body.reveal,
             topic_id=body.topic_id,
             sentinels=body.sentinels,
+            screeners=body.screeners,
         )
 
 
@@ -256,7 +260,8 @@ def queue(
 def decide(
     project_id: Id, assignment_id: Id, body: DecideRequest, reviewer: Reviewer, ctx: Context
 ) -> DecideResult:
-    """A provisional decision, then a final one if the AI was revealed."""
+    """A provisional decision, then a final one if the AI was revealed. In mode S a decision can
+    ask for a second opinion (`decision.second_opinion`)."""
     screening = _screening(ctx)
     with _errors(), ctx.db.transaction() as tx:
         return screening.decide(

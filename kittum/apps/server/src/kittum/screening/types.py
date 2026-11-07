@@ -8,7 +8,7 @@ from pydantic import Field
 
 from kittum.core import Id, KittumError, Record
 from kittum.judge import CriterionStatus, CriterionVerdict
-from kittum.protocol import ScreeningMode, Stage
+from kittum.protocol import DocumentationLevel, ScreeningMode, Stage
 from kittum.runs import CommandRejected
 from kittum.stats import Interval, cohen_kappa, pabak
 
@@ -17,7 +17,10 @@ if TYPE_CHECKING:
 
 type Outcome = Literal["include", "exclude", "unclear", "insufficient_information"]
 type Phase = Literal["provisional", "final"]
-type RevealSetting = Literal["never", "on_disagreement", "always"]
+type RevealSetting = Literal["never", "on_disagreement", "always", "before"]
+"""When a reviewer sees the AI's reading: never, after their own provisional decision if the AI
+disagrees or always, or `before` the decision. `before` is allowed only in topics with working
+documentation (mode S)."""
 type ConflictKind = Literal[
     "human_disagreement",  # the screeners disagree on inclusion
     "exclusion_reason",  # at full text, both exclude on different criteria
@@ -92,11 +95,14 @@ class StageSpec(Record):
     topic_id: str | None = None  # needed only when the scope is in several topics
     records: tuple[ScreeningRecord, ...] = Field(min_length=1)
     screeners: tuple[Id, ...] = Field(min_length=1)
-    auditor_id: Id
+    """Two in M1 and M3, one in M2. In S a pool of one or more: each record goes to one of them,
+    split evenly in the seeded order, and a second opinion goes to another of them."""
+    auditor_id: Id | None = None
     """Screens the random audit sample and the blind extra screens of AI-only disagreements; never
-    one of the screeners."""
-    adjudicators: tuple[Id, ...] = Field(min_length=1)
-    """Who adjudicates the stage's conflicts. They see the adjudicator's view of `status`."""
+    one of the screeners. Required in M1, M2, and M3; S has none."""
+    adjudicators: tuple[Id, ...] = ()
+    """Who adjudicates the stage's conflicts (at least one in M1, M2, and M3; S has none). They
+    see the adjudicator's view of `status`."""
     sentinels: tuple[Sentinel, ...] = ()
     reveal: RevealSetting = "on_disagreement"
     judge_config_id: str
@@ -110,11 +116,12 @@ class StageInfo(Record):
     stage: Stage
     topic_id: str
     mode: ScreeningMode
+    documentation: DocumentationLevel
     reveal: RevealSetting
     protocol_hash: str
     judge_config_id: str
     screeners: tuple[Id, ...]
-    auditor_id: Id
+    auditor_id: Id | None
     adjudicators: tuple[Id, ...]
 
 
@@ -135,6 +142,10 @@ class Decision(Record):
     evidence_anchor_ids: tuple[Id, ...] = ()
     comment: str | None = None
     criteria: tuple[CriterionDecision, ...] = ()  # full text: one per criterion
+    second_opinion: bool = False
+    """Mode S: the screener is unsure and asks another screener of the pool, who sees this
+    decision and its comment and settles the record. Only on a screener's own record, and only
+    with a pool of two or more."""
 
 
 class DecisionTiming(Record):
@@ -186,9 +197,27 @@ class QueueRecord(Record):
     """Structured-abstract labels as (label, start, end) code-point ranges of `text`."""
 
 
+class AiColumn(Record):
+    excludes: bool
+    criteria: tuple[CriterionVerdict, ...]
+    quote_spans: dict[str, QuoteSpan]
+    """Where each verified quote is in the record, by criterion ID."""
+
+
+class SecondOpinionContext(Record):
+    """Mode S: the decision a screener of the pool asked a second opinion on. Shown to the second
+    screener, because a second opinion is a consult, not a blind screen."""
+
+    outcome: Outcome
+    reason_criterion_id: str | None
+    comment: str | None
+    criteria: tuple[CriterionDecision, ...] = ()
+
+
 class QueueItem(Record):
-    """What a reviewer sees. Never contains AI output before their own provisional decision,
-    sentinel or audit flags, or anything of another reviewer."""
+    """What a reviewer sees. Never contains AI output before their own provisional decision
+    (unless the stage reveals `before`), sentinel or audit flags, or anything of another
+    reviewer (except the decision a second opinion is asked on)."""
 
     assignment_id: Id
     stage: Stage
@@ -203,6 +232,15 @@ class QueueItem(Record):
     """The phase the next decision must have: `final` after a reveal of this reviewer's own
     provisional decision, which then comes back in `reveal`."""
     reveal: Reveal | None
+    ai: AiColumn | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The AI's reading before the decision: only in a stage that reveals `before`, and only once
+    the AI has read the item. Left out of the response otherwise, so an item of a complete topic
+    has no AI field at all."""
+    second_opinion: SecondOpinionContext | None = Field(
+        default=None, exclude_if=lambda v: v is None
+    )
+    """Set when this assignment is a second opinion: the decision it is asked on. Left out
+    otherwise."""
 
 
 class DecideResult(Record):
@@ -248,13 +286,6 @@ class AdjudicationItem(Record):
     text: str
     record: QueueRecord
     columns: tuple[ReviewerColumn, ...]
-
-
-class AiColumn(Record):
-    excludes: bool
-    criteria: tuple[CriterionVerdict, ...]
-    quote_spans: dict[str, QuoteSpan]
-    """Where each verified quote is in the record, by criterion ID."""
 
 
 class AdjudicationResult(Record):
@@ -371,8 +402,19 @@ class RescreenGauge(Record):
     adjudicated: int  # the auditor disagreed: a human disagreement went to adjudication
 
 
+class SecondOpinionGauge(Record):
+    """Mode S: decisions a screener asked a second opinion on. The second screener saw the first
+    decision, so these are consults, not independent screens."""
+
+    requested: int
+    pending: int
+    changed: int  # the second screener decided otherwise on include against exclude
+    kept: int
+
+
 class StageMetrics(Record):
     mode: ScreeningMode
+    documentation: DocumentationLevel
     reveal: RevealSetting
     conflicts_resolved: int
     reveals_shown: int
@@ -381,6 +423,9 @@ class StageMetrics(Record):
     audit: AuditGauge
     rescreens: RescreenGauge
     stop_test: StopStatus | None  # M3 only
+    second_opinions: SecondOpinionGauge | None = None  # S only
+    ai_shown_before: int = 0
+    """Decisions made with the AI's reading on screen (reveal `before`)."""
 
 
 class ScopeStatus(Record):

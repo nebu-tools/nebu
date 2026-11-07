@@ -75,8 +75,8 @@ JUDGE_MARK = "(judge)"  # every recorded rationale ends with it, so tests can fi
 
 
 def protocol_source(mode: str = "M1") -> dict[str, Any]:
-    """The example protocol, with the topic switched to M2 or M3 when asked (a new version with
-    a rationale, as a mode change needs).
+    """The example protocol, with the topic switched to M2, M3, or S when asked (a new version
+    with a rationale, as a mode change needs).
 
     The example's M1 topic samples no records for audit. Screening hides the blind extra screens
     of AI-only disagreements among the audit samples, so it needs some: 10% here.
@@ -89,6 +89,9 @@ def protocol_source(mode: str = "M1") -> dict[str, Any]:
         topic["mode_rationale"] = {"en": f"Screened in {mode} for the screening tests."}
     if mode == "M2":
         topic["validation_pack"] = "kittum-validation-pack/2026-10"
+    if mode == "S":
+        # A targeted search: no auditor, so no sentinels and no audit sample.
+        topic["audit"] = {"sentinel_percent": "0", "random_audit_percent": "0"}
     if mode == "M3":
         topic["audit"]["random_audit_percent"] = "2"
         topic["stopping"] = {

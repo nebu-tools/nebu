@@ -1,5 +1,6 @@
-"""Human screening: queues, blinding, reveal, sentinels, audits, adjudication (DESIGN.md,
-"Screening modes", "Screening and the AI judge", and "Reviewer workbench").
+"""Human screening: queues, blinding, reveal, sentinels, audits, adjudication, and second
+opinions (DESIGN.md, "Screening modes", "Documentation levels", "Screening and the AI judge", and
+"Reviewer workbench").
 
 The protocol's screening mode for a search topic decides who screens each scope and stage: two
 humans in M1 and M3, one in M2. `Screening.open_stage` creates the items and assignments, seeds
@@ -43,6 +44,13 @@ own counts, adjudicators their pending adjudications, and the methods lead the w
 conflicts, the extra screens and their outcomes, kappa and PABAK for human pairs and human-AI
 pairs, the audit gauge (sentinel accuracy and the elusion estimate), and the M3 stop test.
 
+Mode S (working documentation) is lighter: each record goes to one screener of a pool, split
+evenly in the seeded order. A screener who is unsure decides with `second_opinion`; another
+screener of the pool then gets the record with that decision and its comment, and their decision
+settles it. There is no auditor, sentinel, audit sample, extra screen, or adjudication, and the
+queue does not wait for the AI judge. Only an S stage may reveal the AI's reading `before` the
+decision; the decision records whether it was on screen (`ai_shown_before`).
+
 Full-text outcomes are include, exclude, and insufficient information. An exclusion names the
 criterion the report fails, read `not_met` with evidence anchor IDs from `kittum.documents` (held
 as opaque IDs); an inclusion says every criterion is met and needs no reading of each; insufficient
@@ -68,6 +76,7 @@ from kittum.screening.service import (
     ITEM_WITHDRAWN,
     JUDGE_JOB,
     JUDGING_REQUESTED,
+    SECOND_OPINION_REQUESTED,
     STAGE_OPENED,
     UNDONE,
     Screening,
@@ -101,6 +110,8 @@ from kittum.screening.types import (
     ReviewerColumn,
     ScopeStatus,
     ScreeningRecord,
+    SecondOpinionContext,
+    SecondOpinionGauge,
     Sentinel,
     StageInfo,
     StageMetrics,
@@ -123,6 +134,7 @@ __all__ = [
     "ITEM_WITHDRAWN",
     "JUDGE_JOB",
     "JUDGING_REQUESTED",
+    "SECOND_OPINION_REQUESTED",
     "STAGE_OPENED",
     "UNDONE",
     "AdjudicationItem",
@@ -155,6 +167,8 @@ __all__ = [
     "ScopeStatus",
     "Screening",
     "ScreeningRecord",
+    "SecondOpinionContext",
+    "SecondOpinionGauge",
     "Sentinel",
     "StageInfo",
     "StageMetrics",

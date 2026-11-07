@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from kittum.report.review import conflict_states
-from kittum.screening import AI_DISAGREEMENT_RESCREEN
+from kittum.screening import AI_DISAGREEMENT_RESCREEN, SECOND_OPINION_REQUESTED
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -365,7 +365,10 @@ class ScreeningExporter:
         )
         # The assignment's state, revision, and etag change; the decisions and undos below
         # replay them. The auditor holds sentinels and audit samples from the stage's opening, and
-        # an extra screen from its event on.
+        # an extra screen from its event on; a second opinion (mode S) from its event on.
+        asked = {
+            e["payload"]["assignment_id"] for e in log if e["type"] == SECOND_OPINION_REQUESTED
+        }
         audited = {
             (str(i["stage_id"]), i["item_ref"])
             for i in items
@@ -377,7 +380,12 @@ class ScreeningExporter:
                 "select * from screening_assignment where stage_id = any(%s) order by id",
                 (stage_ids,),
             ).fetchall()
-            if a["role"] != "auditor" or (str(a["stage_id"]), a["item_ref"]) in audited | rescreened
+            if (a["role"] == "screener")
+            or (
+                a["role"] == "auditor"
+                and (str(a["stage_id"]), a["item_ref"]) in audited | rescreened
+            )
+            or (a["role"] == "second_opinion" and str(a["id"]) in asked)
         ]
         _write(
             bundle,
@@ -416,6 +424,8 @@ class ScreeningExporter:
                 "decided_at",
                 "reveal_shown_at",
                 "recorded_at",
+                "second_opinion",
+                "ai_shown_before",
             ],
         )
         _write(
@@ -545,7 +555,9 @@ class ReportExporter:
             (project_id,),
         ).fetchall():
             if s["opened_event_id"] in ids:
-                named |= set(s["screeners"]) | set(s["adjudicators"]) | {s["auditor_id"]}
+                named |= set(s["screeners"]) | set(s["adjudicators"])
+                if s["auditor_id"] is not None:
+                    named.add(s["auditor_id"])
         _write(
             bundle,
             "actor",

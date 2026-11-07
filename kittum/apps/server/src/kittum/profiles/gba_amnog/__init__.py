@@ -135,6 +135,21 @@ def check_language(protocol: ReviewProtocol) -> list[ProtocolIssue]:
     ]
 
 
+def check_documentation(protocol: ReviewProtocol) -> list[ProtocolIssue]:
+    """A dossier's study selection is documented in full: mode S (one person, working
+    documentation) cannot support Modul 4. A targeted search belongs in a protocol without this
+    profile."""
+    return [
+        ProtocolIssue(
+            path=path_of("search_topics", ti, "mode"),
+            message="mode S keeps working documentation (one person screens, a second opinion "
+            "on request), which a Modul 4 study selection cannot rest on; use M1, M2, or M3",
+        )
+        for ti, topic in enumerate(protocol.search_topics)
+        if topic.documentation == "working"
+    ]
+
+
 def check_questions(protocol: ReviewProtocol) -> list[ProtocolIssue]:
     issues = []
     questions = _questions(protocol)
@@ -291,6 +306,7 @@ GBA_AMNOG = Profile(
         },
     },
     rules=(
+        check_documentation,
         check_dossier,
         check_questions,
         check_search_age,

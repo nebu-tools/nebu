@@ -38,7 +38,14 @@ from kittum.documents import PyMuPDFParser, derive, get_document, get_layer
 from kittum.documents import ingest as ingest_pdf
 from kittum.ledger import EventDraft
 from kittum.people import Member, MemberRole, is_lead, members, record_roles
-from kittum.protocol import StoredProtocol, compile, latest_published, publish, save_draft
+from kittum.protocol import (
+    ScreeningMode,
+    StoredProtocol,
+    compile,
+    latest_published,
+    publish,
+    save_draft,
+)
 from kittum.screening import (
     NotAssigned,
     RecordFacts,
@@ -680,12 +687,16 @@ def open_screening(
     reveal: RevealSetting = "on_disagreement",
     sentinels: tuple[Sentinel, ...] = (),
     topic_id: str | None = None,
+    screeners: tuple[Id, ...] | None = None,
 ) -> StageInfo:
     """Open a stage for one scope with the project's members and enqueue the judge.
 
     The protocol's mode sets the screeners: the first two reviewers in M1 and M3, the first in
     M2. The first auditor audits; every adjudicator adjudicates. A full-text stage without given
     sentinels draws them from the project's sentinel full texts.
+
+    Mode S screens with a pool: `screeners` (reviewers of the project), or every reviewer. It
+    needs no auditor and no adjudicator, and takes no sentinels.
     """
     if ctx.judge is None:
         raise LifecycleError(
@@ -695,21 +706,45 @@ def open_screening(
     topic = topic_for(stored.version.protocol, scope_id, topic_id)
     people = members(tx, project_id)
     reviewers = _with_role(people, "reviewer")
-    needed = 1 if topic.mode == "M2" else 2
-    if len(reviewers) < needed:
-        raise LifecycleError(
-            f"{topic.mode} needs {needed} reviewers; the project has {len(reviewers)}"
-        )
-    auditors = _with_role(people, "auditor")
-    adjudicators = _with_role(people, "adjudicator")
-    if not auditors or not adjudicators:
-        raise LifecycleError("a stage needs an auditor and at least one adjudicator")
+    auditor: Id | None = None
+    adjudicators: list[Id] = []
+    if topic.mode == ScreeningMode.S:
+        if screeners is not None:
+            strangers = [s for s in screeners if s not in reviewers]
+            if strangers:
+                raise LifecycleError(
+                    "the screeners must be reviewers of the project; "
+                    + ", ".join(str(s) for s in strangers)
+                    + " is not"
+                )
+            pool = list(dict.fromkeys(screeners))
+        else:
+            pool = reviewers
+        if not pool:
+            raise LifecycleError("S needs at least one reviewer in the pool")
+        if sentinels:
+            raise LifecycleError("S takes no sentinels: it has no auditor to check them")
+    else:
+        if screeners is not None:
+            raise LifecycleError(f"{topic.mode} takes its screeners from the project's reviewers")
+        needed = 1 if topic.mode == ScreeningMode.M2 else 2
+        if len(reviewers) < needed:
+            raise LifecycleError(
+                f"{topic.mode} needs {needed} reviewers; the project has {len(reviewers)}"
+            )
+        pool = reviewers[:needed]
+        auditors = _with_role(people, "auditor")
+        adjudicators = _with_role(people, "adjudicator")
+        if not auditors or not adjudicators:
+            raise LifecycleError("a stage needs an auditor and at least one adjudicator")
+        auditor = auditors[0]
     screening = ctx.screening()
     if stage == "title_abstract":
         records = corpus_records(tx, project_id)
     else:
         records = full_text_records(tx, project_id, scope_id, screening, ctx.artifacts)
-        sentinels = sentinels or full_text_sentinels(tx, project_id, ctx.artifacts)
+        if topic.mode != ScreeningMode.S:
+            sentinels = sentinels or full_text_sentinels(tx, project_id, ctx.artifacts)
     if not records:
         raise LifecycleError(f"there are no records to screen at {stage}")
     info = screening.open_stage(
@@ -723,8 +758,8 @@ def open_screening(
             stage=stage,
             topic_id=topic_id,
             records=tuple(records),
-            screeners=tuple(reviewers[:needed]),
-            auditor_id=auditors[0],
+            screeners=tuple(pool),
+            auditor_id=auditor,
             adjudicators=tuple(adjudicators),
             sentinels=sentinels,
             reveal=reveal,

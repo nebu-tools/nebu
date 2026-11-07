@@ -419,6 +419,7 @@ def disclosure(review: Review) -> dict[str, Any]:
         {
             "topic_id": t.id,
             "mode": t.mode.value,
+            "documentation": t.documentation,
             "mode_rationale": dict(t.mode_rationale) if t.mode_rationale else None,
             "validation_pack": t.validation_pack,
             "audit_plan": t.audit.model_dump(mode="json"),
@@ -437,6 +438,7 @@ def disclosure(review: Review) -> dict[str, Any]:
                 "scope_id": s.scope_id,
                 "stage": s.stage,
                 "mode": s.mode.value,
+                "documentation": s.documentation,
                 "reveal": s.reveal,
                 "judge_config_id": s.judge_config_id,
                 "records": len(records),
@@ -484,6 +486,10 @@ def disclosure(review: Review) -> dict[str, Any]:
                 "excluded": len(excluded),
                 "excluded_with_ai_proposal": sum(1 for i in excluded if i.ai_excludes),
                 "audit": s.audit.model_dump(mode="json"),
+                "ai_shown_before": s.ai_shown_before,
+                "second_opinions": s.second_opinions.model_dump(mode="json")
+                if s.second_opinions
+                else None,
             }
         )
     assistant = {
@@ -689,21 +695,14 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
         "",
         "## 2. What the AI did and what people decided",
         "",
-        "People screen every record. The AI never excludes a record. Each reviewer decides "
-        "before Kittum shows them any AI output. The stage's reveal setting says whether Kittum "
-        "then shows the AI's reading. When two people disagree, an adjudicator decides. When "
-        "only the AI disagrees, the stage's auditor screens the record once more, without "
-        "seeing the other decisions. In mode M1 that happens when both people excluded a record "
-        "and the AI found no criterion that fails. In mode M2 it happens when the AI disagrees "
-        "with the one person who screened. If the auditor disagrees with the screeners, an "
-        "adjudicator decides.",
-        "",
+        *_method_paragraphs(d),
         md_table(
-            ["Topic", "Mode", "Why this mode", "Validation pack"],
+            ["Topic", "Mode", "Documentation", "Why this mode", "Validation pack"],
             [
                 [
                     t["topic_id"],
                     t["mode"],
+                    t["documentation"],
                     " ".join((t["mode_rationale"] or {}).values())
                     or "Two people screen every record (the default).",
                     t["validation_pack"] or "None",
@@ -820,10 +819,17 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
                     s["reveals_shown"],
                     s["revised_after_reveal"],
                     s["conflicts_resolved"],
-                    f"{s['audit']['sentinels_correct']} of {s['audit']['sentinels_decided']}",
-                    f"{s['audit']['audit_decided']} of {s['audit']['audit_samples']}",
-                    s["audit"]["audit_relevant_found"],
-                    _elusion(s["audit"]["elusion"]),
+                    *(
+                        ["No audit (mode S)"] * 4
+                        if s["mode"] == "S"
+                        else [
+                            f"{s['audit']['sentinels_correct']} of "
+                            f"{s['audit']['sentinels_decided']}",
+                            f"{s['audit']['audit_decided']} of {s['audit']['audit_samples']}",
+                            s["audit"]["audit_relevant_found"],
+                            _elusion(s["audit"]["elusion"]),
+                        ]
+                    ),
                 ]
                 for s in stages
             ],
@@ -846,6 +852,7 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
                 for s in stages
             ],
         ),
+        *_second_opinion_lines(stages),
         "## 5. Known limits and reproducibility",
         "",
         "The AI's reading proposes an exclusion only if Kittum finds the model's quote word for "
@@ -869,6 +876,81 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
     for card in d["prompts"]:
         lines += prompt_section(card)
     return [json_file("ai_disclosure.json", d), text_file("ai_disclosure.md", "\n".join(lines))]
+
+
+def _method_paragraphs(d: dict[str, Any]) -> list[str]:
+    """What the review's screening did, from its modes and the stages' settings and counts, never
+    from a preset's name."""
+    stages = d["stages"]
+    modes = {t["mode"] for t in d["topics"]} | {s["mode"] for s in stages}
+    complete = modes - {"S"}
+    lines = []
+    if complete:
+        lines += [
+            "In topics with complete documentation (modes "
+            + ", ".join(sorted(complete))
+            + ") people screen every record. The AI never excludes a record. Each reviewer "
+            "decides before Kittum shows them any AI output. The stage's reveal setting says "
+            "whether Kittum then shows the AI's reading. When two people disagree, an "
+            "adjudicator decides. When only the AI disagrees, the stage's auditor screens the "
+            "record once more, without seeing the other decisions. In mode M1 that happens when "
+            "both people excluded a record and the AI found no criterion that fails. In mode M2 "
+            "it happens when the AI disagrees with the one person who screened. If the auditor "
+            "disagrees with the screeners, an adjudicator decides.",
+            "",
+        ]
+    if "S" in modes:
+        s_stages = [s for s in stages if s["mode"] == "S"]
+        asked = sum((s["second_opinions"] or {}).get("requested", 0) for s in s_stages)
+        before = [s for s in s_stages if s["reveal"] == "before"]
+        shown = sum(s["ai_shown_before"] for s in s_stages)
+        text = (
+            "In topics with working documentation (mode S) one person screens each record, from "
+            "a pool of screeners who share the records. Nobody screens a record a second time "
+            "blind, and there is no auditor, sentinel, audit sample, or adjudication. A person "
+            "who is unsure asks for a second opinion: another person of the pool decides the "
+            "record after seeing the first decision and its comment, so the second opinion is "
+            f"not independent, and it settles the record. Second opinions asked: {asked}. The "
+            "AI never excludes a record. The judge's reading does not hold up the queue: a "
+            "person may decide a record before the AI has read it."
+        )
+        if before:
+            text += (
+                " In "
+                + ("one stage" if len(before) == 1 else f"{len(before)} stages")
+                + " the reveal setting is before: people saw the AI's reading, once there was "
+                f"one, before deciding. {shown} "
+                + ("decision was" if shown == 1 else "decisions were")
+                + " made with it on screen, so the "
+                "agreement between people and the AI in those stages is not independent."
+            )
+        lines += [text, ""]
+    return lines
+
+
+def _second_opinion_lines(stages: list[dict[str, Any]]) -> list[str]:
+    rows = [s for s in stages if s["second_opinions"] is not None]
+    if not rows:
+        return []
+    return [
+        "Second opinions in mode S. The second person saw the first decision. Changed means "
+        "they decided otherwise on include against exclude.",
+        "",
+        md_table(
+            ["Scope", "Stage", "Asked", "Kept", "Changed", "Waiting"],
+            [
+                [
+                    s["scope_id"],
+                    STAGE_NAMES.get(s["stage"], s["stage"]),
+                    s["second_opinions"]["requested"],
+                    s["second_opinions"]["kept"],
+                    s["second_opinions"]["changed"],
+                    s["second_opinions"]["pending"],
+                ]
+                for s in rows
+            ],
+        ),
+    ]
 
 
 def _elusion(interval: dict[str, Any] | None) -> str:

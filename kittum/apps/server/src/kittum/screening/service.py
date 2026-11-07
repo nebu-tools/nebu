@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 from psycopg.types.json import Jsonb
 
 from kittum.core import SystemClock, content_hash, new_id, sha256_hex
-from kittum.judge import ScreeningItem
+from kittum.judge import CriterionVerdict, ScreeningItem
 from kittum.ledger import EventDraft
 from kittum.protocol import ScreeningMode, get_version
 from kittum.runs import (
@@ -36,9 +36,11 @@ from kittum.screening.rules import (
     percent_of,
     rescreen_reason,
     reveal_for,
+    second_opinion_reviewer,
     sections,
     seeded_sample,
     sort_key,
+    split_pool,
     topic_for,
     validate,
 )
@@ -54,6 +56,7 @@ from kittum.screening.types import (
     Reveal,
     ReviewerColumn,
     ScopeStatus,
+    SecondOpinionContext,
     StageInfo,
     StaleRevision,
     UndoResult,
@@ -92,6 +95,7 @@ CONFLICT_UPDATED = "screening.conflict_updated"
 CONFLICT_WITHDRAWN = "screening.conflict_withdrawn"
 AI_DISAGREEMENT_RESCREEN = "screening.ai_disagreement_rescreen"
 ADJUDICATED = "screening.adjudicated"
+SECOND_OPINION_REQUESTED = "screening.second_opinion_requested"
 JUDGE_JOB = "screening.judge"
 
 
@@ -150,6 +154,17 @@ class _Rescreen:
 
 
 @dataclass(frozen=True)
+class _SecondOpinion:
+    """Mode S: another screener of the pool gives a second opinion on the decision."""
+
+    item_ref: str
+    assignment_id: Id
+    reviewer_id: Id
+    reactivate: bool  # the assignment exists from an earlier request that an undo withdrew
+    sort_key: str
+
+
+@dataclass(frozen=True)
 class _Withdrawal:
     """A record taken out of every full-text stage that holds it, with each stage's
     assignments."""
@@ -171,6 +186,8 @@ class _DecideChanges:
     reveal: Reveal | None
     conflicts: tuple[_ConflictChange, ...]
     rescreen: _Rescreen | None
+    second_opinion: _SecondOpinion | None
+    ai_shown_before: bool
 
 
 class Screening:
@@ -225,14 +242,16 @@ class Screening:
     ) -> StageInfo:
         """Open screening of one scope at one stage: items, sentinels, assignments, audit sample.
 
-        The protocol version fixes the mode (two screeners in M1 and M3, one in M2) and the audit
-        plan: `sentinel_percent` of the record count is drawn from `spec.sentinels` and given to
+        The protocol version fixes the mode (two screeners in M1 and M3, one in M2, one of a pool
+        of one or more in S, split evenly in the seeded order) and the audit plan: `sentinel_percent` of the record count is drawn from `spec.sentinels` and given to
         every reviewer, and `random_audit_percent` of the records go to `spec.auditor_id` as
         well. Both draws are seeded, so anyone can redraw them; the ledger event names them.
 
         The auditor's queue is also where AI-only disagreements get their blind extra screen,
         among the audit samples. So in M1 and M2 the audit plan must sample records: without
         audit samples to hide among, an extra screen would tell the auditor the AI disagreed.
+        S has no auditor, no adjudicators, no sentinels, and no audit sample; it is the only mode
+        whose stage may reveal the AI's reading `before` the decision.
         """
         command = Command(
             command_id=command_id,
@@ -244,7 +263,9 @@ class Screening:
 
         def load(tx: Tx, _: Command) -> dict[str, Any]:
             stored = get_version(tx, project_id, spec.protocol_version_id)
-            people = [*spec.screeners, *spec.adjudicators, spec.auditor_id]
+            people = [*spec.screeners, *spec.adjudicators]
+            if spec.auditor_id is not None:
+                people.append(spec.auditor_id)
             rows = tx.execute("select id, kind from actor where id = any(%s)", (people,))
             existing = tx.execute(
                 "select topic_id from screening_stage where project_id = %s and scope_id = %s"
@@ -269,11 +290,33 @@ class Screening:
                 raise InvalidDecision(f"no criterion of {topic.id} is decidable at {spec.stage}")
             mode = topic.mode
             screeners = tuple(spec.screeners)
-            if len(set(screeners)) != len(screeners) or len(screeners) != SCREENERS_PER_MODE[mode]:
+            if mode == ScreeningMode.S:
+                if len(set(screeners)) != len(screeners):
+                    raise InvalidDecision("the screeners of the pool must be different people")
+                if spec.auditor_id is not None:
+                    raise InvalidDecision("mode S has no auditor")
+                if spec.adjudicators:
+                    raise InvalidDecision(
+                        "mode S has no adjudication: a second opinion settles a record"
+                    )
+            else:
+                if (
+                    len(set(screeners)) != len(screeners)
+                    or len(screeners) != SCREENERS_PER_MODE[mode]
+                ):
+                    raise InvalidDecision(
+                        f"mode {mode} needs {SCREENERS_PER_MODE[mode]} different screeners"
+                    )
+                if spec.auditor_id is None or not spec.adjudicators:
+                    raise InvalidDecision(f"mode {mode} needs an auditor and an adjudicator")
+            if spec.reveal == "before" and topic.documentation != "working":
                 raise InvalidDecision(
-                    f"mode {mode} needs {SCREENERS_PER_MODE[mode]} different screeners"
+                    "Showing the AI's reading before the decision is allowed only in a topic with "
+                    "working documentation (mode S)."
                 )
-            people = [*screeners, *spec.adjudicators, spec.auditor_id]
+            people = [*screeners, *spec.adjudicators]
+            if spec.auditor_id is not None:
+                people.append(spec.auditor_id)
             if any(state["kinds"].get(p) != "human" for p in people):
                 raise InvalidDecision("every screener, auditor, and adjudicator must be human")
             if len(set(spec.adjudicators)) != len(spec.adjudicators) or set(
@@ -309,11 +352,16 @@ class Screening:
                 if s.record.item_ref in chosen
             ]
             shared = mode == ScreeningMode.M3
+            split = split_pool(seed, refs, screeners) if mode == ScreeningMode.S else {}
             assignments = []
             for it in items:
                 ref = it.record.item_ref
-                reviewers = [(s, "screener") for s in screeners]
-                if it.audit or it.kind == "sentinel":
+                reviewers = (
+                    [(split[ref], "screener")]
+                    if ref in split
+                    else [(s, "screener") for s in screeners]
+                )
+                if (it.audit or it.kind == "sentinel") and spec.auditor_id is not None:
                     reviewers.append((spec.auditor_id, "auditor"))
                 for reviewer, role in reviewers:
                     key = sort_key(
@@ -327,6 +375,7 @@ class Screening:
                 stage=spec.stage,
                 topic_id=topic.id,
                 mode=mode,
+                documentation=topic.documentation,
                 reveal=spec.reveal,
                 protocol_hash=stored.version.content_hash,
                 judge_config_id=spec.judge_config_id,
@@ -344,6 +393,10 @@ class Screening:
                 "audit_refs": sorted(audited),
                 "assignments": len(assignments),
             }
+            if split:
+                payload["pool_split"] = {
+                    str(p): sum(1 for r in split.values() if r == p) for p in screeners
+                }
             return RunDecision(
                 events=(_event(project_id, STAGE_OPENED, command.actor_id, payload),),
                 changes={"info": info, "seed": seed, "items": items, "assignments": assignments},
@@ -616,7 +669,9 @@ class Screening:
 
         Reads only `screening_reviewer_queue`, which cannot return another reviewer's rows, AI
         output, or sentinel and audit flags. An item enters the queue once the AI has read it,
-        so a reveal is always possible and M3 can order by the AI. The queue can grow behind
+        so a reveal is always possible and M3 can order by the AI; in S the queue does not wait
+        for the judge, and a stage that reveals `before` carries the AI's reading once there is
+        one. A second opinion comes first, with the decision it is asked on. The queue can grow behind
         `after` (an auditor's extra screen takes its record's place), so a client that pages
         forward must re-read from the start when `status.remaining` says it missed items.
         """
@@ -645,6 +700,10 @@ class Screening:
                 ),
                 phase="final" if r["state"] == "awaiting_final" else "provisional",
                 reveal=Reveal.model_validate(r["own_reveal"]) if r["own_reveal"] else None,
+                ai=_ai_before(r["ai_before"], r["title"], r["text"]),
+                second_opinion=SecondOpinionContext.model_validate(r["consult"])
+                if r["consult"]
+                else None,
             )
             for r in rows
         ]
@@ -674,6 +733,11 @@ class Screening:
         `screening.ai_disagreement_rescreen`. If the auditor's screen then disagrees with the
         screeners, that human disagreement goes to adjudication; if it agrees, the decision
         stands. Adjudication thus never holds a record only because of the AI.
+
+        Mode S has neither: a decision settles its record, unless it asks for a second opinion
+        (`Decision.second_opinion`). Then another screener of the pool gets the record with this
+        decision and its comment (`screening.second_opinion_requested`), and their decision
+        settles it. In S a record may be decided before the AI has read it.
         """
         command = Command(
             command_id=command_id,
@@ -708,9 +772,24 @@ class Screening:
                 raise StaleRevision("This item changed since you loaded it. Reload the queue.")
             _refuse_withdrawn(a)
             validate(decision, row["stage"], st["criteria"])
+            mode = ScreeningMode(row["mode"])
+            if decision.second_opinion:
+                if mode != ScreeningMode.S:
+                    raise InvalidDecision("Only mode S has second opinions.")
+                if a["role"] != "screener":
+                    raise InvalidDecision("A second opinion settles the record. Decide it.")
+                if len(row["screeners"]) < 2:
+                    raise InvalidDecision(
+                        "Nobody else screens this stage to give a second opinion."
+                    )
             reading: Reading | None = st["reading"]
-            if reading is None:
+            if reading is None and mode != ScreeningMode.S:
                 raise InvalidDecision("The AI judge has not read this item yet.")
+            ai_shown_before = (
+                row["reveal"] == "before"
+                and reading is not None
+                and timing.reveal_shown_at is not None
+            )
             decision_id = new_id()
             if phase == "provisional":
                 if a["state"] != "pending":
@@ -719,7 +798,11 @@ class Screening:
                         if a["state"] == "awaiting_final"
                         else "You decided this item already. Undo the decision first."
                     )
-                reveal = None if a["revealed"] else reveal_for(row["reveal"], decision, reading)
+                reveal = (
+                    None
+                    if a["revealed"] or reading is None
+                    else reveal_for(row["reveal"], decision, reading)
+                )
                 if reveal is not None:
                     reveal = locate(reveal, st["item"]["title"], st["item"]["text"])
                 provisional_id = decision_id
@@ -757,13 +840,34 @@ class Screening:
                         "revision": revision,
                         "reveal": _json(reveal),
                         "settled": new_state == "decided",
+                        "second_opinion": decision.second_opinion,
+                        "ai_shown_before": ai_shown_before,
                         "timing": timing.model_dump(mode="json"),
                     },
                 )
             ]
             changes: list[_ConflictChange] = []
             rescreen = None
-            if new_state == "decided" and a["kind"] == "record":
+            second = None
+            if mode == ScreeningMode.S:
+                if new_state == "decided" and decision.second_opinion:
+                    second = _second_opinion(row, a, st["peers"])
+                    events.append(
+                        _event(
+                            project_id,
+                            SECOND_OPINION_REQUESTED,
+                            reviewer_id,
+                            {
+                                "stage_id": str(row["id"]),
+                                "item_ref": a["item_ref"],
+                                "decision_id": str(decision_id),
+                                "assignment_id": str(second.assignment_id),
+                                "reviewer_id": str(second.reviewer_id),
+                            },
+                        )
+                    )
+            elif new_state == "decided" and a["kind"] == "record":
+                assert reading is not None
                 changes, rescreen = self._after_decision(
                     row, a, st["peers"], st["conflicts"], reading, provisional, decision
                 )
@@ -791,6 +895,8 @@ class Screening:
                     reveal=reveal,
                     conflicts=tuple(changes),
                     rescreen=rescreen,
+                    second_opinion=second,
+                    ai_shown_before=ai_shown_before,
                 ),
             )
 
@@ -801,8 +907,10 @@ class Screening:
             tx.execute(
                 "insert into screening_decision (id, assignment_id, command_id, event_id, phase,"
                 " outcome, reason_criterion_id, criteria, evidence_anchor_ids, comment, revision,"
-                " etag, reveal, shown_at, first_key_at, decided_at, reveal_shown_at, recorded_at)"
-                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                " etag, reveal, shown_at, first_key_at, decided_at, reveal_shown_at, recorded_at,"
+                " second_opinion, ai_shown_before)"
+                " values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,"
+                " %s, %s)",
                 (
                     c.decision_id,
                     assignment_id,
@@ -822,6 +930,8 @@ class Screening:
                     timing.decided_at,
                     timing.reveal_shown_at,
                     recorded,
+                    decision.second_opinion,
+                    c.ai_shown_before,
                 ),
             )
             tx.execute(
@@ -838,6 +948,30 @@ class Screening:
                 ),
             )
             rest = list(events[1:])
+            if c.second_opinion is not None:
+                rest.pop(0)
+                so = c.second_opinion
+                if so.reactivate:
+                    tx.execute(
+                        "update screening_assignment set consults_decision_id = %s, etag = %s,"
+                        " revision = revision + 1 where id = %s",
+                        (c.decision_id, _etag(), so.assignment_id),
+                    )
+                else:
+                    tx.execute(
+                        "insert into screening_assignment (id, stage_id, item_ref, reviewer_id,"
+                        " role, sort_key, etag, consults_decision_id)"
+                        " values (%s, %s, %s, %s, 'second_opinion', %s, %s, %s)",
+                        (
+                            so.assignment_id,
+                            c.stage_id,
+                            so.item_ref,
+                            so.reviewer_id,
+                            so.sort_key,
+                            _etag(),
+                            c.decision_id,
+                        ),
+                    )
             if c.rescreen is not None:
                 rest.pop(0)
                 tx.execute(
@@ -979,7 +1113,9 @@ class Screening:
     ) -> UndoResult:
         """Take back the reviewer's decision on an item; it returns to the queue with a new
         token. The decisions stay in the record. An open conflict on the item is withdrawn;
-        an adjudicated item cannot be undone."""
+        an adjudicated item cannot be undone. In S, undoing a decision that asked for a second
+        opinion withdraws the request while nobody has answered it; once someone has, the
+        second opinion stands."""
         command = Command(
             command_id=command_id,
             project_id=project_id,
@@ -990,7 +1126,19 @@ class Screening:
 
         def load(tx: Tx, _: Command) -> dict[str, Any]:
             a = self._own_assignment(tx, project_id, reviewer_id, assignment_id, lock=True)
-            return {"a": a, "conflicts": store.conflicts(tx, a["stage_id"], a["item_ref"])}
+            second = None
+            if a["final_decision_id"] is not None:
+                second = tx.execute(
+                    "select a.id, a.state, exists (select 1 from screening_decision d"
+                    " where d.assignment_id = a.id) as answered from screening_assignment a"
+                    " where a.consults_decision_id = %s for update",
+                    (a["final_decision_id"],),
+                ).fetchone()
+            return {
+                "a": a,
+                "conflicts": store.conflicts(tx, a["stage_id"], a["item_ref"]),
+                "second": second,
+            }
 
         def decide(_: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
             a = st["a"]
@@ -1001,6 +1149,12 @@ class Screening:
             _refuse_withdrawn(a)
             if any(c["state"] == "resolved" for c in st["conflicts"]):
                 raise InvalidDecision("This item was adjudicated. Its decisions stand.")
+            second = st["second"]
+            if second is not None and (second["answered"] or second["state"] != "pending"):
+                raise InvalidDecision(
+                    "A colleague has answered your request for a second opinion. Their decision"
+                    " settles this record."
+                )
             undone = [
                 str(x)
                 for x in dict.fromkeys((a["provisional_decision_id"], a["final_decision_id"]))
@@ -1017,6 +1171,11 @@ class Screening:
                         "item_ref": a["item_ref"],
                         "undone_decision_ids": undone,
                         "revision": revision,
+                        **(
+                            {"second_opinion_withdrawn": str(second["id"])}
+                            if second is not None
+                            else {}
+                        ),
                     },
                 )
             ]
@@ -1035,6 +1194,7 @@ class Screening:
                     "etag": _etag(),
                     "withdrawn": withdrawn,
                     "stage_id": a["stage_id"],
+                    "second": second["id"] if second is not None else None,
                 },
             )
 
@@ -1061,6 +1221,12 @@ class Screening:
                 " provisional_decision_id = null, final_decision_id = null where id = %s",
                 (c["revision"], c["etag"], assignment_id),
             )
+            if c["second"] is not None:
+                tx.execute(
+                    "update screening_assignment set consults_decision_id = null, etag = %s,"
+                    " revision = revision + 1 where id = %s",
+                    (_etag(), c["second"]),
+                )
             for change, event in zip(c["withdrawn"], events[1:], strict=True):
                 self._write_conflict(tx, change, c["stage_id"], event)
 
@@ -1528,6 +1694,40 @@ def _ai_column(tx: Tx, stage_id: Id, item_ref: str) -> AiColumn:
     return AiColumn(excludes=reading.excludes, criteria=reading.criteria, quote_spans=spans)
 
 
+def _ai_before(raw: dict[str, Any] | None, title: str, text: str) -> AiColumn | None:
+    """The AI's reading as a stage that reveals `before` shows it, with verified quotes placed."""
+    if raw is None:
+        return None
+    criteria = tuple(CriterionVerdict.model_validate(c) for c in raw["criteria"])
+    spans = {
+        c.criterion_id: span
+        for c in criteria
+        if c.quote_verified and (span := locate_quote(c.quote, title, text)) is not None
+    }
+    return AiColumn(excludes=raw["excludes"], criteria=criteria, quote_spans=spans)
+
+
+def _second_opinion(
+    row: dict[str, Any], a: dict[str, Any], peers: Sequence[dict[str, Any]]
+) -> _SecondOpinion:
+    """Who gives the second opinion on the screener's record, as a new assignment or the one an
+    earlier request left."""
+    reviewer = second_opinion_reviewer(
+        row["seed"], a["item_ref"], row["screeners"], a["reviewer_id"]
+    )
+    assert reviewer is not None  # the pool has two people or more; `decide` checked
+    existing = next(
+        (p for p in peers if p["role"] == "second_opinion" and p["reviewer_id"] == reviewer), None
+    )
+    return _SecondOpinion(
+        item_ref=a["item_ref"],
+        assignment_id=existing["id"] if existing else _random_id(),
+        reviewer_id=reviewer,
+        reactivate=existing is not None,
+        sort_key=sort_key(row["seed"], a["item_ref"], str(reviewer)),
+    )
+
+
 def _refuse_withdrawn(a: dict[str, Any]) -> None:
     if a["withdrawn_event_id"] is not None:
         raise InvalidDecision("This report was taken out of screening as the wrong document.")
@@ -1593,4 +1793,4 @@ def _columns(
     return columns
 
 
-__all__ = ["JUDGE_JOB", "Screening"]
+__all__ = ["JUDGE_JOB", "SECOND_OPINION_REQUESTED", "Screening"]

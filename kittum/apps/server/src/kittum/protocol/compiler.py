@@ -425,6 +425,18 @@ def _check_mode(topic: SearchTopic, here: tuple[str | int, ...]) -> list[Protoco
                 message=f"mode {topic.mode} screens every record; only M3 may have a stopping plan",
             )
         )
+    if topic.mode == ScreeningMode.S:
+        # S has no auditor: nobody screens a sentinel or an audit sample, and nobody rescreens.
+        for field in ("sentinel_percent", "random_audit_percent"):
+            if Decimal(getattr(topic.audit, field)) != 0:
+                issues.append(
+                    ProtocolIssue(
+                        path=path_of(*here, "audit", field),
+                        message="mode S has no auditor, so it seeds no sentinels and samples "
+                        "no audit; set this to 0",
+                    )
+                )
+        return issues
     # DESIGN.md, "Screening modes" and "Statistics": M1 adjudicates records the AI includes and
     # both humans exclude; M2 and M3 audit AI exclusions with a census and a random sample.
     if not topic.audit.census_of_disagreements:

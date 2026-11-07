@@ -105,6 +105,20 @@ class ScreeningMode(StrEnum):
     M1 = "M1"  # two humans, AI as third screener
     M2 = "M2"  # one human, AI as second screener
     M3 = "M3"  # prioritized dual screening with a certified stop
+    S = "S"  # one human from a pool, a second opinion on request; working documentation
+
+
+type DocumentationLevel = Literal["complete", "working"]
+"""How strictly a search topic documents its method (DESIGN.md, "Documentation levels").
+
+`complete` (M1, M2, M3) is the regulated review: blind humans first, the AI only after a human
+decision, no bulk decisions. `working` (S) loosens the method, never the record: it allows the
+AI's reading before the decision. The ledger records everything in both."""
+
+
+def documentation_level(mode: ScreeningMode) -> DocumentationLevel:
+    """The documentation level a screening mode implies: `working` for S, else `complete`."""
+    return "working" if mode == ScreeningMode.S else "complete"
 
 
 class Comparator(Record):
@@ -250,7 +264,7 @@ class SearchTopic(Record):
     kind: Identifier  # from the profile's "topic_kind" vocabulary, if it has one
     label: LocalizedText
     mode: ScreeningMode
-    mode_rationale: LocalizedText | None = None  # required for M2 and M3
+    mode_rationale: LocalizedText | None = None  # required for M2, M3, and S
     validation_pack: Text | None = None  # required for M2
     scopes: tuple[Scope, ...] = Field(min_length=1)
     criteria: tuple[Criterion, ...] = Field(min_length=1)
@@ -260,6 +274,11 @@ class SearchTopic(Record):
     stopping: StoppingPlan | None = None  # required for M3, forbidden otherwise
     freshness: FreshnessPolicy
     extensions: Extensions = Field(default_factory=dict)
+
+    @property
+    def documentation(self) -> DocumentationLevel:
+        """Derived from the mode, so it is part of the content hash through it."""
+        return documentation_level(self.mode)
 
 
 class ReviewProtocol(Record):

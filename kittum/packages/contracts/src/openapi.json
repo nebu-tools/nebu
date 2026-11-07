@@ -2358,6 +2358,11 @@
               }
             ],
             "title": "Reason Criterion Id"
+          },
+          "second_opinion": {
+            "default": false,
+            "title": "Second Opinion",
+            "type": "boolean"
           }
         },
         "required": [
@@ -2528,6 +2533,13 @@
         ],
         "title": "DocumentView",
         "type": "object"
+      },
+      "DocumentationLevel": {
+        "enum": [
+          "complete",
+          "working"
+        ],
+        "type": "string"
       },
       "DraftRequest": {
         "additionalProperties": false,
@@ -4628,6 +4640,20 @@
             "title": "Scope Id",
             "type": "string"
           },
+          "screeners": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Id"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Screeners"
+          },
           "sentinels": {
             "default": [],
             "items": {
@@ -5816,6 +5842,13 @@
         "additionalProperties": false,
         "description": "The version every decision reads now, with the words the review uses for core concepts:\nthe profile's labels where it has them, the core's otherwise.",
         "properties": {
+          "documentation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DocumentationLevel"
+            },
+            "title": "Documentation",
+            "type": "object"
+          },
           "labels": {
             "additionalProperties": {
               "type": "string"
@@ -5975,8 +6008,18 @@
       },
       "QueueItem": {
         "additionalProperties": false,
-        "description": "What a reviewer sees. Never contains AI output before their own provisional decision,\nsentinel or audit flags, or anything of another reviewer.",
+        "description": "What a reviewer sees. Never contains AI output before their own provisional decision\n(unless the stage reveals `before`), sentinel or audit flags, or anything of another\nreviewer (except the decision a second opinion is asked on).",
         "properties": {
+          "ai": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiColumn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "assignment_id": {
             "$ref": "#/components/schemas/Id"
           },
@@ -6010,6 +6053,16 @@
           "scope_id": {
             "title": "Scope Id",
             "type": "string"
+          },
+          "second_opinion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecondOpinionContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "stage": {
             "$ref": "#/components/schemas/Stage"
@@ -7063,7 +7116,8 @@
         "enum": [
           "never",
           "on_disagreement",
-          "always"
+          "always",
+          "before"
         ],
         "type": "string"
       },
@@ -7682,7 +7736,8 @@
         "enum": [
           "M1",
           "M2",
-          "M3"
+          "M3",
+          "S"
         ],
         "title": "ScreeningMode",
         "type": "string"
@@ -7997,6 +8052,82 @@
           "freshness"
         ],
         "title": "SearchTopic",
+        "type": "object"
+      },
+      "SecondOpinionContext": {
+        "additionalProperties": false,
+        "description": "Mode S: the decision a screener of the pool asked a second opinion on. Shown to the second\nscreener, because a second opinion is a consult, not a blind screen.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "criteria": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CriterionDecision"
+            },
+            "title": "Criteria",
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/kittum__screening__types__Outcome"
+          },
+          "reason_criterion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Criterion Id"
+          }
+        },
+        "required": [
+          "outcome",
+          "reason_criterion_id",
+          "comment"
+        ],
+        "title": "SecondOpinionContext",
+        "type": "object"
+      },
+      "SecondOpinionGauge": {
+        "additionalProperties": false,
+        "description": "Mode S: decisions a screener asked a second opinion on. The second screener saw the first\ndecision, so these are consults, not independent screens.",
+        "properties": {
+          "changed": {
+            "title": "Changed",
+            "type": "integer"
+          },
+          "kept": {
+            "title": "Kept",
+            "type": "integer"
+          },
+          "pending": {
+            "title": "Pending",
+            "type": "integer"
+          },
+          "requested": {
+            "title": "Requested",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requested",
+          "pending",
+          "changed",
+          "kept"
+        ],
+        "title": "SecondOpinionGauge",
         "type": "object"
       },
       "SemanticKey": {
@@ -8554,9 +8685,19 @@
             "title": "Ai Proposed Exclusions",
             "type": "integer"
           },
+          "ai_shown_before": {
+            "default": 0,
+            "title": "Ai Shown Before",
+            "type": "integer"
+          },
           "conflicts_resolved": {
             "title": "Conflicts Resolved",
             "type": "integer"
+          },
+          "documentation": {
+            "default": "complete",
+            "title": "Documentation",
+            "type": "string"
           },
           "mode": {
             "title": "Mode",
@@ -8590,6 +8731,11 @@
             "title": "Scope Id",
             "type": "string"
           },
+          "second_opinions": {
+            "default": 0,
+            "title": "Second Opinions",
+            "type": "integer"
+          },
           "stage": {
             "title": "Stage",
             "type": "string"
@@ -8622,7 +8768,17 @@
             "type": "array"
           },
           "auditor_id": {
-            "$ref": "#/components/schemas/Id"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "documentation": {
+            "$ref": "#/components/schemas/DocumentationLevel"
           },
           "judge_config_id": {
             "title": "Judge Config Id",
@@ -8670,6 +8826,7 @@
           "stage",
           "topic_id",
           "mode",
+          "documentation",
           "reveal",
           "protocol_hash",
           "judge_config_id",
@@ -8690,12 +8847,20 @@
             "title": "Agreement",
             "type": "array"
           },
+          "ai_shown_before": {
+            "default": 0,
+            "title": "Ai Shown Before",
+            "type": "integer"
+          },
           "audit": {
             "$ref": "#/components/schemas/AuditGauge"
           },
           "conflicts_resolved": {
             "title": "Conflicts Resolved",
             "type": "integer"
+          },
+          "documentation": {
+            "$ref": "#/components/schemas/DocumentationLevel"
           },
           "mode": {
             "$ref": "#/components/schemas/ScreeningMode"
@@ -8714,6 +8879,16 @@
             "title": "Revised After Reveal",
             "type": "integer"
           },
+          "second_opinions": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecondOpinionGauge"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "stop_test": {
             "anyOf": [
               {
@@ -8727,6 +8902,7 @@
         },
         "required": [
           "mode",
+          "documentation",
           "reveal",
           "conflicts_resolved",
           "reveals_shown",
@@ -9573,6 +9749,13 @@
               }
             ],
             "title": "Content Hash"
+          },
+          "documentation": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DocumentationLevel"
+            },
+            "title": "Documentation",
+            "type": "object"
           },
           "issues": {
             "default": [],
@@ -14902,7 +15085,7 @@
     },
     "/api/projects/{project_id}/screening/assignments/{assignment_id}/decide": {
       "post": {
-        "description": "A provisional decision, then a final one if the AI was revealed.",
+        "description": "A provisional decision, then a final one if the AI was revealed. In mode S a decision can\nask for a second opinion (`decision.second_opinion`).",
         "operationId": "decideScreeningAssignment",
         "parameters": [
           {

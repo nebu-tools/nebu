@@ -138,6 +138,7 @@ def test_validate_reports_the_hash_or_the_issues() -> None:
             "content_hash": _hash(name),
             "issues": [],
             "warnings": [],
+            "documentation": {t["id"]: "complete" for t in example_source(name)["search_topics"]},
         }
 
     broken = example_source(AMNOG)

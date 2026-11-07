@@ -4,7 +4,8 @@ of AI-only disagreements, and the M3 stop test.
 Agreement uses the blind provisional decisions: a final decision may follow an AI reveal, and a
 reviewer never sees the other's. Labels are include against exclude (`unclear` and insufficient
 information count as include). A record sent to an extra screen counts as screened once the
-auditor has decided it.
+auditor has decided it. In S a record a screener asked a second opinion on counts as screened
+once the second screener has decided it, and that decision is its outcome.
 """
 
 from dataclasses import dataclass, field
@@ -12,13 +13,14 @@ from decimal import Decimal
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Literal
 
-from kittum.protocol import ScreeningMode
+from kittum.protocol import ScreeningMode, documentation_level
 from kittum.screening.store import reading_of
 from kittum.screening.types import (
     AuditGauge,
     AuditStratum,
     PairAgreement,
     RescreenGauge,
+    SecondOpinionGauge,
     StageMetrics,
     StopStatus,
 )
@@ -70,8 +72,10 @@ class StageData:
         }
         assignments = tx.execute(
             "select a.item_ref, a.reviewer_id, a.role, a.sort_key, a.provisional_decision_id,"
-            " a.final_decision_id, p.outcome as p_outcome, p.reveal as p_reveal,"
-            " f.outcome as f_outcome"
+            " a.final_decision_id, a.consults_decision_id, p.outcome as p_outcome,"
+            " p.reveal as p_reveal, f.outcome as f_outcome,"
+            " f.second_opinion as f_second_opinion,"
+            " coalesce(p.ai_shown_before or f.ai_shown_before, false) as ai_shown_before"
             " from screening_assignment a"
             " left join screening_decision p on p.id = a.provisional_decision_id"
             " left join screening_decision f on f.id = a.final_decision_id"
@@ -107,10 +111,29 @@ class StageData:
     def auditor(self, ref: str) -> dict[str, Any] | None:
         return next((a for a in self.by_item.get(ref, []) if a["role"] == "auditor"), None)
 
+    def asked(self, ref: str) -> bool:
+        """Mode S: the screener's standing decision asks for a second opinion."""
+        return any(a["f_second_opinion"] for a in self.screeners(ref))
+
+    def second(self, ref: str) -> dict[str, Any] | None:
+        """Mode S: the second opinion the screener's standing decision asks for."""
+        return next(
+            (
+                a
+                for a in self.by_item.get(ref, [])
+                if a["role"] == "second_opinion" and a["consults_decision_id"] is not None
+            ),
+            None,
+        )
+
     def screened(self, ref: str) -> bool:
-        """Every screener decided, and the auditor too if the record went to an extra screen."""
+        """Every screener decided, and the auditor too if the record went to an extra screen,
+        or the second screener if the screener asked for a second opinion."""
         if any(a["f_outcome"] is None for a in self.screeners(ref)):
             return False
+        if self.asked(ref):
+            second = self.second(ref)
+            return second is not None and second["f_outcome"] is not None
         auditor = self.auditor(ref)
         return not self.items[ref]["rescreen"] or (
             auditor is not None and auditor["f_outcome"] is not None
@@ -128,7 +151,8 @@ class StageData:
             return history[-1]["outcome"]
         if not self.screened(ref):
             return None
-        finals = [a["f_outcome"] for a in self.screeners(ref)]
+        second = self.second(ref) if self.asked(ref) else None
+        finals = [a["f_outcome"] for a in ([second] if second else self.screeners(ref))]
         return "exclude" if all(f == "exclude" for f in finals) else "include"
 
     def reading(self, ref: str) -> Reading | None:
@@ -170,7 +194,9 @@ def stage_metrics(
         and items[a["item_ref"]]["kind"] == "record"
     }
     agreement: list[PairAgreement] = []
-    for left, right in combinations(people, 2):
+    # In S each record has one screener, so no two people screened the same record blind.
+    pairs = [] if data.mode == ScreeningMode.S else combinations(people, 2)
+    for left, right in pairs:
         refs = [r for r in records if (left, r) in provisional and (right, r) in provisional]
         agreement.append(
             PairAgreement.of(
@@ -278,8 +304,28 @@ def stage_metrics(
         )
         stop = stop_status(topic.stopping, [data.outcome(r) for r in order])
 
+    second_opinions = None
+    if data.mode == ScreeningMode.S:
+        asked = [r for r in records if data.asked(r)]
+        answered = {
+            r: second["f_outcome"]
+            for r in asked
+            if (second := data.second(r)) is not None and second["f_outcome"] is not None
+        }
+        changed = sum(
+            any(_label(a["f_outcome"]) != _label(answered[r]) for a in data.screeners(r))
+            for r in answered
+        )
+        second_opinions = SecondOpinionGauge(
+            requested=len(asked),
+            pending=len(asked) - len(answered),
+            changed=changed,
+            kept=len(answered) - changed,
+        )
+
     metrics = StageMetrics(
         mode=data.mode,
+        documentation=documentation_level(data.mode),
         reveal=stage["reveal"],
         conflicts_resolved=resolved,
         reveals_shown=len(reveals),
@@ -288,6 +334,8 @@ def stage_metrics(
         audit=audit,
         rescreens=rescreens,
         stop_test=stop,
+        second_opinions=second_opinions,
+        ai_shown_before=sum(1 for a in assignments if a["ai_shown_before"]),
     )
     return len(done), len(records) - len(done), open_conflicts, metrics
 

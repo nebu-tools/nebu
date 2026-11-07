@@ -284,6 +284,7 @@ def _project_step(args: argparse.Namespace) -> int:
                         actor_id=UUID(args.by),
                         reveal=args.reveal,
                         sentinels=app.load_sentinels(args.sentinels) if args.sentinels else (),
+                        screeners=tuple(UUID(s) for s in args.screener) if args.screener else None,
                     )
                 )
     return 0
@@ -374,6 +375,11 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="a YAML or JSON list of sentinels (records with known outcomes), as in "
         "examples/sentinels/; needed when the protocol's sentinel_percent is above zero",
+    )
+    stage.add_argument(
+        "--screener",
+        action="append",
+        help="mode S: a reviewer of the screener pool (repeat it); every reviewer if left out",
     )
     ledger = commands.add_parser("ledger", help="the audit ledger")
     ledger_commands = ledger.add_subparsers(dest="ledger_command", required=True)

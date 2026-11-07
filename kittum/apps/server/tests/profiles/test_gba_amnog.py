@@ -169,6 +169,15 @@ INVALID = {
         "search_topics[0].scopes[1]",
         "'a2' belongs to Anwendungsgebiet 'B', the topic to 'A'",
     ),
+    "a targeted search (mode S) in a dossier": (
+        lambda s: s["search_topics"][1].update(
+            mode="S",
+            mode_rationale={"de": "Gezielte Suche.", "en": "Targeted search."},
+            audit={"sentinel_percent": "0", "random_audit_percent": "0"},
+        ),
+        "search_topics[1].mode",
+        "mode S keeps working documentation",
+    ),
     "JCA link to a Teilpopulation": (
         lambda s: s["questions"][2]["extensions"].__setitem__("jca_pico_links", ["a1"]),
         "questions[2].extensions.jca_pico_links[0]",
