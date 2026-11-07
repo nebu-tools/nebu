@@ -141,7 +141,9 @@ if TYPE_CHECKING:
     from kittum.ledger import Bundle, BundleWriter, Ledger, SigningKey
     from kittum.storage import ArtifactStore
 
-type CoreTarget = Literal["prisma", "ris", "search_report", "ai_disclosure", "bundle"]
+type CoreTarget = Literal[
+    "prisma", "ris", "search_report", "ai_disclosure", "risk_of_bias", "bundle"
+]
 type Target = str  # a CoreTarget, or "<profile id>.<name>" from a profile
 
 RENDERED_EVENT = "report.rendered"
