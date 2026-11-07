@@ -1,5 +1,7 @@
-"""File import adapters for RIS (generic, Cochrane CENTRAL, Embase), CSV (CTIS, EU-CTR), and PubMed
-XML (a PubMed or MEDLINE export saved as XML, as EFetch returns it)."""
+"""File import adapters for RIS (generic, Cochrane CENTRAL, Embase), CSV (CTIS, EU-CTR), PubMed
+XML (a PubMed or MEDLINE export saved as XML, as EFetch returns it), PubMed's MEDLINE format
+(NBIB), Scopus CSV, Web of Science (plain text or tab-delimited), and a team's own list of records
+as CSV or XLSX."""
 
 import csv
 import io
@@ -9,7 +11,18 @@ from typing import TYPE_CHECKING
 
 import rispy
 
-from kittum.core import Clock, Id, SystemClock, new_id
+from kittum.core import Clock, Id, SystemClock, new_id, sha256_hex
+from kittum.search.bibliographic import (
+    EUDRACT_PATTERN,
+    NCT_PATTERN,
+    parse_nbib,
+    parse_records_csv,
+    parse_records_xlsx,
+    parse_scopus_csv,
+    parse_wos,
+    parse_year,
+    registry_ids,
+)
 from kittum.search.models import SearchExecution, SearchPlan, SourceRecord
 from kittum.search.pubmed import parse_pubmed_xml
 from kittum.search.service import record_execution
@@ -21,27 +34,7 @@ if TYPE_CHECKING:
     from kittum.ledger import Ledger
     from kittum.storage import ArtifactStore
 
-NCT_PATTERN = re.compile(r"(?i)\b(NCT\d{8})\b")
-EUDRACT_PATTERN = re.compile(r"\b(\d{4}-\d{6}-\d{2}(?:-\d{2})?)\b")
-YEAR_PATTERN = re.compile(r"\b(19\d\d|20\d\d)\b")
 RIS_START = re.compile(r"(?m)^TY  - ")
-
-
-def _find_registry_ids(*texts: str | None) -> tuple[str, ...]:
-    combined = " ".join(t for t in texts if t)
-    reg_ids: list[str] = []
-    for nct in NCT_PATTERN.findall(combined):
-        reg_ids.append(nct.upper())
-    for eudra in EUDRACT_PATTERN.findall(combined):
-        reg_ids.append(eudra)
-    return tuple(dict.fromkeys(reg_ids))
-
-
-def _parse_year(text: str | None) -> int | None:
-    if not text:
-        return None
-    m = YEAR_PATTERN.search(str(text))
-    return int(m.group(1)) if m else None
 
 
 def parse_ris(text: str, raw_hash: str, format_name: str) -> list[SourceRecord]:
@@ -62,7 +55,7 @@ def parse_ris(text: str, raw_hash: str, format_name: str) -> list[SourceRecord]:
             authors_list = [authors_list]
         authors = tuple(authors_list)
 
-        year = _parse_year(entry.get("year") or entry.get("publication_year") or entry.get("date"))
+        year = parse_year(entry.get("year") or entry.get("publication_year") or entry.get("date"))
 
         journal = (
             entry.get("journal_name")
@@ -79,7 +72,7 @@ def parse_ris(text: str, raw_hash: str, format_name: str) -> list[SourceRecord]:
         pub_types = (type_ref,) if type_ref else ("Journal Article",)
 
         notes = str(entry.get("notes") or "")
-        reg_ids = _find_registry_ids(title, abstract, notes, record_id)
+        reg_ids = registry_ids(title, abstract, notes, record_id)
 
         rec = SourceRecord(
             occurrence_id=new_id(),
@@ -159,7 +152,7 @@ def parse_csv(text: str, raw_hash: str, format_name: str) -> list[SourceRecord]:
         status = _get_col(norm, "trial_status", "status")
         phase = _get_col(norm, "phase", "trial_phase")
         start_date = _get_col(norm, "start_date", "date")
-        year = _parse_year(start_date)
+        year = parse_year(start_date)
 
         authors = (sponsor,) if sponsor else ()
         journal = sponsor
@@ -172,7 +165,7 @@ def parse_csv(text: str, raw_hash: str, format_name: str) -> list[SourceRecord]:
         if not pub_types:
             pub_types.append("Clinical Trial")
 
-        reg_ids = _find_registry_ids(record_id, title, abstract)
+        reg_ids = registry_ids(record_id, title, abstract)
         if (
             record_id
             and (NCT_PATTERN.match(record_id) or EUDRACT_PATTERN.match(record_id))
@@ -210,7 +203,9 @@ def parse_pubmed_export(text: str, raw_hash: str, format_name: str) -> list[Sour
     return [r.model_copy(update={"source": format_name}) for r in records]
 
 
-_PARSERS: dict[str, Callable[[str, str, str], list[SourceRecord]]] = {
+type _Parser = Callable[[str, str, str], list[SourceRecord]]
+
+_TEXT_PARSERS: dict[str, _Parser] = {
     "ris": parse_ris,
     "central": parse_ris,
     "centralexport": parse_ris,
@@ -220,7 +215,57 @@ _PARSERS: dict[str, Callable[[str, str, str], list[SourceRecord]]] = {
     "euctr": parse_csv,
     "eu-ctr": parse_csv,
     "pubmed-xml": parse_pubmed_export,
+    "nbib": parse_nbib,
+    "medline": parse_nbib,
+    "scopus": parse_scopus_csv,
+    "scopus-csv": parse_scopus_csv,
+    "wos": parse_wos,
+    "records-csv": parse_records_csv,
 }
+_BINARY_PARSERS: dict[str, Callable[[bytes, str, str], list[SourceRecord]]] = {
+    "records-xlsx": parse_records_xlsx,
+}
+
+IMPORT_FORMATS: tuple[str, ...] = tuple(sorted(_TEXT_PARSERS.keys() | _BINARY_PARSERS.keys()))
+"""Every format name `import_file` and `parse_export` read."""
+
+
+def _decode(raw: bytes) -> str:
+    # Web of Science's tab-delimited export may come in UTF-16 with a byte order mark.
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return raw.decode("utf-16")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"import file is not valid UTF-16: {exc}") from exc
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"import file is not valid UTF-8: {exc}") from exc
+
+
+def parse_export(
+    data: bytes | str, format: str, *, raw_hash: str, source: str
+) -> list[SourceRecord]:
+    """The records of an export file in `format` (one of `IMPORT_FORMATS`), in file order, each
+    from `source`. Raises `ValueError` for an unknown format or a file not in it."""
+    name = format.lower()
+    raw = data.encode("utf-8") if isinstance(data, str) else data
+    if name in _BINARY_PARSERS:
+        return _BINARY_PARSERS[name](raw, raw_hash, source)
+    parse = _TEXT_PARSERS.get(name)
+    if parse is None:
+        raise ValueError(
+            f"unsupported import format {format!r}; supported: {', '.join(IMPORT_FORMATS)}"
+        )
+    if name == "records-csv":
+        try:
+            text = _decode(raw)
+        except ValueError:
+            # A team's own list saved as plain "CSV" by Excel in a Western European locale is
+            # windows-1252, not UTF-8.
+            text = raw.decode("cp1252", errors="strict")
+        return parse(text, raw_hash, source)
+    return parse(_decode(raw), raw_hash, source)
 
 
 def import_file(
@@ -235,25 +280,19 @@ def import_file(
     artifacts: ArtifactStore,
     clock: Clock | None = None,
 ) -> SearchExecution:
-    """Import records from an exported file (RIS, CENTRAL, Embase, CTIS, EU-CTR, PubMed XML).
+    """Import records from an exported file in one of `IMPORT_FORMATS`.
 
     The file is stored as the execution's one raw artifact. Its record count is the reported count;
     an export carries no separate platform total.
     """
-    parse = _PARSERS.get(format.lower())
-    if parse is None:
+    if format.lower() not in IMPORT_FORMATS:
         raise ValueError(
-            f"unsupported import format {format!r}; supported: {', '.join(sorted(_PARSERS))}"
+            f"unsupported import format {format!r}; supported: {', '.join(IMPORT_FORMATS)}"
         )
     raw_bytes = data.encode("utf-8") if isinstance(data, str) else data
-    try:
-        text_content = raw_bytes.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"import file is not valid UTF-8: {exc}") from exc
-
     now = (clock or SystemClock()).now()
+    records = parse_export(raw_bytes, format, raw_hash=sha256_hex(raw_bytes), source=plan.source)
     raw_hash = artifacts.put(raw_bytes)
-    records = parse(text_content, raw_hash, plan.source)
 
     execution = SearchExecution(
         id=new_id(),

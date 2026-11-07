@@ -18,7 +18,7 @@ The two-week spike in [DESIGN.md](../DESIGN.md#two-week-spike) picks from these 
 | 04 | `gateway` | Done: httpx transport, policies, shared buckets, budgets, cache, attempts; AppContext wiring open |
 | 05 | `search` | Done |
 | 06 | `enrich` | Clients, stored enrichment, full-text waterfall, and jobs in the app done; local tagging open |
-| 07 | `corpus` | Dedupe, link proposals, immutable identity revisions, PRISMA counts done |
+| 07 | `corpus` | Dedupe, link proposals, immutable identity revisions, PRISMA counts, known pool done |
 | 08 | `judge` and `models` | Done; ledger store and job wiring wait for WP-01 and WP-02 |
 | 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, metrics, routes; open items listed |
 | 10 | `documents` | Parsers, layers, anchors, re-anchoring, viewer routes, and acquisition done; source resolvers for the waterfall open |
@@ -267,6 +267,15 @@ Module `kittum.search`. Needs: `gateway`, `protocol`, `ledger`.
   `live_source` starts PubMed, Europe PMC, or ClinicalTrials.gov by name for the API and the CLI.
 - PubMed records keep their PMCID too (`source_occurrence.pmcid`).
 - File imports: RIS (Generic, Cochrane Library CENTRAL, Embase) and CSV (CTIS, EU-CTR).
+- File imports (targeted searches, PR D): PubMed's MEDLINE format (`nbib`), Scopus CSV
+  (`scopus`, the EID as source ID), Web of Science plain text or tab-delimited (`wos`, UTF-8 or
+  UTF-16, the UT as source ID), and a team's list of records (`records-csv` with commas,
+  semicolons, or tabs, and `records-xlsx` through openpyxl): a Title column required, the other
+  fields under common names, matched without case or punctuation. `parse_export` and
+  `IMPORT_FORMATS` are public, for the known pool and the CLI's `--format` choices; the routes take
+  a binary file in base64 (`encoding`). A file that is not in its format (a Web of Science file
+  without `EF`, a list without a Title column) is refused and not stored. Fixtures follow each
+  format's documentation with abridged real records.
 - Search execution and source occurrence persistence in Postgres with audit ledger event (`search.executed`).
 - HTTP API routes (`/api/projects/{project_id}/search/*`) registered and contract generated.
 - `FakeSource` in `search/testing.py`.
@@ -333,8 +342,18 @@ Module `kittum.corpus`. Needs: `search`, `enrich`, `ledger`.
   together (`links`: the confirmed proposal's evidence or the lead's reason for a merge by hand,
   for the records still together). `tests/corpus/test_duplicates.py` and
   `e2e/duplicates.spec.ts` run PubMed, Europe PMC, and ClinicalTrials.gov on recorded responses.
+- Known pool (targeted searches, PR D): `import_known_pool`, `withdraw_known_pool`,
+  `compare_known_pool`, and `known_pool_refs` in `corpus/pool.py` (tables `known_pool_file` and
+  `known_pool_entry`, events `corpus.pool_imported` and `corpus.pool_withdrawn`). A pool belongs to
+  a search topic and is compared with that topic's search records before the corpus is built, and
+  with its reports after, by `check_same_record`. The app entry point (`import_pool_file`, route
+  `POST corpus/known-pool`, `kittum project import-pool`) checks the topic and stores the file by
+  hash. The screening table's `in_known_pool` comes from `known_pool_refs`.
 - Left: enrichment fills a missing DOI or PMID, but deduplication runs once at ingest and does not
-  see it; ClinicalTrials.gov's `referencesModule` PMIDs are not used for study links.
+  see it; ClinicalTrials.gov's `referencesModule` PMIDs are not used for study links. A pool paper
+  the searches missed cannot be added to the corpus as an "other methods" record yet (the corpus
+  is built once; update searches are not wired); the lead revises the search instead. Pool entries
+  are not deduplicated among themselves.
 
 ## WP-08 Judge and models
 
@@ -1230,10 +1249,11 @@ search topic, without a second product. DESIGN.md, "Documentation levels", has t
 | PR | Branch | Content | Status |
 | --- | --- | --- | --- |
 | A | `kittum/targeted-screening` | Mode S, documentation levels, the `before` reveal, the queue not waiting for the judge, presets in the protocol editor, the screener pool in stage setup, second opinions on both screening screens, methods text and disclosure | Done |
-| B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Open |
+| B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Done |
 | C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, AI proposals in working topics, bulk decisions from the table | Open |
-| D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers), NBIB, Scopus CSV, and Web of Science imports, the spreadsheet decision import | Open |
+| D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers as a topic's known pool, the "Known pool" panel on the search screen, "In the known pool" in the table), NBIB, Scopus CSV, Web of Science, and a team's CSV or XLSX list as imports | Done |
 | E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open |
+| F | | The spreadsheet decision import (decision columns of a working export, working topics only) | Open |
 
 ## WP-17 Evaluation harness
 

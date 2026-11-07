@@ -117,6 +117,16 @@ const orNull = <A>(effect: Effect.Effect<A, WorkbenchError>) =>
 
 const reviewer = (as: string) => ({ "X-Kittum-Reviewer": as });
 
+/** A file in a JSON body: its text as is, a binary file (an XLSX list) in base64. */
+const upload = (data: string | Uint8Array) => {
+  if (typeof data === "string") return { data, encoding: "text" as const };
+  let binary = "";
+  for (let i = 0; i < data.length; i += 0x8000) {
+    binary += String.fromCharCode(...data.subarray(i, i + 0x8000));
+  }
+  return { data: btoa(binary), encoding: "base64" as const };
+};
+
 const commandId = () => crypto.randomUUID();
 
 const decisionBody = (d: Decision) => ({
@@ -322,8 +332,29 @@ export const makeApiWorkbench = (): Workbench => ({
 
   importSearch: ({ projectId, as, plan, data, format }) =>
     call((api) =>
-      api.importSearchFile(projectId, { payload: { plan, data, format, actor_id: as } }),
+      api.importSearchFile(projectId, {
+        payload: { plan, ...upload(data), format, actor_id: as },
+      }),
     ),
+
+  knownPool: ({ projectId, as, topicId }) =>
+    call((api) => api.getKnownPool(projectId, { params: { ...reviewer(as), topic_id: topicId } })),
+
+  importKnownPool: ({ projectId, as, topicId, data, format, fileName }) =>
+    call((api) =>
+      api.importKnownPool(projectId, {
+        payload: {
+          topic_id: topicId,
+          ...upload(data),
+          format,
+          file_name: fileName,
+          actor_id: as,
+        },
+      }),
+    ),
+
+  withdrawKnownPool: ({ projectId, as, fileId }) =>
+    call((api) => api.withdrawKnownPoolFile(projectId, fileId, { payload: { actor_id: as } })),
 
   ingestCorpus: ({ projectId, as }) =>
     call((api) => api.ingestCorpus(projectId, { payload: { actor_id: as } })),

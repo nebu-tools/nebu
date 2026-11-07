@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from kittum.core import Id, Record
+from kittum.corpus import known_pool_refs
 from kittum.people import members
 from kittum.protocol import Stage
 from kittum.screening import store
@@ -89,6 +90,9 @@ class TableRow(Record):
     """Criteria the AI's verified reading answered `not_met`, for the lead."""
     flags: tuple[ItemFlag, ...] = ()
     """Sentinel, audit sample, or extra screen. Lead's table only."""
+    in_known_pool: bool | None = None
+    """The record is a paper of the topic's known pool. Empty when the topic has no pool, and in
+    a reviewer's table of a complete-documentation topic, which screens blind to the pool."""
 
 
 class ScreeningTable(Record):
@@ -136,9 +140,29 @@ def screening_table(
         raise NotAssigned(
             f"actor {viewer_id} neither screens this stage nor is a methods lead who sees it"
         )
+    shown = view == "lead" or row["mode"] == "S"
+    pool = known_pool_refs(tx, project_id, row["topic_id"]) if shown else None
+    if pool is not None:
+        refs = _item_refs(tx, row["id"], viewer_id) if view == "reviewer" else {}
+        rows = [
+            r.model_copy(update={"in_known_pool": refs.get(r.ref, r.ref) in pool}) for r in rows
+        ]
     return ScreeningTable(
         stage_id=row["id"], scope_id=scope_id, stage=stage, view=view, rows=tuple(rows)
     )
+
+
+def _item_refs(tx: Tx, stage_id: Id, reviewer_id: Id) -> dict[str, str]:
+    """The item each of the reviewer's assignments is on, by assignment ID. Never returned to
+    the reviewer; it only says which of their rows are in the known pool."""
+    return {
+        str(r["id"]): r["item_ref"]
+        for r in tx.execute(
+            "select id, item_ref from screening_assignment where stage_id = %s"
+            " and reviewer_id = %s",
+            (stage_id, reviewer_id),
+        ).fetchall()
+    }
 
 
 def _reviewer_rows(tx: Tx, stage_id: Id, reviewer_id: Id) -> list[TableRow]:

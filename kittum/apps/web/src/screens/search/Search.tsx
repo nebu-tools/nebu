@@ -8,6 +8,7 @@ import { run, WorkbenchError } from "../../data/workbench.ts";
 import { KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { LEAD_ONLY, useProject } from "../project.tsx";
+import { KnownPools } from "./KnownPool.tsx";
 import { ImportSearch, RunSearch } from "./SearchForms.tsx";
 
 const when = (iso: string) =>
@@ -164,6 +165,7 @@ export function SearchScreen() {
             </ol>
           </>
         )}
+        {canAdd ? <KnownPools tick={tick} /> : null}
       </div>
     </section>
   );

@@ -206,12 +206,29 @@ close screening.
 Two adapters sit behind the search seam from day one:
 
 - `LiveApi` for PubMed E-utilities and ClinicalTrials.gov v2.
-- `FileImport` for RIS, NBIB, XML, and CSV exports, together with a captured copy of the search
-  history. CENTRAL, Embase, EU-CTR, and CTIS have no free search interface, so a free proof of
-  concept cannot meet a typical minimum source list without this adapter.
+- `FileImport` for exports, together with a captured copy of the search history: RIS (generic,
+  Cochrane CENTRAL, Embase and Ovid), PubMed's MEDLINE format (NBIB) and PubMed XML, Scopus CSV,
+  Web of Science plain text or tab-delimited, a registry's CSV (CTIS, EU-CTR), and a team's own
+  list of records as CSV or XLSX (a Title column, and optionally Abstract, DOI, PMID, Authors,
+  Journal, and Year under common names). Each record keeps the database's accession (PMID, Scopus
+  EID, Web of Science UT) as its source ID. CENTRAL, Embase, EU-CTR, and CTIS have no free search
+  interface, so a free proof of concept cannot meet a typical minimum source list without this
+  adapter.
 
 Commercial interfaces (Embase, Scopus, Web of Science) become further `LiveApi` adapters when a
 contract grants automated access. A subscription does not imply that grant.
+
+**Complete the pool.** A topic may have a known pool: the papers its searches should find, such as
+the ones a customer already has, imported from any of the formats above. Kittum compares the pool
+with the topic's search results by the corpus's identity rules (report identifiers first, then a
+fuzzy title with the year or first author) and shows three groups: in the pool and found, in the
+pool but not found (the search's gaps, a list to inspect), and new. Only the new records need real
+screening; the screening table marks the others ("In the known pool") so a reviewer can filter
+them, in a working topic, while a complete topic's reviewers screen blind to the pool and only the
+lead sees it. The pool is not part of the protocol (its reference set of known includes is fixed
+with the protocol and seeds sentinels); it is project data, stored by file hash with a ledger
+event per file added or taken out. A pool paper is never a search result: it enters no search
+execution, no corpus revision, and no PRISMA count.
 
 An update search reruns the same strategies. Kittum diffs the result against the earlier execution
 by identifier and by content: new records go to screening, and records whose content changed
@@ -695,9 +712,9 @@ the terms of their own templates.
 | Screen | Shows | Default action and keys |
 | --- | --- | --- |
 | Protocol editor | PICO blocks per scope, the criteria table, version diff, protocol hash, and a test bench that runs the judge on calibration records to show which criteria it misreads. A form edits every question, criterion, source, and query in place, with YAML as an advanced view of the same protocol. Every save, model draft, suggestion, accepted selection, and restore is a revision with its author, a person or a model; a field a model wrote carries an AI mark naming the model. Each part has **Suggest changes**, each PubMed or ClinicalTrials.gov query **Count hits**, a suggestion shows marked-up changes with their reasons and the hits of each version | `n` new criterion, `Ctrl+Enter` save the form or run the test bench. `,` and `.` step through revisions without changing them, `1` to `9` toggle a suggested change, `a` accept, `r` restore the revision on screen as the newest. **Publish** freezes and signs a version. |
-| Search review | One tab per database with the line-numbered strategy, limits, date, and hit count; the translation diff against the PubMed master; the PRESS checklist; which reference-set records the strategy finds and misses | `a` approve, `r` request changes |
+| Search review | One tab per database with the line-numbered strategy, limits, date, and hit count; the translation diff against the PubMed master; the PRESS checklist; which reference-set records the strategy finds and misses; per topic, the known pool: how many of its papers the searches found, the list they missed, and how many records are new | `a` approve, `r` request changes |
 | Title and abstract queue | One record at a time: the title, the journal, year, publication type, registry ID, and PMID on one muted line, the abstract with structured labels and Methods first, and a strip of the criteria by short label ("1 Adults · 2 NSCLC · 3 RCT"), with each criterion's full wording on demand. In mode S, a second opinion shows the first decision and its comment, and a stage that reveals `before` shows the AI's reading | `i` include, `e` then `1` to `9` exclude on a criterion (the strip opens to the full wording), `u` unclear, `Backspace` undo, `Space` next, `c` every criterion in full. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. The next five records prefetch. Target median 15 to 25 seconds. |
-| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. **Export view** and **Export stage** write the working spreadsheet. |
+| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading. When the topic has a known pool, an "In the known pool" column marks its records for the lead, and for reviewers in a working topic. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. **Export view** and **Export stage** write the working spreadsheet. |
 | Studies | Proposed record-to-study clusters with the linking evidence (shared NCT number, DOI family, title similarity) | `Enter` confirm, `s` split, `m` merge |
 | Full-text screening | The PDF on the left, criteria on the right, one active criterion. Mentions of the active criterion in document order, without verdict colours. After the decision, the AI's reading of one criterion with its rationale and its verified quote marked on the page. Mode S as at title and abstract | `,` and `.` step through mentions, `Enter` adopt a mention as evidence, `y` met, `n` not met, `?` unclear (optional). `i` include, `e` then `1` to `9` exclude on a criterion, `x` then `1` to `9` insufficient information, `w` wrong document, `q` show the AI's quote. Mode S: `f` asks for a second opinion. |
 | Extraction | Fields grouped by endpoint, arm, and timepoint, with value, unit, status, origin path, agreement, and validator results; the source region on the PDF | `Tab` next field, `Enter` accept after viewing the source, `e` edit (needs a span), `1` or `2` pick a path when they disagree |

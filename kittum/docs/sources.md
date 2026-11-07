@@ -82,8 +82,8 @@ search history and checks the line-by-line hit counts.
 | Embase (Elsevier) | Embase API under an institutional key, or Embase.com export | Emtree terms (`/exp`, `/de`), `:ti,ab,kw`, `NEAR/n` |
 | Ovid (MEDLINE, Embase, EBM Reviews) | Saved search plus export | Numbered lines, `exp Term/`, `.tw,kf.`, `adj3`. Kittum parses the exported search history into PRISMA-S rows. |
 | Cochrane Library (Wiley) | Search Manager export | `[mh "Term"]`, `:ti,ab,kw`, `NEAR/n` |
-| Scopus and ScienceDirect TDM (Elsevier) | Scopus Search API, Article Retrieval API | `TITLE-ABS-KEY()`, `W/n`. Useful for citation chasing and licensed full text. |
-| Web of Science (Clarivate) | Starter or Expanded API | `TS=()`, `NEAR/n`, cited-reference endpoints |
+| Scopus and ScienceDirect TDM (Elsevier) | Scopus Search API, Article Retrieval API; CSV export (`FileImport`, format `scopus`) | `TITLE-ABS-KEY()`, `W/n`. Useful for citation chasing and licensed full text. |
+| Web of Science (Clarivate) | Starter or Expanded API; plain-text or tab-delimited export (`FileImport`, format `wos`) | `TS=()`, `NEAR/n`, cited-reference endpoints |
 | Publisher TDM (Wiley, Springer Nature, Elsevier) | Token-based full-text interfaces | Full-text acquisition only |
 
 Quotas for commercial interfaces vary by contract. Kittum reads them from configuration, never from

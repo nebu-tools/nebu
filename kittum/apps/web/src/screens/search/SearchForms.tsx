@@ -17,13 +17,30 @@ import {
 } from "../../ui/Form.tsx";
 import { useProject } from "../project.tsx";
 
-const FORMATS: ReadonlyArray<readonly [string, string]> = [
+export const FORMATS: ReadonlyArray<readonly [string, string]> = [
   ["ris", "RIS, as most databases export it"],
+  ["nbib", "PubMed, citation manager file (.nbib)"],
+  ["pubmed-xml", "PubMed XML (Send to, File, XML)"],
+  ["scopus", "Scopus, CSV export"],
+  ["wos", "Web of Science, plain text or tab-delimited"],
   ["central", "Cochrane Library (CENTRAL), RIS"],
   ["embase", "Embase or Ovid, RIS"],
-  ["pubmed-xml", "PubMed XML (Send to, File, XML)"],
   ["csv", "CSV: CTIS, EU-CTR, or another registry"],
+  ["records-csv", "A list of records, CSV with a Title column"],
+  ["records-xlsx", "A list of records, Excel with a Title column"],
 ];
+
+export const FILE_TYPES = ".ris,.nbib,.txt,.xml,.csv,.tsv,.xlsx";
+
+/** The format a file's name suggests, if it suggests one. */
+export const formatOf = (name: string): string | null => {
+  const ext = name.toLowerCase().split(".").pop();
+  return ext === "nbib" ? "nbib" : ext === "xlsx" ? "records-xlsx" : ext === "ris" ? "ris" : null;
+};
+
+/** The file's bytes: the server reads each format's encoding (UTF-8, or Web of Science's
+ * UTF-16), and an XLSX list is binary. */
+export const fileBytes = async (file: File) => new Uint8Array(await file.arrayBuffer());
 
 const LIVE: ReadonlyArray<readonly [string, string]> = [
   ["pubmed", "PubMed"],
@@ -84,7 +101,7 @@ export function ImportSearch({
             strategy: strategy.trim(),
             limits: lines(limits),
           },
-          data: await file.text(),
+          data: await fileBytes(file),
           format,
         }),
       );
@@ -177,7 +194,16 @@ export function ImportSearch({
         <TextArea rows={2} value={limits} onChange={(e) => setLimits(e.currentTarget.value)} />
       </Field>
       <Field label="File">
-        <FileInput label="Search file" accept=".ris,.txt,.xml,.csv,.nbib" onFile={setFile} />
+        <FileInput
+          label="Search file"
+          accept={FILE_TYPES}
+          onFile={(picked) => {
+            setFile(picked);
+            const guess = picked ? formatOf(picked.name) : null;
+            if (guess && !(guess === "ris" && ["central", "embase"].includes(format)))
+              setFormat(guess);
+          }}
+        />
       </Field>
     </FormDialog>
   );

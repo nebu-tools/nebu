@@ -28,8 +28,10 @@ from pydantic import ValidationError
 from kittum.core import Id, KittumError, NotFoundError, Record, new_id, sha256_hex
 from kittum.corpus import (
     CorpusRevision,
+    KnownPoolFile,
     PrismaCounts,
     get_counts,
+    import_known_pool,
     ingest,
     latest_revision,
     reports,
@@ -58,7 +60,7 @@ from kittum.screening import (
     topic_for,
     undecided_items,
 )
-from kittum.search import list_executions
+from kittum.search import list_executions, parse_export
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -359,6 +361,41 @@ def ingest_corpus(tx: Tx, project_id: Id, *, actor_id: Id, ledger: Ledger) -> Co
     if not executions:
         raise LifecycleError("run or import a search first")
     return ingest(tx, project_id, executions, actor_id=actor_id, ledger=ledger)
+
+
+def import_pool_file(
+    tx: Tx,
+    project_id: Id,
+    topic_id: str,
+    data: bytes,
+    format: str,
+    *,
+    file_name: str | None,
+    actor_id: Id,
+    ledger: Ledger,
+    artifacts: ArtifactStore,
+) -> KnownPoolFile:
+    """Add a file of known papers (any search import format) to a topic's known pool. The file
+    is stored by hash; its papers are compared with the searches, never added to them."""
+    protocol = _published(tx, project_id).version.protocol
+    if topic_id not in {t.id for t in protocol.search_topics}:
+        raise LifecycleError(f"the protocol has no search topic {topic_id!r}")
+    file_hash = sha256_hex(data)
+    records = parse_export(data, format, raw_hash=file_hash, source="known_pool")
+    if not records:
+        raise ValueError("the file has no records")  # refused before its bytes are stored
+    artifacts.put(data)
+    return import_known_pool(
+        tx,
+        project_id,
+        topic_id,
+        records,
+        file_hash=file_hash,
+        format=format.lower(),
+        file_name=file_name,
+        actor_id=actor_id,
+        ledger=ledger,
+    )
 
 
 def corpus_records(tx: Tx, project_id: Id) -> list[ScreeningRecord]:
@@ -897,6 +934,7 @@ __all__ = [
     "full_text",
     "full_text_records",
     "full_text_sentinels",
+    "import_pool_file",
     "ingest_corpus",
     "is_lead",
     "list_projects",
