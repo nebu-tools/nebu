@@ -144,7 +144,7 @@ INVALID = {
     "unknown mode": (
         lambda s: _topic(s).__setitem__("mode", "M4"),
         "search_topics[0].mode",
-        "Input should be 'M1', 'M2' or 'M3', got 'M4'",
+        "Input should be 'M1', 'M2', 'M3' or 'S', got 'M4'",
     ),
     "misspelt field": (
         lambda s: _criterion(s, "POP").__setitem__("decideable_at", ["full_text"]),
@@ -288,6 +288,31 @@ INVALID = {
         ),
         "search_topics[0].stopping.confidence_percent",
         "Field required",
+    ),
+    "S without a rationale": (
+        lambda s: _topic(s).update(
+            mode="S", audit={"sentinel_percent": "0", "random_audit_percent": "0"}
+        ),
+        "search_topics[0].mode_rationale",
+        "mode S needs a rationale",
+    ),
+    "S with sentinels": (
+        lambda s: _topic(s).update(
+            mode="S",
+            mode_rationale={"en": "Confounder search."},
+            audit={"sentinel_percent": "2", "random_audit_percent": "0"},
+        ),
+        "search_topics[0].audit.sentinel_percent",
+        "mode S has no auditor",
+    ),
+    "S with an audit sample": (
+        lambda s: _topic(s).update(
+            mode="S",
+            mode_rationale={"en": "Confounder search."},
+            audit={"sentinel_percent": "0", "random_audit_percent": "5"},
+        ),
+        "search_topics[0].audit.random_audit_percent",
+        "mode S has no auditor",
     ),
     "scope object in a tuple naming no question": (
         lambda s: _topic(s).__setitem__(
@@ -446,6 +471,19 @@ def test_m3_with_its_stopping_plan_and_audit_compiles() -> None:
         audit={"random_audit_percent": "5"},
     )
     assert _compile(source).protocol.search_topics[0].stopping is not None
+
+
+def test_s_needs_only_its_rationale_and_keeps_working_documentation() -> None:
+    source = example_source()
+    _topic(source).update(
+        mode="S",
+        mode_rationale={"en": "A confounder search for the team's own use."},
+        audit={"sentinel_percent": "0", "random_audit_percent": "0"},
+    )
+    (topic,) = _compile(source).protocol.search_topics
+    assert topic.mode == ScreeningMode.S and topic.validation_pack is None
+    assert topic.documentation == "working"
+    assert _compile(example_source()).protocol.search_topics[0].documentation == "complete"
 
 
 def test_scopes_as_a_tuple_of_ids_resolve_like_a_list() -> None:

@@ -34,12 +34,16 @@ import {
   freshId,
   marksOn,
   partName,
+  PRESETS,
+  presetOf,
   PUBMED,
   SOURCE_NAME,
   strategyPath,
   toDoc,
   valueAt,
+  withPreset,
 } from "./document.ts";
+import type { Preset } from "./document.ts";
 import type { Criterion, Doc, Localized, Question, Source, Topic } from "./document.ts";
 
 /** An unsaved protocol in the form: edited from `base`, or new when `base` is null. */
@@ -84,6 +88,7 @@ const MODES: ReadonlyArray<readonly [string, string]> = [
   ["M1", "M1, two people screen every record and the AI is a third screener"],
   ["M2", "M2, one person screens every record and the AI is the second screener"],
   ["M3", "M3, two people screen in the AI's order and stop early"],
+  ["S", "S, one person of a pool screens each record and asks for a second opinion when unsure"],
 ];
 
 /** "45 s", "2 min 5 s". */
@@ -1316,6 +1321,33 @@ function FormView({
                   onChange: (v) => editTopic((x) => (x.label = localized(x.label, v))),
                 })}
                 <div className="grid gap-1" data-testid="mode">
+                  {suggestion ? null : (
+                    <div
+                      className="flex flex-wrap items-center gap-2 text-xs"
+                      role="group"
+                      aria-label="Preset"
+                    >
+                      <span className="font-semibold text-ink-2">Preset</span>
+                      {(Object.keys(PRESETS) as Preset[]).map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          aria-pressed={presetOf(topic) === preset}
+                          title={PRESETS[preset].description}
+                          onClick={() =>
+                            change((x) => {
+                              x.search_topics = x.search_topics.map((y, i) =>
+                                i === ti ? withPreset(y, preset) : y,
+                              );
+                            })
+                          }
+                          className={`rounded-[3px] border px-2 py-0.5 ${presetOf(topic) === preset ? "border-petrol font-semibold text-ink" : "border-rule text-ink-2 hover:text-ink"}`}
+                        >
+                          {PRESETS[preset].label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <span className="flex items-center gap-1.5">
                     <label
                       htmlFor={`mode-${topic.id}`}
@@ -1343,11 +1375,34 @@ function FormView({
                   </Select>
                   <FieldIssues
                     issues={issuesAt(issues, `${tat}.mode`).concat(
-                      issuesAt(issues, `${tat}.mode_rationale`),
                       issuesAt(issues, `${tat}.validation_pack`),
                       issuesAt(issues, `${tat}.stopping`),
+                      issuesAt(issues, `${tat}.audit.sentinel_percent`),
+                      issuesAt(issues, `${tat}.audit.random_audit_percent`),
                     )}
                   />
+                  {topic.mode && topic.mode !== "M1"
+                    ? field({
+                        id: `${topic.id}-mode-rationale`,
+                        label: "Why this mode",
+                        part: `search_topics[${topic.id}].mode_rationale`,
+                        at: `${tat}.mode_rationale`,
+                        value: t(topic.mode_rationale ?? undefined),
+                        ...(topic.mode === "S"
+                          ? {
+                              placeholder:
+                                "A confounder search for our own model, not a submission",
+                            }
+                          : {}),
+                        onChange: (v) =>
+                          editTopic(
+                            (x) =>
+                              (x.mode_rationale = v.trim()
+                                ? localized(x.mode_rationale ?? {}, v)
+                                : null),
+                          ),
+                      })
+                    : null}
                 </div>
               </div>
 

@@ -125,6 +125,7 @@ const decisionBody = (d: Decision) => ({
   evidence_anchor_ids: d.evidence_anchor_ids,
   comment: d.comment,
   criteria: d.criteria ?? [],
+  ...(d.second_opinion ? { second_opinion: true } : {}),
 });
 
 const timingBody = (t: DecisionTiming) => t;
@@ -191,6 +192,8 @@ const toProtocol = (published: KittumApi.PublishedProtocol): ProtocolVersion => 
           label: text(topic.label),
           kind: topic.kind,
           mode: topic.mode,
+          documentation:
+            published.documentation?.[topic.id] ?? (topic.mode === "S" ? "working" : "complete"),
           mode_rationale: topic.mode_rationale ? text(topic.mode_rationale) : null,
           scopes,
           sentinel_percent: topic.audit?.sentinel_percent ?? "0",
@@ -413,6 +416,8 @@ export const makeApiWorkbench = (): Workbench => ({
           etag: item.etag,
           phase: item.phase,
           reveal: item.reveal,
+          ai: item.ai ?? null,
+          second_opinion: item.second_opinion ?? null,
           report: {
             id: item.assignment_id,
             study_label: item.record.registry_ids[0] ?? item.record.doi ?? "Record",
@@ -527,7 +532,7 @@ export const makeApiWorkbench = (): Workbench => ({
   progress: ({ projectId, as }) =>
     call((api) => api.getProjectProgress(projectId, { params: reviewer(as) })),
 
-  openStage: ({ projectId, as, scopeId, stage, reveal, sentinels }) =>
+  openStage: ({ projectId, as, scopeId, stage, reveal, sentinels, screeners }) =>
     call((api) =>
       api.openScreeningStage(projectId, {
         payload: {
@@ -536,6 +541,7 @@ export const makeApiWorkbench = (): Workbench => ({
           actor_id: as,
           ...(reveal ? { reveal } : {}),
           ...(sentinels ? { sentinels } : {}),
+          ...(screeners ? { screeners } : {}),
         },
       }),
     ),

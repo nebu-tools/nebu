@@ -20,7 +20,7 @@ The two-week spike in [DESIGN.md](../DESIGN.md#two-week-spike) picks from these 
 | 06 | `enrich` | Clients, stored enrichment, full-text waterfall, and jobs in the app done; local tagging open |
 | 07 | `corpus` | Dedupe, link proposals, immutable identity revisions, PRISMA counts done |
 | 08 | `judge` and `models` | Done; ledger store and job wiring wait for WP-01 and WP-02 |
-| 09 | `screening` | Done: M1 to M3, blinding, reveal, sentinels, audits, adjudication, judge jobs, metrics, routes; open items listed |
+| 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, metrics, routes; open items listed |
 | 10 | `documents` | Parsers, layers, anchors, re-anchoring, viewer routes, and acquisition done; source resolvers for the waterfall open |
 | 11 | `extraction` | Done: schema, both paths, validators, reconciliation, runs as jobs, acceptance, bundle exporter, routes, workbench screen; open items listed |
 | 12 | `appraisal` | Types done; open |
@@ -543,6 +543,23 @@ Module `kittum.screening`. Needs: `protocol`, `corpus`, `judge`, `ledger`, `runs
   event, under the project's command lock, so a retry waits for the first request and returns its
   result. Left open: a record whose real full text arrives later cannot join a full-text stage that
   is already open, the same as any late full text.
+- Mode S, targeted searches (PR A of "Targeted searches" below; migration
+  `20261107000000_screening_targeted.sql`). A stage takes a pool of one or more screeners and no
+  auditor or adjudicators; `split_pool` gives each record to one of them in the seeded order, the
+  counts differing by one at most, and `screening.stage_opened` names the split. A decision with
+  `second_opinion` (a screener's own record, a pool of two or more) gives the record to another
+  screener of the pool, drawn per record by seed (`screening.second_opinion_requested`), as an
+  assignment of role `second_opinion` that comes first in their queue with the first decision and
+  its comment (`QueueItem.second_opinion`). Its decision settles the record; it cannot ask for
+  another. Undoing the first decision withdraws the request while nobody has answered it, and is
+  refused after. No conflicts, extra screens, or adjudication in S. The queue does not wait for
+  the judge, so a decision may come before the AI's reading; a stage that reveals `before`
+  (refused outside working topics) returns the reading with the item (`QueueItem.ai`), and the
+  decision records `ai_shown_before` when the client says it showed one. `StageInfo` and
+  `StageMetrics` carry the documentation level; the lead's metrics count second opinions
+  (requested, pending, kept, changed) and decisions made with the AI on screen, and have no human
+  pairs in S. `kittum.report` replays the same outcomes from the ledger; the disclosure writes its
+  methods paragraphs from the modes, settings, and counts.
 - Routes in `api/routes/screening.py`: `GET .../screening/queue`, `POST .../assignments/{id}/decide`,
   `POST .../assignments/{id}/undo`, `POST .../assignments/{id}/wrong-document`,
   `GET .../adjudications`, `POST .../adjudications/{id}/decide`,
@@ -590,6 +607,9 @@ Left open:
   mostly includes.
   Escalation uses the model's own reading, so this no longer floods M1 adjudication, but M3 order
   and the audit strata see few verified exclusions.
+- Mode S: the second-opinion screener is drawn by seed, not by load, so one colleague can get more
+  requests than another. The full-text screen does not pick up an AI reading that arrives while a
+  record is on screen (the title and abstract screen does).
 
 ## WP-10 Documents
 
@@ -1143,6 +1163,20 @@ Left:
 - Audit: checkpoints are read from the database; a copy kept outside it (WORM storage) is not
   compared yet. The trace reads the whole chain per request, which is fine for one review's
   thousands of events but wants an index on `payload->>'item_ref'` at Embase scale.
+
+## Targeted searches
+
+Max's direction of 2026-11-07: Kittum also serves the team's lighter "SLRs" (confounder research,
+searches for indirect comparisons, "complete the pool" searches) as one workflow configured per
+search topic, without a second product. DESIGN.md, "Documentation levels", has the rules.
+
+| PR | Branch | Content | Status |
+| --- | --- | --- | --- |
+| A | `kittum/targeted-screening` | Mode S, documentation levels, the `before` reveal, the queue not waiting for the judge, presets in the protocol editor, the screener pool in stage setup, second opinions on both screening screens, methods text and disclosure | Done |
+| B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Open |
+| C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, AI proposals in working topics, bulk decisions from the table | Open |
+| D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers), NBIB, Scopus CSV, and Web of Science imports, the spreadsheet decision import | Open |
+| E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open |
 
 ## WP-17 Evaluation harness
 

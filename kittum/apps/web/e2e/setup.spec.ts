@@ -198,7 +198,7 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     const issue = page.getByTestId("protocol-issue");
     await expect(issue).toHaveCount(1);
     await expect(issue).toContainText("search_topics[0].mode");
-    await expect(issue).toContainText("Input should be 'M1', 'M2' or 'M3', got 'M7'");
+    await expect(issue).toContainText("Input should be 'M1', 'M2', 'M3' or 'S', got 'M7'");
     await expect(page.getByRole("button", { name: "Publish this version" })).toHaveCount(0);
 
     await editor.fill(readFileSync(PROTOCOL, "utf8"));

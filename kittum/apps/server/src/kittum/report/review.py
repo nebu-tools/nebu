@@ -12,6 +12,9 @@ a record both humans excluded in M1, or the AI disagrees with the lone human in 
 record to a blind extra screen by the stage's auditor (`Rescreen`); if the auditor disagrees with
 the screeners, that becomes a conflict like any other.
 
+Mode S has neither: one screener per record, and when that screener asks for a second opinion,
+the second screener's standing decision is the record's outcome.
+
 Profiles render from a `Review` too; they never query the database themselves.
 """
 
@@ -24,12 +27,14 @@ from kittum.core import Id, KittumError, NotFoundError, Record
 from kittum.judge import USER_TEMPLATE
 from kittum.ledger import PostgresLedger
 from kittum.protocol import (
+    DocumentationLevel,
     ReviewProtocol,
     ScreeningMode,
     SearchTopic,
     Source,
     Stage,
     StoredProtocol,
+    documentation_level,
 )
 from kittum.protocol import get_version as get_protocol_version
 from kittum.report.extracted import ExtractedValue, load_extracted
@@ -46,6 +51,7 @@ from kittum.screening import (
     RescreenGauge,
     RescreenReason,
     RevealSetting,
+    SecondOpinionGauge,
 )
 from kittum.search import SearchExecution, get_execution
 from kittum.stats import Stratum, elusion_estimate
@@ -133,11 +139,13 @@ class HumanDecision(Record):
     id: Id
     assignment_id: Id
     reviewer_id: Id
-    role: Literal["screener", "auditor"]
+    role: Literal["screener", "auditor", "second_opinion"]
     phase: Literal["provisional", "final"]
     outcome: str
     reason_criterion_id: str | None
     revealed: bool  # the AI was shown after this provisional decision
+    ai_shown_before: bool = False  # the AI's reading was on screen while deciding (reveal before)
+    second_opinion: bool = False  # mode S: the screener asked for a second opinion
     event_id: Id
     event_seq: int
     decided_at: datetime
@@ -199,12 +207,26 @@ class ItemResult(Record):
     ai_raw_output_hash: str | None
 
     @property
+    def second_opinion_asked(self) -> bool:
+        """Mode S: the screener's standing decision asks for a second opinion."""
+        return any(d.second_opinion for d in self.final if d.role == "screener")
+
+    @property
+    def second_opinion(self) -> HumanDecision | None:
+        """Mode S: the standing decision of the second screener, if one was asked and given."""
+        if not self.second_opinion_asked:
+            return None
+        return next((d for d in self.final if d.role == "second_opinion"), None)
+
+    @property
     def screened(self) -> bool:
         """Every screener has a standing decision, and the auditor too if the record went to an
-        extra screen."""
+        extra screen, or the second screener if the screener asked for a second opinion."""
         done = {d.reviewer_id for d in self.final if d.role == "screener"}
         if not self.screeners or not set(self.screeners) <= done:
             return False
+        if self.second_opinion_asked:
+            return self.second_opinion is not None
         return self.rescreen is None or self.rescreen_decision is not None
 
     @property
@@ -235,7 +257,10 @@ class ItemResult(Record):
 
     @property
     def ai_revealed(self) -> bool:
-        return any(d.revealed for d in self.provisional)
+        """A reviewer saw the AI's reading: after a provisional decision, or before deciding."""
+        return any(d.revealed for d in self.provisional) or any(
+            d.ai_shown_before for d in (*self.provisional, *self.final)
+        )
 
     @property
     def ai_rescreened(self) -> bool:
@@ -262,6 +287,13 @@ class StageResult(Record):
     rescreens: RescreenGauge
     reveals_shown: int
     revised_after_reveal: int
+    second_opinions: SecondOpinionGauge | None = None  # mode S only
+    ai_shown_before: int = 0
+    """Standing decisions made with the AI's reading on screen (reveal `before`)."""
+
+    @property
+    def documentation(self) -> DocumentationLevel:
+        return documentation_level(self.mode)
 
     @property
     def records(self) -> tuple[ItemResult, ...]:
@@ -633,6 +665,8 @@ def _stage(
             outcome=row["outcome"],
             reason_criterion_id=row["reason_criterion_id"],
             revealed=row["reveal"] is not None,
+            ai_shown_before=row["ai_shown_before"],
+            second_opinion=row["second_opinion"],
             event_id=row["event_id"],
             event_seq=seq,
             decided_at=row["decided_at"],
@@ -708,6 +742,11 @@ def _stage(
             if standing_decision := final.get(a["id"]):
                 standing.append(standing_decision)
         screener_finals = [final.get(a["id"]) for a in screeners]
+        asked = any(d is not None and d.second_opinion for d in screener_finals)
+        if asked:
+            # Mode S: the second screener's decision settles the record.
+            second = next((a for a in mine if a["role"] == "second_opinion"), None)
+            screener_finals = [final.get(second["id"]) if second else None]
         reading = readings.get(ref)
         rescreen = extra.get((str(stage_id), ref))
         if rescreen is not None:
@@ -727,6 +766,7 @@ def _stage(
                     a["reviewer_id"]
                     for a in mine
                     if a["role"] == "screener"
+                    or (a["role"] == "second_opinion" and asked)
                     or item["kind"] == "sentinel"
                     or item["audit"]
                     or rescreen is not None
@@ -747,7 +787,8 @@ def _stage(
                 ai_raw_output_hash=reading["raw_output_hash"] if reading else None,
             )
         )
-    agreement = _agreement(stage["screeners"], results)
+    mode = ScreeningMode(stage["mode"])
+    agreement = _agreement(mode, stage["screeners"], results)
     # Reveals and revisions over every assignment, the auditor's and sentinels' included.
     reveals = [d for d in provisional.values() if d is not None and d.revealed]
     revised = [
@@ -774,6 +815,14 @@ def _stage(
         rescreens=_rescreens(results),
         reveals_shown=len(reveals),
         revised_after_reveal=len(revised),
+        second_opinions=_second_opinions(results) if mode == ScreeningMode.S else None,
+        ai_shown_before=len(
+            {
+                d.id
+                for d in (*provisional.values(), *final.values())
+                if d is not None and d.ai_shown_before
+            }
+        ),
     )
 
 
@@ -810,15 +859,18 @@ def _normal(stage: str, outcome: str) -> FinalOutcome:
     return cast("FinalOutcome", outcome)
 
 
-def _agreement(screeners: Iterable[Id], items: list[ItemResult]) -> tuple[PairAgreement, ...]:
+def _agreement(
+    mode: ScreeningMode, screeners: Iterable[Id], items: list[ItemResult]
+) -> tuple[PairAgreement, ...]:
     """Kappa and PABAK on the blind provisional decisions of records, as screening defines them:
-    include against exclude, with unclear and insufficient information as include."""
+    include against exclude, with unclear and insufficient information as include. In S each
+    record has one screener, so there are no human pairs."""
     records = [i for i in items if i.kind == "record"]
     blind = {(d.reviewer_id, i.item_ref): d.outcome for i in records for d in i.provisional}
     people = sorted(screeners, key=str)
     pairs: list[PairAgreement] = []
 
-    for left, right in combinations(people, 2):
+    for left, right in [] if mode == ScreeningMode.S else combinations(people, 2):
         refs = [
             i.item_ref
             for i in records
@@ -907,6 +959,23 @@ def _rescreens(items: list[ItemResult]) -> RescreenGauge:
         pending=len(rescreened) - len(decided),
         upheld=upheld,
         adjudicated=len(decided) - upheld,
+    )
+
+
+def _second_opinions(items: list[ItemResult]) -> SecondOpinionGauge:
+    """Mode S: the second opinions asked, as screening counts them."""
+    asked = [i for i in items if i.kind == "record" and i.second_opinion_asked]
+    answered = [(i, d) for i in asked if (d := i.second_opinion) is not None]
+    changed = sum(
+        1
+        for i, d in answered
+        if any(_label(f.outcome) != _label(d.outcome) for f in i.final if f.role == "screener")
+    )
+    return SecondOpinionGauge(
+        requested=len(asked),
+        pending=len(asked) - len(answered),
+        changed=changed,
+        kept=len(answered) - changed,
     )
 
 

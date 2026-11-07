@@ -1,13 +1,14 @@
 // Opens a screening stage for one scope. The protocol sets the mode and the audit plan; the lead
 // chooses when the AI is revealed and gives the sentinels, the records with known outcomes that
-// enter every queue unmarked. Who screens follows from the mode and the project's people.
+// enter every queue unmarked. Who screens follows from the mode and the project's people; in
+// mode S (a targeted search) the lead picks the pool of reviewers who share the records.
 import { useRouteContext, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 
 import type { RevealSetting, Role, SearchTopic, Sentinel, Stage } from "../../data/schema.ts";
 import { run } from "../../data/workbench.ts";
 import { Button, Field, FileInput, Select, failure } from "../../ui/Form.tsx";
-import { MODES } from "../protocol/Protocol.tsx";
+import { DOCUMENTATION, MODES } from "../protocol/Protocol.tsx";
 import { useProject } from "../project.tsx";
 
 const STAGES: Record<Stage, string> = {
@@ -20,6 +21,7 @@ const REVEALS: Record<RevealSetting, string> = {
     "After a reviewer decides, and only when the AI decided differently. This is the default.",
   always: "After every decision a reviewer makes",
   never: "Never. The AI reads every record, but reviewers never see what it decided",
+  before: "Before the decision, once the AI has read the record. Only in a targeted search",
 };
 
 const names = (people: ReadonlyArray<string>) =>
@@ -47,12 +49,21 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
   );
   const [choice, setChoice] = useState(choices[0]?.key ?? "");
   const [reveal, setReveal] = useState<RevealSetting>("on_disagreement");
+  const reviewers = project.members.filter((m) => m.roles.includes("reviewer"));
+  // Mode S: who shares the records. Everyone the lead has not taken out.
+  const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
   const [sentinels, setSentinels] = useState<ReadonlyArray<Sentinel> | null>(null);
   const [sentinelError, setSentinelError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const chosen = choices.find((c) => c.key === choice) ?? choices[0];
+  const targeted = chosen?.topic.mode === "S";
+  const reveals = (Object.keys(REVEALS) as RevealSetting[]).filter(
+    (r) => r !== "before" || chosen?.topic.documentation === "working",
+  );
+  const shownReveal = reveals.includes(reveal) ? reveal : "on_disagreement";
+  const pool = reviewers.filter((m) => !left.has(m.actor_id));
   if (!protocol) {
     return <p className="text-ink-2">Publish the protocol first: it sets each scope's mode.</p>;
   }
@@ -89,14 +100,17 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
           as: me.actor_id,
           scopeId: chosen.scopeId,
           stage: chosen.stage,
-          reveal,
-          ...(chosen.stage === "title_abstract" && sentinels ? { sentinels } : {}),
+          reveal: shownReveal,
+          ...(targeted ? { screeners: pool.map((m) => m.actor_id) } : {}),
+          ...(!targeted && chosen.stage === "title_abstract" && sentinels ? { sentinels } : {}),
         }),
       );
       await router.invalidate();
       setSentinels(null);
       onOpened(
-        `${STAGES[chosen.stage]} screening is open for ${scopeLabel(chosen.scopeId)}. The AI judge reads every record first; the reviewers' queues fill as it reads.`,
+        targeted
+          ? `${STAGES[chosen.stage]} screening is open for ${scopeLabel(chosen.scopeId)}. The records are in the queues of ${names(pool.map((m) => m.display_name))} now; the AI judge reads them alongside.`
+          : `${STAGES[chosen.stage]} screening is open for ${scopeLabel(chosen.scopeId)}. The AI judge reads every record first; the reviewers' queues fill as it reads.`,
       );
     } catch (e) {
       setError(failure(e, "Kittum could not open the stage."));
@@ -124,16 +138,54 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
         </Select>
       </Field>
       <StagePlan topic={chosen.topic} />
+      {targeted ? (
+        <fieldset className="grid gap-1" data-testid="screener-pool">
+          <legend className="text-xs font-semibold text-ink-2">
+            Screeners who share the records
+          </legend>
+          {reviewers.length === 0 ? (
+            <p className="text-sm text-exclude">Add at least one reviewer under People.</p>
+          ) : (
+            reviewers.map((m) => (
+              <label key={m.actor_id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={!left.has(m.actor_id)}
+                  onChange={(e) => {
+                    const checked = e.currentTarget.checked;
+                    setLeft((s) => {
+                      const next = new Set(s);
+                      if (checked) next.delete(m.actor_id);
+                      else next.add(m.actor_id);
+                      return next;
+                    });
+                  }}
+                />
+                {m.display_name}
+              </label>
+            ))
+          )}
+          <p className="text-xs text-ink-3">
+            Each record goes to one of them, split evenly.{" "}
+            {pool.length === 1
+              ? "With one screener, nobody can give a second opinion."
+              : "A screener who is unsure asks another of them for a second opinion."}
+          </p>
+        </fieldset>
+      ) : null}
       <Field label="When reviewers see the AI's reading">
-        <Select value={reveal} onChange={(e) => setReveal(e.currentTarget.value as RevealSetting)}>
-          {(Object.keys(REVEALS) as RevealSetting[]).map((r) => (
+        <Select
+          value={shownReveal}
+          onChange={(e) => setReveal(e.currentTarget.value as RevealSetting)}
+        >
+          {reveals.map((r) => (
             <option key={r} value={r}>
               {REVEALS[r]}
             </option>
           ))}
         </Select>
       </Field>
-      {chosen.stage === "title_abstract" ? (
+      {targeted ? null : chosen.stage === "title_abstract" ? (
         <Field
           label="Sentinels"
           hint={
@@ -178,7 +230,7 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
         </p>
       ) : null}
       <div>
-        <Button primary type="submit" disabled={busy}>
+        <Button primary type="submit" disabled={busy || (targeted && pool.length === 0)}>
           {busy ? "Opening the stage" : `Open ${STAGES[chosen.stage].toLowerCase()} screening`}
         </Button>
       </div>
@@ -193,6 +245,20 @@ function StagePlan({ topic }: { topic: SearchTopic }) {
     project.members.filter((m) => m.roles.includes(role)).map((m) => m.display_name);
   const needed = topic.mode === "M2" ? 1 : 2;
   const reviewers = people("reviewer");
+  if (topic.mode === "S") {
+    return (
+      <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-1 border-y border-rule py-3 text-sm">
+        <dt className="text-xs font-semibold text-ink-2">Mode</dt>
+        <dd>
+          <span className="font-semibold">S</span> <span className="text-ink-2">{MODES.S}</span>
+        </dd>
+        <dt className="text-xs font-semibold text-ink-2">Documentation</dt>
+        <dd className="text-ink-2" data-testid="stage-documentation">
+          {DOCUMENTATION[topic.documentation]}
+        </dd>
+      </dl>
+    );
+  }
   const auditors = people("auditor");
   const adjudicators = people("adjudicator");
   const short = reviewers.length < needed || !auditors.length || !adjudicators.length;

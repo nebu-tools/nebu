@@ -23,6 +23,7 @@ const stage = (projectId: string, kind: StageInfo["stage"] = "title_abstract"): 
   stage: kind,
   topic_id: "T2-indirect",
   mode: "M1",
+  documentation: "complete",
   reveal: "on_disagreement",
   protocol_hash: "9f2c1e7a54b0d3c8e61f0a2b7d94c5e3a18f6b2d0c7e9a4f5b3d1c8e2a6f0b94",
   judge_config_id: "mock",
@@ -184,6 +185,7 @@ export const PROTOCOL: ProtocolVersion = {
         label: "RCTs for indirect comparisons",
         kind: "rct_indirect",
         mode: "M1",
+        documentation: "complete",
         mode_rationale: null,
         scopes: [
           {

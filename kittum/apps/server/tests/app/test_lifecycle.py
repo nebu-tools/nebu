@@ -262,3 +262,88 @@ def test_a_project_from_nothing_to_an_open_stage(database: Database, tmp_path: P
         }
     assert ledger["by_type"]["project.member_added"] == 6  # five people and a second role
     assert ledger["by_type"]["judge.verdict_recorded"] == 11
+
+
+def test_a_targeted_search_screens_with_a_pool_and_no_auditor(
+    database: Database, tmp_path: Path
+) -> None:
+    """Mode S over HTTP: the protocol says working documentation, the stage takes the screener
+    pool the lead picks, needs no auditor or adjudicator, may show the AI before the decision,
+    and its queues fill before the judge has run."""
+    ctx = _context(database, tmp_path, demo_judge(ModelRegistry.load()))
+    client = TestClient(create_app(ctx))
+
+    def ok(response: Any, status: int = 200) -> Any:
+        assert response.status_code == status, response.text
+        return response.json()
+
+    project = ok(client.post("/api/projects", json={"name": "Confounders", "lead_name": "Mo"}), 201)
+    pid = project["id"]
+    (lead,) = [m["actor_id"] for m in project["members"] if m["roles"] == ["lead"]]
+    for name in ("Sam Okafor", "Jun Park", "Ola Berg"):
+        body = {"display_name": name, "roles": ["reviewer"], "added_by": lead}
+        ok(client.post(f"/api/projects/{pid}/members", json=body), 201)
+    people = {
+        m["display_name"]: m["actor_id"] for m in ok(client.get(f"/api/projects/{pid}"))["members"]
+    }
+    source = yaml.safe_load(PROTOCOL.read_text())
+    source["search_topics"][0].update(
+        mode="S",
+        mode_rationale={"en": "Confounder search for the team's own model."},
+        audit={"sentinel_percent": "0", "random_audit_percent": "0"},
+    )
+    draft = ok(client.post(f"/api/projects/{pid}/protocol-versions", json=source), 201)
+    ok(
+        client.post(
+            f"/api/projects/{pid}/protocol-versions/{draft['id']}/publish",
+            json={"approved_by": lead},
+        )
+    )
+    assert ok(client.get(f"/api/projects/{pid}/protocol"))["documentation"] == {"TRIALS": "working"}
+    body = {
+        "plan": {"topic_id": "TRIALS", "source": "central", "platform": "Wiley", "strategy": "x"},
+        "data": (DATA / "central_export.ris").read_text(),
+        "format": "ris",
+        "actor_id": lead,
+    }
+    ok(client.post(f"/api/projects/{pid}/search/import", json=body))
+    ok(client.post(f"/api/projects/{pid}/corpus/ingest", json={"actor_id": lead}), 201)
+
+    stage = {"scope_id": "nrt-vs-control", "stage": "title_abstract", "actor_id": lead}
+    stranger = client.post(
+        f"/api/projects/{pid}/screening/stages", json=stage | {"screeners": [lead]}
+    )
+    assert stranger.status_code == 409 and "must be reviewers" in stranger.text
+    pool = [people["Sam Okafor"], people["Jun Park"]]
+    info = ok(
+        client.post(
+            f"/api/projects/{pid}/screening/stages",
+            json=stage | {"screeners": pool, "reveal": "before"},
+        ),
+        201,
+    )
+    assert info["mode"] == "S" and info["documentation"] == "working"
+    assert info["screeners"] == pool and info["auditor_id"] is None and info["adjudicators"] == []
+    assert info["reveal"] == "before"
+
+    # The judge has not run, and both queues hold their share; Ola is not in the pool.
+    params = {"scope_id": "nrt-vs-control", "stage": "title_abstract", "limit": 50}
+    sizes = [
+        len(
+            ok(
+                client.get(
+                    f"/api/projects/{pid}/screening/queue",
+                    params=params,
+                    headers={"X-Kittum-Reviewer": p},
+                )
+            )
+        )
+        for p in pool
+    ]
+    assert sum(sizes) == 7 and abs(sizes[0] - sizes[1]) <= 1
+    outsider = client.get(
+        f"/api/projects/{pid}/screening/queue",
+        params=params,
+        headers={"X-Kittum-Reviewer": people["Ola Berg"]},
+    )
+    assert outsider.status_code == 200 and outsider.json() == []

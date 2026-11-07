@@ -169,6 +169,7 @@ class StageDisclosure(Record):
     scope_id: str
     mode: str
     reveal: str
+    documentation: str = "complete"
     records: int
     records_read_by_ai: int
     ai_proposed_exclusions: int
@@ -176,6 +177,8 @@ class StageDisclosure(Record):
     revised_after_reveal: int
     conflicts_resolved: int
     rescreens_sent: int
+    second_opinions: int = 0
+    ai_shown_before: int = 0
 
 
 class AsOf(Record):
@@ -415,9 +418,12 @@ def _describe(
         )
         facts += [
             ("Mode", p.get("mode")),
+            ("Documentation", p.get("documentation")),
             ("AI reveal", str(p.get("reveal")).replace("_", " ")),
             ("Records", p.get("records")),
         ]
+        for person, n in (p.get("pool_split") or {}).items():
+            facts.append((f"Records for {names.actor(person)}", n))
         if ref is not None and ref in p.get("audit_refs", []):
             facts.append(("Audit sample", "Kittum drew this record for the audit sample"))
     elif t == "screening.judging_requested":
@@ -479,12 +485,20 @@ def _describe(
         role = names.roles.get(str(p.get("assignment_id")), "screener")
         phase = p.get("phase")
         timing = p.get("timing") or {}
-        if phase == "provisional":
+        before = bool(p.get("ai_shown_before"))
+        consult = role == "second_opinion"
+        if before:
+            summary = f"{who} {_outcome(p)} with the AI's reading on screen"
+        elif phase == "provisional" and not consult:
             summary = f"{who} {_outcome(p)}, blind"
         else:
             summary = f"{who} {_outcome(p)}"
             if timing.get("reveal_shown_at"):
                 summary += ", after seeing the AI's reading"
+        if consult:
+            summary += " as a second opinion, having seen the first decision"
+        if p.get("second_opinion"):
+            summary += " and asked for a second opinion"
         if role == "auditor":
             audit, rescreen = names.flags.get(
                 (str(stage_id), str(p.get("item_ref"))), (False, False)
@@ -498,8 +512,17 @@ def _describe(
             )
         facts += [
             ("Criterion", names.criterion(p.get("reason_criterion_id"))),
-            ("Decision", "Blind, before any AI output" if phase == "provisional" else "Final"),
-            ("Role", role),
+            (
+                "Decision",
+                "With the AI's reading on screen"
+                if before
+                else "After the first decision, before any AI output"
+                if consult and phase == "provisional"
+                else "Blind, before any AI output"
+                if phase == "provisional"
+                else "Final",
+            ),
+            ("Role", role.replace("_", " ")),
             ("Comment", p.get("comment")),
         ]
         for anchor_id in p.get("evidence_anchor_ids") or []:
@@ -533,6 +556,14 @@ def _describe(
     elif t == "screening.undone":
         kind = "decision"
         summary = f"{who} took back their decision"
+        if p.get("second_opinion_withdrawn"):
+            summary += " and their request for a second opinion"
+    elif t == "screening.second_opinion_requested":
+        kind = "decision"
+        summary = (
+            f"Kittum gave the record to {names.actor(p.get('reviewer_id'))} for a second"
+            " opinion. They see the first decision and its comment."
+        )
     elif t == "screening.item_withdrawn":
         kind = "decision"
         summary = (
@@ -1304,6 +1335,7 @@ def as_of(
                 scope_id=s["scope_id"],
                 mode=s["mode"],
                 reveal=s["reveal"],
+                documentation=s["documentation"],
                 records=s["records"],
                 records_read_by_ai=s["records_read_by_ai"],
                 ai_proposed_exclusions=s["ai_proposed_exclusions"],
@@ -1311,6 +1343,8 @@ def as_of(
                 revised_after_reveal=s["revised_after_reveal"],
                 conflicts_resolved=s["conflicts_resolved"],
                 rescreens_sent=s["rescreens"]["triggered"],
+                second_opinions=(s["second_opinions"] or {}).get("requested", 0),
+                ai_shown_before=s["ai_shown_before"],
             )
             for s in record.get("stages", [])
         ),

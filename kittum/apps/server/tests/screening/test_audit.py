@@ -137,6 +137,8 @@ def test_sentinels_and_audits_are_invisible_but_count_in_the_gauge(
             "etag",
             "state",
             "own_reveal",
+            "ai_before",  # only in a stage that reveals before; never set here
+            "consult",  # only on a second opinion in mode S; never set here
             "position",
         }
         refs = {

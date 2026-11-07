@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
+from pydantic import Field
 
 from kittum.api import Context  # noqa: TC001 - FastAPI resolves it at runtime
 from kittum.app import (
@@ -20,6 +21,7 @@ from kittum.app import (
 )
 from kittum.core import Id, NotFoundError, Record
 from kittum.protocol import (
+    DocumentationLevel,
     ProtocolDiff,
     ProtocolError,
     ProtocolIssue,
@@ -48,6 +50,9 @@ class ValidationReport(Record):
     issues: tuple[ProtocolIssue, ...] = ()
     warnings: tuple[ProtocolIssue, ...] = ()
     """What may be wrong in a source that compiles, such as a field tag PubMed does not list."""
+    documentation: dict[str, DocumentationLevel] = Field(default_factory=dict)
+    """Each search topic's documentation level, by topic ID: `working` for mode S, `complete`
+    otherwise. Only a `working` topic may show the AI's reading before the decision."""
 
 
 class SourceText(Record):
@@ -92,6 +97,8 @@ class PublishedProtocol(Record):
 
     stored: StoredProtocol
     labels: dict[str, str]
+    documentation: dict[str, DocumentationLevel] = Field(default_factory=dict)
+    """Each search topic's documentation level, by topic ID."""
 
 
 _CORE_LABELS = {
@@ -118,6 +125,10 @@ def _labels(protocol: ReviewProtocol) -> dict[str, str]:
     return {k: profile.label_for(k, language) or v for k, v in _CORE_LABELS.items()} | {
         k: profile.label_for(k, language) or k for k in profile.labels if k not in _CORE_LABELS
     }
+
+
+def _documentation(protocol: ReviewProtocol) -> dict[str, DocumentationLevel]:
+    return {t.id: t.documentation for t in protocol.search_topics}
 
 
 def _invalid(e: ProtocolError) -> HTTPException:
@@ -175,7 +186,10 @@ def validate_protocol(source: ProtocolSource) -> ValidationReport:
     except ProtocolError as e:
         return ValidationReport(ok=False, issues=e.issues)
     return ValidationReport(
-        ok=True, content_hash=version.content_hash, warnings=protocol_warnings(version.protocol)
+        ok=True,
+        content_hash=version.content_hash,
+        warnings=protocol_warnings(version.protocol),
+        documentation=_documentation(version.protocol),
     )
 
 
@@ -227,7 +241,10 @@ def get_published_protocol(project_id: Id, ctx: Context) -> PublishedProtocol:
         stored = latest_published(tx, project_id)
     if stored is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no protocol is published yet")
-    return PublishedProtocol(stored=stored, labels=_labels(stored.version.protocol))
+    protocol = stored.version.protocol
+    return PublishedProtocol(
+        stored=stored, labels=_labels(protocol), documentation=_documentation(protocol)
+    )
 
 
 @router.get("/projects/{project_id}/protocol/source", operation_id="getPublishedProtocolSource")

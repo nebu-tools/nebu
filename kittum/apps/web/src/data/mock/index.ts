@@ -501,6 +501,8 @@ export const makeMockWorkbench = (
               phase:
                 itemOf(FULL_TEXT_ASSIGNMENT).state === "awaiting_final" ? "final" : "provisional",
               reveal: itemOf(FULL_TEXT_ASSIGNMENT).reveal,
+              ai: null,
+              second_opinion: null,
               report,
               document: layerJson.document,
               layer,

@@ -14,6 +14,7 @@ from kittum.screening.types import InvalidDecision, QuoteSpan, Reveal
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
+    from kittum.core import Id
     from kittum.judge import CriterionVerdict, Verdict
     from kittum.protocol import Criterion, ReviewProtocol, SearchTopic, Stage
     from kittum.screening.types import (
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
     )
 
 SCREENERS_PER_MODE = {ScreeningMode.M1: 2, ScreeningMode.M2: 1, ScreeningMode.M3: 2}
+"""Screeners of every record. S has a pool of one or more instead, one of them per record."""
 OUTCOMES_AT: dict[str, frozenset[str]] = {
     "title_abstract": frozenset({"include", "exclude", "unclear"}),
     "full_text": frozenset({"include", "exclude", "insufficient_information"}),
@@ -116,6 +118,22 @@ def default_seed(protocol_hash: str, topic_id: str, scope_id: str, stage: Stage)
 def sort_key(seed: str, item_ref: str, reviewer: str = "") -> str:
     """A seeded, reproducible queue key. M3 passes no reviewer, so both humans share the order."""
     return sha256_hex(f"{seed}\x1f{reviewer}\x1f{item_ref}".encode())
+
+
+def split_pool(seed: str, refs: Iterable[str], pool: Sequence[Id]) -> dict[str, Id]:
+    """Mode S: one screener per record. The records in seeded order go to the pool in turn, so
+    the counts differ by one at most and anyone can redraw the split."""
+    ordered = sorted(refs, key=lambda r: sort_key(seed, r))
+    return {ref: pool[n % len(pool)] for n, ref in enumerate(ordered)}
+
+
+def second_opinion_reviewer(seed: str, ref: str, pool: Sequence[Id], first: Id) -> Id | None:
+    """Mode S: who gives the second opinion on a record: another screener of the pool, by a
+    seeded draw per record. None with a pool of one."""
+    others = [p for p in pool if p != first]
+    if not others:
+        return None
+    return min(others, key=lambda p: sort_key(seed, ref, f"second_opinion\x1f{p}"))
 
 
 def seeded_sample(seed: str, salt: str, refs: Iterable[str], k: int) -> list[str]:
@@ -224,8 +242,8 @@ def reveal_for(setting: RevealSetting, decision: Decision, reading: Reading) -> 
     when the human excludes and the model saw no failing criterion, the AI's reading of the
     human's criterion.
     """
-    if setting == "never":
-        return None
+    if setting in ("never", "before"):
+        return None  # `before` showed the reading already
     by_id = {c.criterion_id: c for c in reading.criteria}
     own = by_id.get(decision.reason_criterion_id or "")
     ai_reason = excluding_criterion(reading)
@@ -284,7 +302,7 @@ def rescreen_reason(
 
     M1: the screeners agree on an exclusion while the model, by its own reading, saw no failing
     criterion. M2: the AI disagrees with the lone human (`disagrees`), provisionally or finally
-    (the protocol's census). M3 uses the AI for ranking only. The extra screen is the auditor's;
+    (the protocol's census). M3 uses the AI for ranking only, and S has no auditor. The extra screen is the auditor's;
     if it disagrees with the screeners, that human disagreement goes to adjudication.
     """
     if reading is None:

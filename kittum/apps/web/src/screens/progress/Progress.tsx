@@ -297,6 +297,34 @@ function StageQuality({ view, names }: { view: StageProgressView; names: Map<str
   if (!metrics) return null;
   const rater = (id: string) => (id === "ai" ? "AI judge" : (names.get(id) ?? "Someone"));
   const audit = metrics.audit;
+  if (metrics.documentation === "working") {
+    // Mode S: one screener per record, no audit. Say what happened instead.
+    const asked = metrics.second_opinions;
+    return (
+      <section className="mb-10" aria-label={`${STAGE_LABEL[view.stage.stage]} quality`}>
+        <h2 className="text-sm font-semibold text-ink-2">
+          {STAGE_LABEL[view.stage.stage]}, {view.stage.mode}, reveal{" "}
+          {view.stage.reveal.replace("_", " ")}
+        </h2>
+        <p className="mt-2 max-w-[60ch] text-xs text-ink-3">
+          Working documentation: one person screens each record, with no audit. A second opinion
+          sees the first decision.
+        </p>
+        <dl className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-x-6 gap-y-1.5 text-sm tabular-nums">
+          <dt className="text-ink-2">Second opinions</dt>
+          <dd data-testid={`${view.stage.stage}-second-opinions`}>
+            {asked
+              ? `${asked.requested} asked, ${asked.pending} waiting, ${asked.kept} kept, ${asked.changed} changed`
+              : "None"}
+          </dd>
+          <dt className="text-ink-2">Decisions made with the AI&rsquo;s reading on screen</dt>
+          <dd>{metrics.ai_shown_before ?? 0}</dd>
+          <dt className="text-ink-2">AI readings shown after a decision</dt>
+          <dd>{metrics.reveals_shown}</dd>
+        </dl>
+      </section>
+    );
+  }
   return (
     <section className="mb-10" aria-label={`${STAGE_LABEL[view.stage.stage]} quality`}>
       <h2 className="text-sm font-semibold text-ink-2">

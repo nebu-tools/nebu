@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 from kittum.core import NotFoundError
 from kittum.judge import CriterionVerdict
 from kittum.people import is_lead
-from kittum.protocol import ScreeningMode
+from kittum.protocol import ScreeningMode, documentation_level
 from kittum.screening.rules import Reading
 from kittum.screening.types import (
     CriterionDecision,
@@ -48,7 +48,8 @@ def undecided_items(tx: Tx, project_id: Id, actor_id: Id, item_refs: Sequence[st
         " join screening_stage s on s.id = a.stage_id"
         " join screening_item i on i.stage_id = a.stage_id and i.item_ref = a.item_ref"
         " where s.project_id = %s and a.reviewer_id = %s and a.state <> 'decided'"
-        " and i.withdrawn_event_id is null and a.item_ref = any(%s)",
+        " and i.withdrawn_event_id is null and a.item_ref = any(%s)"
+        " and (a.role <> 'second_opinion' or a.consults_decision_id is not null)",
         (project_id, actor_id, list(item_refs)),
     ).fetchall()
     return {r["item_ref"] for r in rows}
@@ -62,6 +63,7 @@ def stage_info(row: dict[str, Any]) -> StageInfo:
         stage=row["stage"],
         topic_id=row["topic_id"],
         mode=ScreeningMode(row["mode"]),
+        documentation=documentation_level(ScreeningMode(row["mode"])),
         reveal=row["reveal"],
         protocol_hash=row["protocol_hash"],
         judge_config_id=row["judge_config_id"],
@@ -103,6 +105,7 @@ def decision_of(row: dict[str, Any], prefix: str = "") -> Decision:
         evidence_anchor_ids=tuple(row[f"{prefix}evidence_anchor_ids"]),
         comment=row[f"{prefix}comment"],
         criteria=tuple(CriterionDecision.model_validate(c) for c in row[f"{prefix}criteria"]),
+        second_opinion=row[f"{prefix}second_opinion"],
     )
 
 
@@ -131,10 +134,10 @@ _ASSIGNMENT = """
     select a.*, i.kind, i.audit, i.rescreen, i.withdrawn_event_id,
         p.outcome as p_outcome, p.reason_criterion_id as p_reason_criterion_id,
         p.evidence_anchor_ids as p_evidence_anchor_ids, p.comment as p_comment,
-        p.criteria as p_criteria,
+        p.criteria as p_criteria, p.second_opinion as p_second_opinion,
         f.outcome as f_outcome, f.reason_criterion_id as f_reason_criterion_id,
         f.evidence_anchor_ids as f_evidence_anchor_ids, f.comment as f_comment,
-        f.criteria as f_criteria
+        f.criteria as f_criteria, f.second_opinion as f_second_opinion
     from screening_assignment a
     join screening_item i on i.stage_id = a.stage_id and i.item_ref = a.item_ref
     left join screening_decision p on p.id = a.provisional_decision_id

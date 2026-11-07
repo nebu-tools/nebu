@@ -302,6 +302,8 @@ export interface Workbench {
       readonly stage: Stage;
       readonly reveal?: RevealSetting;
       readonly sentinels?: ReadonlyArray<Sentinel>;
+      /** Mode S: the reviewers who share the records; every reviewer if left out. */
+      readonly screeners?: ReadonlyArray<string>;
     },
   ) => Call<StageInfo>;
   /** Whether the hash chain holds; its event counts and where it breaks for the lead only. */
