@@ -1758,7 +1758,7 @@ class Screening:
             changes=tuple(c.row for c in changes),
             unchanged=unchanged,
             refused=tuple(refused),
-            preview_hash=_import_hash(changes),
+            preview_hash=_import_hash(changes, unchanged, refused),
         )
 
     def import_decisions(
@@ -1796,7 +1796,7 @@ class Screening:
 
         def decide(_: Command, st: dict[str, Any]) -> RunDecision[dict[str, Any]]:
             changes, unchanged, refused = _classify_import(reviewer_id, st, rows)
-            if _import_hash(changes) != expected_preview:
+            if _import_hash(changes, unchanged, refused) != expected_preview:
                 raise StaleRevision(
                     "Kittum changed since the preview of this file. Preview it again."
                 )
@@ -2853,9 +2853,16 @@ def _classify_import(
     return changes, unchanged, refused
 
 
-def _import_hash(changes: Sequence[_SheetChange]) -> str:
+def _import_hash(
+    changes: Sequence[_SheetChange], unchanged: int, refused: Sequence[ImportRow]
+) -> str:
+    """Names the whole classification, so an import records what its preview showed."""
     return content_hash(
-        [[str(c.a["id"]), c.decision.model_dump(mode="json")] for c in changes],
+        {
+            "changes": [[str(c.a["id"]), c.decision.model_dump(mode="json")] for c in changes],
+            "unchanged": unchanged,
+            "refused": [[r.row, r.ref, r.refusal] for r in refused],
+        },
         domain="kittum.screening.import_preview",
     )
 

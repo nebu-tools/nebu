@@ -328,7 +328,8 @@ class StageResult(Record):
     bulk_accepted_unverified: int = 0
     """Of those, exclusions on a quote the filter could not verify."""
     spreadsheet_decisions: int = 0
-    """Standing decisions imported from edited working exports (working topics)."""
+    """Standing decisions imported from edited working exports (working topics), with those a
+    reveal held for a final decision in Kittum."""
     spreadsheet_imports: int = 0
     spreadsheet_uploaders: int = 0
     """People who imported them. Kittum cannot know who decided each row of a file."""
@@ -867,7 +868,13 @@ def _stage(
         else opened_version
     )
     standing = [d for i in results for d in i.final if d.origin == "bulk"]
-    sheet = [d for i in results for d in i.final if d.origin == "spreadsheet"]
+    # A spreadsheet decision that revealed the AI's reading is confirmed by a final decision in
+    # Kittum; it still came from the spreadsheet.
+    sheet = [
+        d
+        for a, d in provisional.items()
+        if d is not None and d.origin == "spreadsheet" and final.get(a) is not None
+    ]
     # Reveals and revisions over every assignment, the auditor's and sentinels' included.
     reveals = [d for d in provisional.values() if d is not None and d.revealed]
     revised = [

@@ -159,6 +159,8 @@ export function ImportDecisions({
           className="absolute top-full right-0 z-20 mt-px flex max-h-[60vh] w-[min(760px,100%)] flex-col border border-rule-strong bg-sheet text-xs shadow-[0_8px_24px_rgb(0_0_0/0.16)]"
           aria-label="Import decisions"
           data-testid="import-panel"
+          // The table's keys pause while the panel is open, so Enter presses its buttons.
+          data-popup-open=""
         >
           <header className="flex items-baseline gap-2 border-b border-rule px-3 py-2">
             <span className="font-semibold text-ink">{file.name}</span>

@@ -27,9 +27,9 @@ from kittum.screening import (
     InvalidDecision,
     StaleRevision,
 )
-from tests.screening.support import SCOPE, STAGE, recorded_backend
+from tests.screening.support import SCOPE, STAGE, recorded_backend, timing
 from tests.screening.test_instructions import events, item, ref, row, small_world, table
-from tests.screening.test_targeted import decide, open_s, queue
+from tests.screening.test_targeted import decide, open_s, queue, undo
 
 if TYPE_CHECKING:
     from kittum.core import Id
@@ -185,6 +185,16 @@ def test_a_screener_brings_decisions_back_from_an_edited_export(database: Databa
             "select 1 from screening_batch where stage_id = %s", (stage.stage_id,)
         ).fetchall()
     assert not recorded  # a preview records nothing
+
+    # A takes back the gum trial in Kittum: its row is now stale, not decided. The decisions to
+    # make are the same, but the preview no longer says what an import would do.
+    gum = row(table(world, a), "gum")
+    undo(world, a, gum, gum.etag)  # type: ignore[arg-type]
+    with pytest.raises(StaleRevision, match="Preview it again"):
+        apply(world, a, stage.stage_id, edited, p.preview_hash, new_id())
+    p = preview(world, a, stage.stage_id, edited).preview
+    assert len(p.changes) == 2
+    assert next(x.refusal for x in p.refused if x.ref == r("gum")) == "stale"
 
     command = new_id()
     result = apply(world, a, stage.stage_id, edited, p.preview_hash, command)
@@ -356,6 +366,22 @@ def test_the_routes_preview_and_import_a_file(database: Database, tmp_path: Any)
         assert (done.json()["decided"], done.json()["awaiting_final"]) == (1, 1)
         colitis = next(x for x in table(world, a).rows if x.ref == row(mine, "colitis").ref)
         assert colitis.decisions[0].state == "awaiting_final" and colitis.reveal is not None
+        # A keeps the decision after reading the AI's: it still came from the spreadsheet.
+        with world.db.transaction() as tx:
+            world.screening.decide(
+                tx,
+                command_id=new_id(),
+                project_id=world.project_id,
+                reviewer_id=a,
+                assignment_id=colitis.assignment_id,  # type: ignore[arg-type]
+                decision=Decision(outcome="include"),
+                phase="final",
+                expected_etag=colitis.etag,  # type: ignore[arg-type]
+                timing=timing(0, revealed=True),
+            )
+            review = load_review(tx, world.project_id, store=world.artifacts)
+        (result_stage,) = review.stages
+        assert result_stage.spreadsheet_decisions == 2
         again = client.post(
             f"{base}/import", json={**apply_body, "command_id": str(new_id())}, headers=headers
         )
