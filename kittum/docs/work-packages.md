@@ -143,6 +143,9 @@ Done:
   `POST .../{version_id}/publish`, `GET .../protocol-versions`, `GET .../{version_id}`.
 - Examples: `examples/protocols/capivasertib.yaml` (G-BA D-1110, `gba_amnog`) and
   `examples/protocols/nicotine-replacement.yaml` (no profile).
+- A criterion's optional `short_label` names it on the screening strip (branch
+  `kittum/screening-table`). Left out of the protocol, and so of its hash, when empty, and left
+  out of the protocol assistant's answer schema like `extensions`, so the lead writes it.
 
 Left:
 
@@ -573,6 +576,20 @@ Module `kittum.screening`. Needs: `protocol`, `corpus`, `judge`, `ledger`, `runs
 - Tests (`tests/screening/`) run the nicotine replacement example, the recorded PubMed search and
   a CENTRAL export, the corpus, and the judge on `RecordedBackend`, against Postgres, through the
   worker and the API.
+- The screening table (branch `kittum/screening-table`): `screening_table` lists a stage as rows
+  (`GET .../screening/table`). A screener or auditor reads their own assignments through the SQL
+  function `screening_reviewer_table` (migration `20261107010000_screening_reviewer_table.sql`):
+  decided ones too, in queue order with each row's queue place, their own decision, and the AI
+  reading only where their own provisional decision revealed it; no other reviewer's rows, no
+  sentinel or audit flags, and no item reference, since a full-text sentinel's reference names
+  it as one (rows are named by assignment ID). The methods lead (`sees_lead_data`) gets every
+  item with each screener's and the auditor's decision, the outcome and its reason criterion, the
+  AI's verified reading, and the flags; an adjudicator who screens nothing gets 404.
+  `RecordFacts` and `QueueRecord` carry the record's authors, filled from the corpus.
+  `tests/screening/test_table.py` checks over HTTP that a reviewer's table matches their queue,
+  holds nothing of the other reviewer (their comment, their ID) or of a sentinel, shows a reveal
+  only after the reviewer's own decision, and that a row decided from the table follows the
+  queue's rules.
 
 Left open:
 
@@ -602,6 +619,9 @@ Left open:
 - The auditor's queue grows when an extra screen arrives, and the share of extra screens among
   the audit samples sets how much an item there hints that the AI disagreed. A larger audit
   percentage dilutes it; the rate is not tuned against the expected number of disagreements.
+- The table lists what the queue holds: records the AI judge has not read yet are not in it.
+  When a topic's queue stops waiting for the judge (direction decision 4), change
+  `screening_reviewer_table` with `screening_reviewer_queue`.
 - The judge's filter confirms few exclusions on the example protocols (wordings with "without", or
   intervention keywords without a negation, fail the polarity check), so the verified reading
   mostly includes.
@@ -825,6 +845,18 @@ decides. Migration `20261029020000_report_artifacts.sql`.
   checks of them); `PairAgreement.of` and its 2x2 cells in `screening`; `judge.USER_TEMPLATE`;
   `kittum verify` imports `kittum.report` so its checks run; `judge.VERIFIER_LIMITS`; `ALLOWED` lets `report` import `judge` and
   `profiles` import `report`.
+- The working export (branch `kittum/screening-table`, `kittum.report.working`,
+  `POST .../reports/working-export`): an XLSX of a stage, or of the rows and columns of a table
+  view, built with openpyxl from `screening_table`, so it obeys the table's blinding and a
+  screener or auditor may export their own rows. Sheets: About ("Working export. Not the audit
+  bundle.", who, when, the ledger event, the protocol hash, the view's filters and sort), Records
+  (stable refs: assignment IDs for a reviewer, corpus report IDs for the lead; reasons as
+  criterion IDs), and Criteria. A view names its rows and columns; the server reads the rows
+  itself and refuses a row or column the caller's table lacks (400). Record text never becomes a
+  formula, and characters XLSX cannot hold are dropped. Stored by hash in `report_artifact` under
+  `working_export` with a `report.working_exported` event, so the lead can download any export
+  again and the audit trail names it. Tests: `tests/screening/test_table.py` (the reviewer's and
+  the lead's exports, a view, refusals, the event) and `tests/report/test_working_export.py`.
 - Tests (`tests/report/`, `tests/profiles/test_gba_amnog_reports.py`) build the nicotine
   replacement review and the capivasertib dossier through search, corpus, judge, and screening
   against Postgres, and check the PRISMA sums by hand and from data, earlier cutoffs, the RIS
@@ -1147,9 +1179,28 @@ Done (branch `kittum/wp-16-workbench-design`, then `kittum/wp-15-integration`):
   none can be sealed after. `tests/report/test_audit.py` checks the flow when title and abstract
   closed against the lead's status at that moment. `apps/web/e2e/audit.spec.ts` drives the
   screen, tampers through `e2e/tamper.ts`, and checks a screener is refused everywhere.
+- The screening table (branch `kittum/screening-table`, `g` then `k`): a dense grid of a stage
+  (`src/screens/screening/ScreeningTable.tsx`, `table/`): 24px rows, hairline rules, a sticky
+  header, a ▾ menu per column (sort, "text contains", a checklist of values with a search),
+  shift-click multi-sort, a column chooser, resizable columns, a quick search over title,
+  authors, journal, and abstract that forgives a typo or two in the short fields (`fuzzy.ts`, our
+  own), views saved per reviewer and stage in the browser, and only the rows on screen rendered.
+  The pane shows the selected record's abstract, decision, and the AI reading the reviewer saw.
+  `Enter` opens the record in the queue (`?after=` starts the queue behind the record before it
+  and wraps round once), and `i`, `e` then `1` to `9`, `u`, `Space`, and `Backspace` decide the
+  selected row through the queue's API. **Export view** and **Export stage** download the working
+  spreadsheet. `src/screens/screening/table.test.tsx` drives it on the mock.
+- Less on screen (direction decision 6): the title and abstract strip names criteria by a short
+  label (the protocol's optional `short_label`, or the start of the text), with the full wording
+  on `c` or while choosing an exclusion reason; the record's facts are one muted line; the
+  permanent legend is gone.
 - Browser unit tests in Vitest browser mode on the mock, and screenshots in `apps/web/screenshots/`.
 
 Left:
+
+- The table: bulk decisions (working topics, PR C of the direction), the decision import (PR D),
+  deciding at full text from the table, and saving views on the server (they live in the
+  browser's storage now). Rows load whole; at Embase scale the abstracts are most of the payload.
 
 - The other report targets on the Reports screen, and the Risk of bias (WP-12 has no server
   implementation) and AI-exclusion audit screens; the full-text judge's per-criterion reading in

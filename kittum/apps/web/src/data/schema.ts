@@ -29,6 +29,11 @@ export type Reveal = KittumApi.Reveal;
 export type QuoteSpan = KittumApi.QuoteSpan;
 export type Highlight = KittumApi.Highlight;
 export type ScopeStatus = KittumApi.ScopeStatus;
+/** A reviewer's own rows, or the whole stage for the methods lead; blinded by the server. */
+export type ScreeningTable = KittumApi.ScreeningTable;
+export type TableRow = KittumApi.TableRow;
+export type TableDecision = KittumApi.TableDecision;
+export type ExportView = KittumApi.ExportView;
 export type StageInfo = KittumApi.StageInfo;
 export type ProjectSummary = KittumApi.ProjectSummary;
 export type Member = KittumApi.Member;
@@ -144,6 +149,8 @@ export const Criterion = Schema.Struct({
   text_en: Schema.String,
   /** The German wording, or the English one when the protocol has none. */
   text_de: Schema.String,
+  /** A word or two for the screening strip; the strip shortens the text when there is none. */
+  short_label: Schema.NullOr(Schema.String),
   decidable_at: Schema.Array(Stage),
   /** Scope IDs; a criterion for a whole search topic lists every scope of the topic. */
   applies_to: Schema.Array(Schema.String),

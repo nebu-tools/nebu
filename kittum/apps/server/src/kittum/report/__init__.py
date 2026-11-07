@@ -14,6 +14,12 @@ through a cutoff (`load_review`). The core targets are:
 - `extraction`: the accepted extraction values as CSV and JSON (`kittum.report.extracted`);
 - `bundle`: the handover bundle, sealed with `seal_bundle` rather than rendered.
 
+The working export (`working_export`) is not a report target: an XLSX of one stage, or of a
+reviewer's table view, for working in a spreadsheet. It follows the screening table's blinding,
+so a reviewer may export their own rows. It is stored by hash in `report_artifact` under
+`working_export` with a `report.working_exported` event (`kittum.report.working`), so the bundle
+records that it was made; no report reads it.
+
 The audit trail answers an assessor from the same ledger: `trace` lists one record's events from
 search to extraction, each with the model calls behind an AI step (`model_calls`), `events` pages through the ledger, `milestones` names cutoffs, and `as_of`
 computes the flows and the disclosure at a cutoff without storing a render.
@@ -111,6 +117,15 @@ from kittum.report.review import (
     load_review,
 )
 from kittum.report.ris_format import one_line, ris_dumps, ris_entry
+from kittum.report.working import (
+    COVER_TEXT,
+    WORKING_EXPORT,
+    WORKING_EXPORTED_EVENT,
+    XLSX,
+    ExportView,
+    WorkingExport,
+    working_export,
+)
 from kittum.screening import sees_lead_data
 
 if TYPE_CHECKING:
@@ -433,9 +448,13 @@ register_bundle_check(check_bundle)
 
 __all__ = [
     "CORE_TARGETS",
+    "COVER_TEXT",
     "DOSSIER_DIR",
     "RENDERED_EVENT",
     "REPORTS_DIR",
+    "WORKING_EXPORT",
+    "WORKING_EXPORTED_EVENT",
+    "XLSX",
     "Actor",
     "Adjudication",
     "AiInvolvement",
@@ -449,6 +468,7 @@ __all__ = [
     "Conflict",
     "CoreTarget",
     "EventPage",
+    "ExportView",
     "ExtractedValue",
     "Fact",
     "HumanDecision",
@@ -478,6 +498,7 @@ __all__ = [
     "Target",
     "TracedEvent",
     "TracedOccurrence",
+    "WorkingExport",
     "as_of",
     "bundle_reports",
     "calls_of",
@@ -513,4 +534,5 @@ __all__ = [
     "targets",
     "text_file",
     "trace",
+    "working_export",
 ]

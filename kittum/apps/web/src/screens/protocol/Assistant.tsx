@@ -1660,6 +1660,19 @@ function FormView({
                             : "What makes a record go out, in one sentence",
                         onChange: (v) => editCriterion((x) => (x.text = localized(x.text, v))),
                       })}
+                      {field({
+                        id: `${c.id}-short`,
+                        label: "Short label on the screening strip",
+                        part: `${part}.short_label`,
+                        at: `${cat}.short_label`,
+                        value: c.short_label ?? "",
+                        placeholder: "A word or two, such as Adults or RCT",
+                        onChange: (v) =>
+                          editCriterion((x) => {
+                            if (v.trim()) x.short_label = v;
+                            else delete x.short_label;
+                          }),
+                      })}
                     </li>
                   );
                 })}

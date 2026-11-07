@@ -46,10 +46,12 @@ from kittum.screening import (
     RevealSetting,
     ScopeStatus,
     Screening,
+    ScreeningTable,
     Sentinel,
     StageInfo,
     StaleRevision,
     UndoResult,
+    screening_table,
 )
 
 if TYPE_CHECKING:
@@ -254,6 +256,23 @@ def queue(
         return screening.queue(
             tx, project_id, reviewer, scope_id, stage, after=after, limit=limit, topic_id=topic_id
         )
+
+
+@router.get("/table", operation_id="getScreeningTable")
+def table(
+    project_id: Id,
+    reviewer: Reviewer,
+    ctx: Context,
+    scope_id: str,
+    stage: Stage,
+    topic_id: TopicId = None,
+) -> ScreeningTable:
+    """The stage as rows. A screener or auditor gets their own assignments in queue order, decided
+    ones included, with no AI reading their own decision did not reveal and no sentinel or audit
+    flags. The methods lead gets every item with every decision, the outcome, and the AI's
+    reading. Anyone else is not assigned (404)."""
+    with _errors(), ctx.db.transaction() as tx:
+        return screening_table(tx, project_id, reviewer, scope_id, stage, topic_id=topic_id)
 
 
 @router.post("/assignments/{assignment_id}/decide", operation_id="decideScreeningAssignment")

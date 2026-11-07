@@ -22,6 +22,7 @@ import type {
   Reveal,
   RevealSetting,
   ScopeStatus,
+  ScreeningTable,
   Stage,
 } from "../schema.ts";
 import { WorkbenchError } from "../workbench.ts";
@@ -475,6 +476,46 @@ export const makeMockWorkbench = (
         state.set(assignmentId, { ...current, etag: next, state: "pending", final: null });
         return { etag: next };
       }),
+
+    screeningTable: ({ scopeId, stage }) =>
+      call("other", "screeningTable", { scopeId, stage }, (): ScreeningTable => ({
+        stage_id: "stage-ta",
+        scope_id: scopeId,
+        stage,
+        view: "reviewer",
+        rows:
+          stage === "title_abstract" && scopeId === SCOPE_A
+            ? RECORDS.map((r) => {
+                const item = itemOf(r.item.assignment_id);
+                return {
+                  ref: r.item.assignment_id,
+                  assignment_id: r.item.assignment_id,
+                  etag: item.etag,
+                  position: r.order + 1,
+                  title: r.item.title,
+                  abstract: r.item.text,
+                  authors: r.item.record.authors ?? [],
+                  journal: r.item.record.journal,
+                  year: r.item.record.year,
+                  publication_types: r.item.record.publication_types,
+                  pmid: r.item.record.pmid,
+                  doi: r.item.record.doi,
+                  registry_ids: r.item.record.registry_ids,
+                  decisions: [
+                    {
+                      state: item.state === "withdrawn" ? "decided" : item.state,
+                      outcome: item.final?.outcome ?? null,
+                      reason_criterion_id: item.final?.reason_criterion_id ?? null,
+                      comment: item.final?.comment ?? null,
+                    },
+                  ],
+                  // Only what the reviewer's own provisional decision revealed.
+                  reveal: item.revealed ? item.reveal : null,
+                };
+              })
+            : [],
+      })),
+    workingExport: unavailable,
 
     status: ({ scopeId, stage }) =>
       call("other", "status", { scopeId, stage }, (): ScopeStatus => {

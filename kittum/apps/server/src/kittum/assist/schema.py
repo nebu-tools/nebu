@@ -8,7 +8,8 @@ protocol it must compile to.
 - Every object has `additionalProperties: false`; no `default`, `title`, or sibling of `$ref`.
 - A mapping (`LocalizedText`, `{en: ..., de: ...}`) has no fixed keys, which strict decoding
   cannot express, so it becomes a list of `{key, value}` pairs.
-- `extensions` are left out: a profile's typed fields are the lead's to write.
+- `extensions` are left out: a profile's typed fields are the lead's to write. So is a
+  criterion's `short_label`, a display aid for the screening strip (and recorded drafts replay).
 
 `from_strict` turns an answer back into the protocol's own shape: pairs into mappings, and a null
 for a property the model may leave out into no property, so its default applies. A key given twice
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 _DROP = frozenset({"default", "title"})
-OMITTED = frozenset({"extensions"})
+OMITTED = frozenset({"extensions", "short_label"})
 
 
 def strict_schema(model: type[BaseModel]) -> dict[str, Any]:

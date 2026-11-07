@@ -29,6 +29,7 @@ import type {
   ExampleProtocol,
   ExtractionReview,
   ExtractionRun,
+  ExportView,
   ExtractionSchema,
   FullText,
   FullTextAssignment,
@@ -65,6 +66,7 @@ import type {
   Role,
   RunListing,
   ScopeStatus,
+  ScreeningTable,
   SealedBundle,
   SearchExecution,
   SearchPlan,
@@ -235,6 +237,14 @@ export interface Workbench {
   ) => Call<{ readonly etag: string }>;
 
   readonly status: (request: StageRef) => Call<ScopeStatus>;
+  /** The stage as rows: the reviewer's own assignments, decided ones included, or every record
+   * for the methods lead. The server leaves out what the caller may not see. */
+  readonly screeningTable: (request: StageRef) => Call<ScreeningTable>;
+  /** The working spreadsheet (XLSX) of the stage, or of the rows and columns in view, as the
+   * caller may see it. The server stores it and records it in the ledger. */
+  readonly workingExport: (
+    request: StageRef & { readonly view: ExportView | null },
+  ) => Call<Uint8Array>;
 
   /** The reviewer's next full text in the scope, or null when none is waiting. */
   readonly fullText: (

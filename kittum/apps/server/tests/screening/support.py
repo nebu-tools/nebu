@@ -238,6 +238,7 @@ def screening_records(
                     year=best.year,
                     publication_types=best.publication_types,
                     registry_ids=best.registry_ids,
+                    authors=best.authors,
                 ),
             )
         )

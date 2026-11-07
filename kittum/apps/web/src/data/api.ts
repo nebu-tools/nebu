@@ -205,6 +205,7 @@ const toProtocol = (published: KittumApi.PublishedProtocol): ProtocolVersion => 
             polarity: c.polarity ?? "include",
             text_en: c.text["en"] ?? text(c.text),
             text_de: c.text["de"] ?? c.text["en"] ?? text(c.text),
+            short_label: c.short_label ?? null,
             decidable_at: c.decidable_at,
             // A criterion for the whole topic applies to each of its scopes.
             applies_to: c.applies_to.flatMap((a) =>
@@ -388,6 +389,21 @@ export const makeApiWorkbench = (): Workbench => ({
       api.undoScreeningDecision(projectId, assignmentId, {
         params: reviewer(as),
         payload: { command_id: commandId(), expected_etag: expectedEtag },
+      }),
+    ),
+
+  screeningTable: ({ projectId, as, scopeId, stage }) =>
+    call((api) =>
+      api.getScreeningTable(projectId, {
+        params: { scope_id: scopeId, stage, ...reviewer(as) },
+      }),
+    ),
+
+  workingExport: ({ projectId, as, scopeId, stage, view }) =>
+    call((api) =>
+      api.exportWorkingSpreadsheet(projectId, {
+        params: reviewer(as),
+        payload: { scope_id: scopeId, stage, view },
       }),
     ),
 

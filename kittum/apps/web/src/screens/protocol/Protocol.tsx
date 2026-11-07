@@ -256,13 +256,13 @@ function Published({ notice, lead }: { notice: string | null; lead: boolean }) {
           <dd>{review.version_label}</dd>
           <dt className="text-ink-3">Published</dt>
           <dd>{date(protocol.published_at)}</dd>
-          <dt className="text-ink-3">Content hash</dt>
-          <dd title={protocol.content_hash} className="text-ink-2">
-            {protocol.content_hash.slice(0, 16)}
-          </dd>
           <dt className="text-ink-3">Profile</dt>
           <dd>{profile.id ?? "None. Kittum uses its own words and rules."}</dd>
         </dl>
+        <details className="mt-1 text-sm">
+          <summary className="cursor-pointer text-ink-3 hover:text-ink-2">Content hash</summary>
+          <p className="mt-1 break-all text-ink-2">{protocol.content_hash}</p>
+        </details>
 
         <Section title={`${labels.scope}s`}>
           <ol className="grid gap-5">
