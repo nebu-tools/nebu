@@ -25,6 +25,7 @@ import { Route as PProjectIdStudiesRouteImport } from './routes/p/$projectId/stu
 import { Route as PProjectIdExtractionIndexRouteImport } from './routes/p/$projectId/extraction/index'
 import { Route as PProjectIdExtractionRunIdRouteImport } from './routes/p/$projectId/extraction/$runId'
 import { Route as PProjectIdScreeningFullTextRouteImport } from './routes/p/$projectId/screening/full-text'
+import { Route as PProjectIdScreeningTableRouteImport } from './routes/p/$projectId/screening/table'
 import { Route as PProjectIdScreeningTitleAbstractRouteImport } from './routes/p/$projectId/screening/title-abstract'
 
 const IndexRoute = IndexRouteImport.update({
@@ -110,6 +111,12 @@ const PProjectIdScreeningFullTextRoute =
     path: '/screening/full-text',
     getParentRoute: () => PProjectIdRouteRoute,
   } as any)
+const PProjectIdScreeningTableRoute =
+  PProjectIdScreeningTableRouteImport.update({
+    id: '/screening/table',
+    path: '/screening/table',
+    getParentRoute: () => PProjectIdRouteRoute,
+  } as any)
 const PProjectIdScreeningTitleAbstractRoute =
   PProjectIdScreeningTitleAbstractRouteImport.update({
     id: '/screening/title-abstract',
@@ -133,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/p/$projectId/': typeof PProjectIdIndexRoute
   '/p/$projectId/extraction/$runId': typeof PProjectIdExtractionRunIdRoute
   '/p/$projectId/screening/full-text': typeof PProjectIdScreeningFullTextRoute
+  '/p/$projectId/screening/table': typeof PProjectIdScreeningTableRoute
   '/p/$projectId/screening/title-abstract': typeof PProjectIdScreeningTitleAbstractRoute
   '/p/$projectId/extraction/': typeof PProjectIdExtractionIndexRoute
 }
@@ -151,6 +159,7 @@ export interface FileRoutesByTo {
   '/p/$projectId': typeof PProjectIdIndexRoute
   '/p/$projectId/extraction/$runId': typeof PProjectIdExtractionRunIdRoute
   '/p/$projectId/screening/full-text': typeof PProjectIdScreeningFullTextRoute
+  '/p/$projectId/screening/table': typeof PProjectIdScreeningTableRoute
   '/p/$projectId/screening/title-abstract': typeof PProjectIdScreeningTitleAbstractRoute
   '/p/$projectId/extraction': typeof PProjectIdExtractionIndexRoute
 }
@@ -171,6 +180,7 @@ export interface FileRoutesById {
   '/p/$projectId/': typeof PProjectIdIndexRoute
   '/p/$projectId/extraction/$runId': typeof PProjectIdExtractionRunIdRoute
   '/p/$projectId/screening/full-text': typeof PProjectIdScreeningFullTextRoute
+  '/p/$projectId/screening/table': typeof PProjectIdScreeningTableRoute
   '/p/$projectId/screening/title-abstract': typeof PProjectIdScreeningTitleAbstractRoute
   '/p/$projectId/extraction/': typeof PProjectIdExtractionIndexRoute
 }
@@ -192,6 +202,7 @@ export interface FileRouteTypes {
     | '/p/$projectId/'
     | '/p/$projectId/extraction/$runId'
     | '/p/$projectId/screening/full-text'
+    | '/p/$projectId/screening/table'
     | '/p/$projectId/screening/title-abstract'
     | '/p/$projectId/extraction/'
   fileRoutesByTo: FileRoutesByTo
@@ -210,6 +221,7 @@ export interface FileRouteTypes {
     | '/p/$projectId'
     | '/p/$projectId/extraction/$runId'
     | '/p/$projectId/screening/full-text'
+    | '/p/$projectId/screening/table'
     | '/p/$projectId/screening/title-abstract'
     | '/p/$projectId/extraction'
   id:
@@ -229,6 +241,7 @@ export interface FileRouteTypes {
     | '/p/$projectId/'
     | '/p/$projectId/extraction/$runId'
     | '/p/$projectId/screening/full-text'
+    | '/p/$projectId/screening/table'
     | '/p/$projectId/screening/title-abstract'
     | '/p/$projectId/extraction/'
   fileRoutesById: FileRoutesById
@@ -352,6 +365,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PProjectIdScreeningFullTextRouteImport
       parentRoute: typeof PProjectIdRouteRoute
     }
+    '/p/$projectId/screening/table': {
+      id: '/p/$projectId/screening/table'
+      path: '/screening/table'
+      fullPath: '/p/$projectId/screening/table'
+      preLoaderRoute: typeof PProjectIdScreeningTableRouteImport
+      parentRoute: typeof PProjectIdRouteRoute
+    }
     '/p/$projectId/screening/title-abstract': {
       id: '/p/$projectId/screening/title-abstract'
       path: '/screening/title-abstract'
@@ -376,6 +396,7 @@ interface PProjectIdRouteRouteChildren {
   PProjectIdIndexRoute: typeof PProjectIdIndexRoute
   PProjectIdExtractionRunIdRoute: typeof PProjectIdExtractionRunIdRoute
   PProjectIdScreeningFullTextRoute: typeof PProjectIdScreeningFullTextRoute
+  PProjectIdScreeningTableRoute: typeof PProjectIdScreeningTableRoute
   PProjectIdScreeningTitleAbstractRoute: typeof PProjectIdScreeningTitleAbstractRoute
   PProjectIdExtractionIndexRoute: typeof PProjectIdExtractionIndexRoute
 }
@@ -394,6 +415,7 @@ const PProjectIdRouteRouteChildren: PProjectIdRouteRouteChildren = {
   PProjectIdIndexRoute: PProjectIdIndexRoute,
   PProjectIdExtractionRunIdRoute: PProjectIdExtractionRunIdRoute,
   PProjectIdScreeningFullTextRoute: PProjectIdScreeningFullTextRoute,
+  PProjectIdScreeningTableRoute: PProjectIdScreeningTableRoute,
   PProjectIdScreeningTitleAbstractRoute: PProjectIdScreeningTitleAbstractRoute,
   PProjectIdExtractionIndexRoute: PProjectIdExtractionIndexRoute,
 }

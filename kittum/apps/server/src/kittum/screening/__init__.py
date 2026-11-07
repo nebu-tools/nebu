@@ -43,6 +43,9 @@ audit flags, or anything of another reviewer. `status` shows screeners and the a
 own counts, adjudicators their pending adjudications, and the methods lead the whole stage:
 conflicts, the extra screens and their outcomes, kappa and PABAK for human pairs and human-AI
 pairs, the audit gauge (sentinel accuracy and the elusion estimate), and the M3 stop test.
+`screening_table` lists a stage as rows for the workbench's table and the working export, under
+the same rule: a reviewer's own assignments through `screening_reviewer_table`, or the whole
+stage for the methods lead.
 
 Mode S (working documentation) is lighter: each record goes to one screener of a pool, split
 evenly in the seeded order. A screener who is unsure decides with `second_opinion`; another
@@ -82,6 +85,7 @@ from kittum.screening.service import (
     Screening,
 )
 from kittum.screening.store import sees_lead_data, undecided_items
+from kittum.screening.table import ScreeningTable, TableDecision, TableRow, screening_table
 from kittum.screening.types import (
     AdjudicationItem,
     AdjudicationResult,
@@ -167,6 +171,7 @@ __all__ = [
     "ScopeStatus",
     "Screening",
     "ScreeningRecord",
+    "ScreeningTable",
     "SecondOpinionContext",
     "SecondOpinionGauge",
     "Sentinel",
@@ -175,11 +180,14 @@ __all__ = [
     "StageSpec",
     "StaleRevision",
     "StopStatus",
+    "TableDecision",
+    "TableRow",
     "UndoResult",
     "WithdrawReason",
     "WithdrawResult",
     "criteria_for",
     "judge_handler",
+    "screening_table",
     "sees_lead_data",
     "stop_status",
     "topic_for",

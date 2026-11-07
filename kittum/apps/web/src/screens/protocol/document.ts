@@ -23,6 +23,8 @@ export interface Criterion {
   readonly text: Localized;
   readonly decidable_at: ReadonlyArray<string>;
   readonly applies_to: ReadonlyArray<string>;
+  /** A word or two for the screening strip. */
+  readonly short_label?: string | null;
 }
 export interface Source {
   readonly id: string;

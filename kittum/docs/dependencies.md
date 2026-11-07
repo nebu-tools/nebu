@@ -80,6 +80,7 @@ retention, and set and lift a legal hold.
 | dbmate | MIT | 16 | | Plain SQL migrations | **Use**. The SQLAlchemy ORM would get in the way of hash-chained writes. |
 | scipy | BSD-3-Clause | 9 | | Clopper-Pearson through `binomtest(...).proportion_ci("exact")`; `hypergeom` for the stop test | **Use**. Capture-recapture and split-conformal thresholds are about 50 lines each, written in `stats`. |
 | rapidfuzz | MIT | 6 | | Quote verification and dedupe | **Use** |
+| openpyxl 3.1 | MIT | 0 (3.1.5, June 2024) | | Writes the working export (XLSX) of a stage or a table view (`kittum.report.working`). Already in the environment through Janus. Mature and small; Kittum only writes plain sheets. | **Use** |
 | pdf-inspector 1.25.2 (Firecrawl) | MIT | Weekly (1.25.2 on 28.09.2026) | | Page triage in `documents`: which pages need OCR and which have garbled text. Rust with PyO3 bindings and prebuilt abi3 wheels; Kittum calls only `process_pdf_bytes`, which never loads its OCR runtime or downloads models. See [Document and model tools](document-tools.md). | **Use** |
 | rfc8785 (Trail of Bits) | Apache-2.0 | 0 (0.1.4, September 2024) | 7 | Small and finished. Pin it and test against the RFC vectors. | **Use** |
 | rfc3161-client (Trail of Bits) | Apache-2.0 | 4 | 33 | | **Use** |
@@ -107,9 +108,10 @@ moving it over is a separate change.
 | React 19.3 | MIT | 31 | about 140 | | **Use** |
 | TanStack Router | MIT | 100 | about 280 | Typed routes | **Use** |
 | Effect 4 with Effect Schema and `@effect/atom-react` | MIT | 100 | about 1,900 | Contracts, typed client, and client state. `@effect/openapi-generator` builds the client from FastAPI's OpenAPI. | **Use** |
-| Base UI 1.9 (`@base-ui/react` 1.9.0) | MIT | 15 | about 450 | Accessible unstyled components, styled with Tailwind. The workbench uses Menu (project switcher) and Dialog (keys). | **Use** |
+| Base UI 1.9 (`@base-ui/react` 1.9.0) | MIT | 15 | about 450 | Accessible unstyled components, styled with Tailwind. The workbench uses Menu (project switcher), Dialog (keys), and Popover (the screening table's column menus, column chooser, and saved views). | **Use** |
 | Tailwind 4.3 | MIT | 12 | 64 | | **Use** |
-| Legend List 3.7 (`@legendapp/list` 3.7.0) | MIT | 32 | about 220 | Virtualized lists for screening queues and page strips. The PDF viewer virtualizes pages with it (`@legendapp/list/react`). | **Use** |
+| Legend List 3.7 (`@legendapp/list` 3.7.0) | MIT | 32 | about 220 | Virtualized lists for screening queues and page strips. The PDF viewer virtualizes pages with it (`@legendapp/list/react`). The screening table does not: its rows have one fixed height and a horizontal scroll with a sticky header, which a few lines of windowing handle. | **Use** |
+| TanStack Table | MIT | | | Considered for the screening table's state. Not used: filters, multi-sort, widths, and the quick search are about 150 lines of plain functions (`screening/table/grid.ts`), and the look is Kittum's own. | **Not used** |
 | Vitest browser mode with Playwright (`@vitest/browser-playwright` 5.0.5, MIT; `playwright` 1.64.1, Apache-2.0) | MIT and Apache-2.0 | 14 | about 690 | Component and end-to-end tests. The workbench flow tests run in headless Chromium through Vite+; a pnpm override keeps one Vite. The same `playwright` takes the screenshots. | **Use** |
 | `@playwright/test` 1.64.1 | Apache-2.0 | 14 | about 690 | The end-to-end journey (`apps/web/e2e/`) against a started server, worker, and Postgres; the same release as `playwright` | **Use** |
 | IBM Plex Sans variable (`@fontsource-variable/ibm-plex-sans` 5.3.0) | OFL-1.1 | 1 | | The workbench face, as in Janus. The variable font carries the weight axis and the width axis down to 75%, so dense strips and tables use the condensed width of the same family. | **Use** |

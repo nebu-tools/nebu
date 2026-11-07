@@ -170,6 +170,9 @@ class Criterion(Record):
     text: LocalizedText
     decidable_at: tuple[Stage, ...] = Field(min_length=1)
     applies_to: tuple[str, ...] = Field(min_length=1)  # scope IDs
+    short_label: Text | None = Field(default=None, exclude_if=lambda v: v is None)
+    """A word or two for the screening strip ("Adults", "RCT"); the full text stays on demand.
+    Left out of the protocol (and its hash) when empty."""
     keywords: tuple[Text, ...] = ()  # an exclusion quote must contain one of them, if any
     positive_examples: tuple[str, ...] = ()
     negative_examples: tuple[str, ...] = ()

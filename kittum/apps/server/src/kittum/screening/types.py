@@ -64,6 +64,7 @@ class RecordFacts(Record):
     year: int | None = None
     publication_types: tuple[str, ...] = ()
     registry_ids: tuple[str, ...] = ()
+    authors: tuple[str, ...] = ()
 
 
 class ScreeningRecord(Record):
@@ -192,6 +193,7 @@ class QueueRecord(Record):
     year: int | None
     publication_types: tuple[str, ...]
     registry_ids: tuple[str, ...]
+    authors: tuple[str, ...] = ()
     title_highlights: tuple[Highlight, ...]
     sections: tuple[tuple[str, int, int], ...]
     """Structured-abstract labels as (label, start, end) code-point ranges of `text`."""

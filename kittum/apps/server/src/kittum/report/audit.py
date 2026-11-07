@@ -802,6 +802,14 @@ def _describe(
         kind = "report"
         summary = f"{who} rendered the {p.get('target')} report at event {p.get('cutoff_seq')}"
         artifacts.append(names.artifact(p.get("index_hash"), "List of rendered files"))
+    elif t == "report.working_exported":
+        kind = "report"
+        rows = p.get("rows")
+        summary = (
+            f"{who} exported a working spreadsheet of {rows} rows"
+            f" ({'a table view' if p.get('kind') == 'view' else 'the whole stage'})"
+        )
+        artifacts.append(names.artifact(p.get("sha256"), "Working spreadsheet"))
     elif t == "ledger.bundle_sealed":
         kind = "ledger"
         summary = f"{who} sealed the handover bundle at event {p.get('cutoff_seq')}"

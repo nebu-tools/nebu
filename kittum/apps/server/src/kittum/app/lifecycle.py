@@ -389,6 +389,8 @@ def corpus_records(tx: Tx, project_id: Id) -> list[ScreeningRecord]:
                     registry_ids=tuple(
                         dict.fromkeys(i for r in report.records for i in r.registry_ids)
                     ),
+                    authors=best.authors
+                    or next((r.authors for r in report.records if r.authors), ()),
                 ),
             )
         )

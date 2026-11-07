@@ -39,6 +39,7 @@ type Section =
   | "retrieval"
   | "screening/title-abstract"
   | "screening/full-text"
+  | "screening/table"
   | "extraction"
   | "risk-of-bias"
   | "progress"
@@ -65,6 +66,7 @@ const NAV: ReadonlyArray<{
     group: "Screening",
   },
   { section: "screening/full-text", label: "Full text", chord: "f", group: "Screening" },
+  { section: "screening/table", label: "Table", chord: "k", group: "Screening" },
   { section: "adjudication", label: "Adjudication", chord: "a", group: "Screening" },
   { section: "extraction", label: "Extraction", chord: "x" },
   { section: "risk-of-bias", label: "Risk of bias", chord: "b" },
@@ -139,12 +141,12 @@ function Layout({ state, onSwitch }: { state: ProjectState; onSwitch: () => void
               <span key={item.section} className="flex items-center">
                 {/* A rule on each side of a group, the screening stages. */}
                 {index > 0 && nav[index - 1]?.group !== item.group ? (
-                  <span aria-hidden="true" className="mx-1.5 h-4 w-px self-center bg-rule-strong" />
+                  <span aria-hidden="true" className="mx-1 h-4 w-px self-center bg-rule-strong" />
                 ) : null}
                 <Link
                   to={path(item.section)}
                   params={{ projectId: state.project.id }}
-                  className="narrow rounded-[3px] px-[5px] py-1 text-sm whitespace-nowrap text-ink-2 hover:text-ink data-[status=active]:bg-petrol-wash data-[status=active]:font-medium data-[status=active]:text-petrol"
+                  className="narrow rounded-[3px] px-1 py-1 text-sm whitespace-nowrap text-ink-2 hover:text-ink data-[status=active]:bg-petrol-wash data-[status=active]:font-medium data-[status=active]:text-petrol"
                   title={`g then ${item.chord}`}
                 >
                   {item.label}
@@ -229,7 +231,7 @@ const KEYS: ReadonlyArray<{
   {
     screen: "Everywhere",
     keys: [
-      [["g", "t"], "Go to a stage: u, p, s, d, v, t, f, a, x, b, o, r, and l for Audit"],
+      [["g", "t"], "Go to a stage: u, p, s, d, v, t, f, k, a, x, b, o, r, and l for Audit"],
       [["h"], "Show these keys"],
     ],
   },
@@ -274,6 +276,18 @@ const KEYS: ReadonlyArray<{
       [["u"], "Unclear"],
       [["Backspace"], "Undo the last decision"],
       [[" "], "Keep your decision and go to the next record"],
+      [["c"], "Show every criterion in full, or short again"],
+    ],
+  },
+  {
+    screen: "Table",
+    keys: [
+      [["↑", "↓"], "Select a record; Page Up, Page Down, Home, End jump"],
+      [["/"], "Quick search in title, authors, journal, and abstract"],
+      [["Enter"], "Open the record in the queue"],
+      [["i", "e", "u"], "Decide the selected record, as in the queue. After e, press 1 to 9"],
+      [[" "], "Keep your decision after the AI's reading, or go to the next record"],
+      [["Backspace"], "Take back the decision on the selected record"],
     ],
   },
   {

@@ -1,6 +1,6 @@
 // The title and abstract queue (DESIGN.md, "Reviewer workbench"): one record, the criteria strip,
 // and nothing from the AI until the reviewer has decided.
-import { useRouteContext } from "@tanstack/react-router";
+import { useRouteContext, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -12,6 +12,7 @@ import { useKeys } from "../../ui/keys.ts";
 import { Mark, OUTCOMES, Status } from "../../ui/Status.tsx";
 import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
+import { shortLabel } from "./criteria.ts";
 import { Marked, orderSections, placeQuote } from "./RecordText.tsx";
 import { AiBefore, AskSecondOpinion, beforeQuote, SecondOpinionAsked } from "./Targeted.tsx";
 import { useQueue } from "./useQueue.ts";
@@ -20,15 +21,24 @@ import type { SessionStats } from "./useQueue.ts";
 export function TitleAbstractQueue() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
   const { project, me, labels, criteriaFor, screeningStage, scopeLabel, has } = useProject();
-  const stage = screeningStage("title_abstract");
+  const { scope, after } = useSearch({ from: "/p/$projectId/screening/title-abstract" });
+  const stage = screeningStage("title_abstract", scope);
   const scopeId = stage?.scope_id ?? null;
   const criteria = useMemo(() => criteriaFor("title_abstract", scopeId), [criteriaFor, scopeId]);
   const caller = useMemo(
     () => ({ projectId: project.id, as: me.actor_id }),
     [project.id, me.actor_id],
   );
-  const queue = useQueue(workbench, caller, scopeId, "title_abstract", stage?.reveal === "before");
+  const queue = useQueue(
+    workbench,
+    caller,
+    scopeId,
+    "title_abstract",
+    stage?.reveal === "before",
+    after ?? null,
+  );
   const [armed, setArmed] = useState(false);
+  const [fullCriteria, setFullCriteria] = useState(false);
   // Mode S, key f: the next decision asks a colleague, with this comment.
   const [asking, setAsking] = useState<{ comment: string; typing: boolean } | null>(null);
   const ask = asking && !asking.typing ? { comment: asking.comment } : null;
@@ -82,6 +92,9 @@ export function TitleAbstractQueue() {
       if (key === "Escape" || key === "Backspace" || key === "e") return true;
     }
     switch (key) {
+      case "c":
+        setFullCriteria((on) => !on);
+        return true;
       case "i":
       case "u":
         void queue.decide(key === "i" ? "include" : "unclear", null, ask);
@@ -186,8 +199,8 @@ export function TitleAbstractQueue() {
         ) : null}
         <CriteriaStrip
           criteria={criteria}
-          labels={labels}
           armed={armed}
+          full={armed || fullCriteria}
           decision={current?.decision ?? null}
           revealed={current?.reveal?.criterion_id ?? null}
         />
@@ -209,6 +222,9 @@ export function TitleAbstractQueue() {
           <KeyHint keys={["Backspace"]}>Undo</KeyHint>
           <KeyHint keys={[" "]}>
             {current?.reveal && !current.settled ? "Keep and next" : "Next"}
+          </KeyHint>
+          <KeyHint keys={["c"]} muted>
+            {fullCriteria ? "Short criteria" : "Full criteria"}
           </KeyHint>
           <span className="ml-auto flex min-w-0 items-center gap-3" aria-live="polite">
             {queue.error ? (
@@ -276,17 +292,20 @@ function RecordView({
       : "Protocol term";
   };
   const sections = orderSections(record.sections);
+  // One muted line: where and when it appeared, what it is, and its identifiers.
+  const meta = [
+    record.journal,
+    record.year,
+    publicationTypes(record.publication_types),
+    ...record.registry_ids,
+    record.pmid ? `PMID ${record.pmid}` : record.doi ? `DOI ${record.doi}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <article className="mx-auto max-w-[900px] px-10 pt-7 pb-10" aria-label="Record">
-      <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-ink-2">
-        {record.journal ? <span className="italic">{record.journal}</span> : null}
-        {record.year ? <span>{record.year}</span> : null}
-        <span>{publicationTypes(record.publication_types)}</span>
-        {record.registry_ids.map((id) => (
-          <span key={id}>{id}</span>
-        ))}
-        {record.pmid ? <span className="text-ink-3">PMID {record.pmid}</span> : null}
-        {record.doi && !record.pmid ? <span className="text-ink-3">DOI {record.doi}</span> : null}
+      <p className="truncate text-xs text-ink-3" title={meta} data-testid="record-meta">
+        {meta}
       </p>
       <h1
         className="mt-2 max-w-[68ch] text-xl font-semibold tracking-[-0.01em] text-balance"
@@ -326,38 +345,31 @@ function RecordView({
           ))}
         </div>
       )}
-      <p
-        className={`mt-8 flex gap-5 text-2xs text-ink-3 ${item.text ? "ml-[calc(8.5rem+1.5rem)]" : ""}`}
-      >
-        <span>
-          <span className="term">Underlined</span>: protocol term
-        </span>
-        <span>
-          <span className="entity">Dotted</span>: drug, disease, or gene
-        </span>
-      </p>
     </article>
   );
 }
 
 function CriteriaStrip({
   criteria,
-  labels,
   armed,
+  full,
   decision,
   revealed,
 }: {
   criteria: ReadonlyArray<Criterion>;
-  labels: Record<string, string>;
   armed: boolean;
+  /** The full wording of every criterion, on demand (c) or while choosing one to exclude on. */
+  full: boolean;
   decision: Decision | null;
   revealed: string | null;
 }) {
   return (
     <ol
       aria-label="Criteria"
-      className="grid"
-      style={{ gridTemplateColumns: `repeat(${criteria.length}, minmax(0, 1fr))` }}
+      className={
+        full ? "grid" : "flex h-8 items-center gap-x-4 overflow-hidden px-4 text-xs text-ink-2"
+      }
+      style={full ? { gridTemplateColumns: `repeat(${criteria.length}, minmax(0, 1fr))` } : {}}
     >
       {criteria.map((criterion, index) => {
         const chosen =
@@ -366,25 +378,27 @@ function CriteriaStrip({
           <li
             key={criterion.id}
             data-revealed={revealed === criterion.id || undefined}
-            className={`border-r border-rule px-3 pt-2 pb-2.5 last:border-r-0 ${
-              revealed === criterion.id ? "evidence-item" : ""
-            } ${armed ? "shadow-[inset_0_2px_0_var(--exclude)]" : ""}`}
+            title={`${criterion.text_en}\n${criterion.text_de}`}
+            className={
+              full
+                ? `border-r border-rule px-3 pt-2 pb-2.5 last:border-r-0 ${
+                    revealed === criterion.id ? "evidence-item" : ""
+                  } ${armed ? "shadow-[inset_0_2px_0_var(--exclude)]" : ""}`
+                : `flex items-center gap-1.5 whitespace-nowrap ${
+                    revealed === criterion.id ? "evidence-item px-1" : ""
+                  }`
+            }
           >
-            <div className="flex items-center gap-2">
-              <span className={armed ? "text-exclude" : ""}>
-                <Key k={String(index + 1)} on={armed} />
-              </span>
-              <span className="text-2xs text-ink-3">
-                {labels[criterion.slot] ?? criterion.slot}
-              </span>
+            <span className={`flex items-center gap-1.5 ${armed ? "text-exclude" : ""}`}>
+              <Key k={String(index + 1)} on={armed} />
+              <span className={full ? "text-2xs text-ink-3" : ""}>{shortLabel(criterion)}</span>
               {chosen ? <Mark term={OUTCOMES.exclude} title="Your exclusion reason" /> : null}
-            </div>
-            <p
-              className={`narrow mt-1 text-xs ${armed ? "text-ink" : "line-clamp-2 text-ink-2"}`}
-              title={`${criterion.text_en}\n${criterion.text_de}`}
-            >
-              {criterion.text_en}
-            </p>
+            </span>
+            {full ? (
+              <p className={`narrow mt-1 text-xs ${armed ? "text-ink" : "text-ink-2"}`}>
+                {criterion.text_en}
+              </p>
+            ) : null}
           </li>
         );
       })}

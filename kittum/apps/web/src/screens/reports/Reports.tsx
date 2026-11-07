@@ -312,11 +312,18 @@ export function ReportsScreen() {
               </dd>
               <dt className="text-ink-2">At event</dt>
               <dd className="tabular-nums">{bundle.cutoff_seq}</dd>
-              <dt className="text-ink-2">Manifest</dt>
-              <dd className="break-all text-ink-2">{bundle.manifest_hash}</dd>
-              <dt className="text-ink-2">Signing key</dt>
-              <dd className="break-all text-ink-2">{bundle.key_id}</dd>
             </dl>
+            <details className="mt-2 text-sm">
+              <summary className="cursor-pointer text-ink-3 hover:text-ink-2">
+                Manifest hash and signing key
+              </summary>
+              <dl className="mt-1 grid grid-cols-[9rem_minmax(0,1fr)] gap-y-1">
+                <dt className="text-ink-2">Manifest</dt>
+                <dd className="break-all text-ink-2">{bundle.manifest_hash}</dd>
+                <dt className="text-ink-2">Signing key</dt>
+                <dd className="break-all text-ink-2">{bundle.key_id}</dd>
+              </dl>
+            </details>
             <p className="mt-3 text-sm text-ink-2">
               Anyone can check the bundle offline with <code>kittum verify {bundle.path}</code>. Add
               the public key of this key ID to confirm who signed it.

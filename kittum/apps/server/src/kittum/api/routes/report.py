@@ -7,7 +7,8 @@ key (`KITTUM_CHECKPOINT_KEY`) and writes the bundle under `bundles/` beside the 
 
 Reports show every reviewer's decisions and the AI's output, so rendering, downloading, and
 sealing are for the methods lead only (`report.require_lead`): never a screener, auditor, or
-adjudicator of a stage. Until the API has authentication (WP-15), the caller names the actor in
+adjudicator of a stage. The working export is the exception: it follows the screening table's
+blinding, so a screener or auditor exports only their own rows. Until the API has authentication (WP-15), the caller names the actor in
 the body or in the `X-Kittum-Reviewer` header; that is a stand-in, not a security boundary.
 """
 
@@ -20,10 +21,12 @@ from pydantic import Field
 from kittum.api import AppContext, Context  # noqa: TC001 - FastAPI resolves it at runtime
 from kittum.core import Id, NotFoundError, Record, new_id
 from kittum.ledger import LedgerIntegrityError, SigningKey
-from kittum.protocol import latest_published
+from kittum.protocol import Stage, latest_published
 from kittum.report import (
     CORE_TARGETS,
+    XLSX,
     Artifact,
+    ExportView,
     NotTheLead,
     ReportRequestError,
     RightsProfile,
@@ -34,7 +37,9 @@ from kittum.report import (
     require_lead,
     seal_bundle,
     targets,
+    working_export,
 )
+from kittum.screening import InvalidDecision, NotAssigned
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -90,6 +95,14 @@ class SealedBundle(Record):
     key_id: str
 
 
+class WorkingExportRequest(Record):
+    scope_id: str
+    stage: Stage
+    topic_id: str | None = None
+    view: ExportView | None = None
+    """The table view to export; the whole stage as the caller may see it when empty."""
+
+
 def _ledger(ctx: AppContext) -> Ledger:
     if ctx.ledger is None:
         raise HTTPException(status_code=503, detail="no ledger is configured")
@@ -102,10 +115,12 @@ def _errors() -> Generator[None]:
         yield
     except NotTheLead as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
-    except NotFoundError as e:
+    except (NotFoundError, NotAssigned) as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ReportRequestError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    except InvalidDecision as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/targets", operation_id="listReportTargets")
@@ -170,6 +185,42 @@ def download(project_id: Id, sha256: Sha256Path, reviewer: Reviewer, ctx: Contex
             status_code=404, detail=f"nothing rendered for the project has {sha256}"
         )
     return Response(content=ctx.artifacts.get(sha256), media_type=media_type)
+
+
+@router.post(
+    "/working-export",
+    operation_id="exportWorkingSpreadsheet",
+    response_class=Response,
+    responses={200: {"content": {"application/octet-stream": {}}}},
+)
+def export_working(
+    project_id: Id, body: WorkingExportRequest, reviewer: Reviewer, ctx: Context
+) -> Response:
+    """The working spreadsheet (XLSX) of a stage, or of the caller's table view: a screener's or
+    auditor's own rows, or the whole stage for the methods lead. Stored by hash and recorded in
+    the ledger. Not the audit bundle."""
+    ledger = _ledger(ctx)
+    with _errors(), ctx.db.transaction() as tx:
+        exported, data = working_export(
+            tx,
+            project_id,
+            reviewer,
+            body.scope_id,
+            body.stage,
+            topic_id=body.topic_id,
+            view=body.view,
+            store=ctx.artifacts,
+            ledger=ledger,
+            clock=ctx.clock,
+        )
+    return Response(
+        content=data,
+        media_type=XLSX,
+        headers={
+            "Content-Disposition": f'attachment; filename="{exported.file_name}"',
+            "X-Kittum-Sha256": exported.sha256,
+        },
+    )
 
 
 @router.post("/bundle", operation_id="sealReportBundle")

@@ -26,6 +26,7 @@ dependencies = [
     "pydantic-ai-slim[openai]>=2.63.0",
     "janus-server",
     "pdf-inspector>=1.25.2",
+    "openpyxl>=3.1.5",
 ]
 
 [project.scripts]

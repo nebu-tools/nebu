@@ -65,6 +65,9 @@ export function useQueue(
   /** The stage shows the AI's reading before the decision (mode S): records loaded before the
    * judge read them take its reading when it arrives. */
   readingBefore = false,
+  /** Start behind this assignment (a record opened from the table); the queue wraps around to
+   * the records before it once it runs dry. */
+  startAfter: string | null = null,
 ) {
   // The current record and the buffer change together, so they are one state. `forward` holds
   // records that undo stepped back over, whole, so they return with their decision and revision.
@@ -83,6 +86,10 @@ export function useQueue(
   // After the queue ran dry, read it again from the start: items can join behind the cursor (an
   // auditor's extra screen, a record the AI read after the reviewer passed its place).
   const fromStart = useRef(false);
+  const start = useRef(startAfter);
+  // The cursor each record was read after, so a later read of the same window holds it again.
+  const readAfter = useRef(new Map<string, string | null>());
+  const [lap, setLap] = useState(0);
   const timings = useRef(new Map<string, number>());
   const reveals = useRef({ shown: 0, followed: 0 });
   const [stats, setStats] = useState<SessionStats>({
@@ -103,8 +110,9 @@ export function useQueue(
         forward.at(-1)?.item.assignment_id ??
         current?.item.assignment_id ??
         history.at(-1)?.item.assignment_id ??
-        null);
+        start.current);
     fromStart.current = false;
+    const jumped = start.current !== null;
     loading.current = true;
     run(
       workbench.queue({
@@ -116,7 +124,22 @@ export function useQueue(
       }),
     )
       .then((items) => {
-        if (items.length === 0) setExhausted(true);
+        // Records already held count as nothing new: after going round, the cursor reaches
+        // them again.
+        const held = new Set([
+          ...history.map((e) => e.item.assignment_id),
+          ...ahead.map((q) => q.assignment_id),
+          ...forward.map((e) => e.item.assignment_id),
+          ...(current ? [current.item.assignment_id] : []),
+        ]);
+        for (const i of items) readAfter.current.set(i.assignment_id, last);
+        const fresh = items.some((i) => !held.has(i.assignment_id));
+        if (!fresh && jumped) {
+          // Started in the middle: go round to the records before the start once.
+          start.current = null;
+          fromStart.current = true;
+          setLap((n) => n + 1);
+        } else if (!fresh) setExhausted(true);
         setView((v) => {
           const known = new Set([
             ...history.map((e) => e.item.assignment_id),
@@ -137,7 +160,7 @@ export function useQueue(
       .finally(() => {
         loading.current = false;
       });
-  }, [workbench, caller, scopeId, stage, exhausted, current, forward, ahead, history]);
+  }, [workbench, caller, scopeId, stage, exhausted, current, forward, ahead, history, lap]);
 
   // A record on screen, undecided, that the judge has not read yet: ask again every few seconds,
   // and give it and the records behind it their reading once there is one.
@@ -148,7 +171,9 @@ export function useQueue(
   useEffect(() => {
     if (unread === null || scopeId === null) return;
     const timer = window.setInterval(() => {
-      run(workbench.queue({ ...caller, scopeId, stage, after: null, limit: AHEAD + 1 }))
+      // From the cursor the record came after: a record opened from the table can sit far down.
+      const after = readAfter.current.get(unread) ?? null;
+      run(workbench.queue({ ...caller, scopeId, stage, after, limit: AHEAD + 1 }))
         .then((items) => {
           const read = new Map(
             items.flatMap((i) => (i.ai ? [[i.assignment_id, i.ai] as const] : [])),

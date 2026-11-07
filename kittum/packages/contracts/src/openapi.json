@@ -1024,6 +1024,14 @@
         "title": "AssignmentFullText",
         "type": "object"
       },
+      "AssignmentState": {
+        "enum": [
+          "pending",
+          "awaiting_final",
+          "decided"
+        ],
+        "type": "string"
+      },
       "AssistModel": {
         "additionalProperties": false,
         "description": "The model the assistant asks, so the lead knows who is answering and what they wait for.",
@@ -2108,6 +2116,16 @@
             "title": "Positive Examples",
             "type": "array"
           },
+          "short_label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "slot": {
             "$ref": "#/components/schemas/PicoSlot"
           },
@@ -2908,6 +2926,43 @@
           "text"
         ],
         "title": "ExampleProtocol",
+        "type": "object"
+      },
+      "ExportView": {
+        "additionalProperties": false,
+        "description": "The reviewer's table view: the rows and columns on screen, in their order.",
+        "properties": {
+          "columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "refs",
+          "columns"
+        ],
+        "title": "ExportView",
         "type": "object"
       },
       "Extensions": {
@@ -3728,6 +3783,14 @@
         ],
         "title": "Interval",
         "type": "object"
+      },
+      "ItemFlag": {
+        "enum": [
+          "sentinel",
+          "audit",
+          "rescreen"
+        ],
+        "type": "string"
       },
       "ItemLabel": {
         "additionalProperties": false,
@@ -6095,6 +6158,14 @@
         "additionalProperties": false,
         "description": "The record's facts as the queue shows them, with title highlights and abstract sections.",
         "properties": {
+          "authors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
           "doi": {
             "anyOf": [
               {
@@ -6389,6 +6460,14 @@
         "additionalProperties": false,
         "description": "Bibliographic facts shown above the abstract.",
         "properties": {
+          "authors": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
           "doi": {
             "anyOf": [
               {
@@ -6492,6 +6571,21 @@
         ],
         "title": "RecordFlag",
         "type": "object"
+      },
+      "RecordOutcome": {
+        "anyOf": [
+          {
+            "enum": [
+              "include",
+              "exclude",
+              "conflict"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "RecordTrace": {
         "additionalProperties": false,
@@ -7749,6 +7843,7 @@
           "facts": {
             "$ref": "#/components/schemas/RecordFacts",
             "default": {
+              "authors": [],
               "publication_types": [],
               "registry_ids": []
             }
@@ -7772,6 +7867,45 @@
           "text"
         ],
         "title": "ScreeningRecord",
+        "type": "object"
+      },
+      "ScreeningTable": {
+        "additionalProperties": false,
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/TableRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          },
+          "stage_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "view": {
+            "enum": [
+              "reviewer",
+              "lead"
+            ],
+            "title": "View",
+            "type": "string"
+          }
+        },
+        "required": [
+          "stage_id",
+          "scope_id",
+          "stage",
+          "view",
+          "rows"
+        ],
+        "title": "ScreeningTable",
         "type": "object"
       },
       "SealRequest": {
@@ -9226,6 +9360,313 @@
         "title": "Suggestion",
         "type": "object"
       },
+      "TableDecision": {
+        "additionalProperties": false,
+        "description": "One human's decision on a row: the reviewer's own, or, for the lead, each screener's, the\nauditor's, and a second opinion's. `state` says whether it is final yet.",
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/kittum__screening__types__Outcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason_criterion_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason Criterion Id"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "screener",
+                  "auditor",
+                  "second_opinion"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "second_opinion": {
+            "default": false,
+            "title": "Second Opinion",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/AssignmentState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "title": "TableDecision",
+        "type": "object"
+      },
+      "TableRow": {
+        "additionalProperties": false,
+        "properties": {
+          "abstract": {
+            "title": "Abstract",
+            "type": "string"
+          },
+          "ai": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiColumn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ai_excludes": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Excludes"
+          },
+          "ai_not_met": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Ai Not Met",
+            "type": "array"
+          },
+          "assignment_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Authors",
+            "type": "array"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/TableDecision"
+            },
+            "title": "Decisions",
+            "type": "array"
+          },
+          "doi": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doi"
+          },
+          "etag": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Etag"
+          },
+          "flags": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ItemFlag"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RecordOutcome"
+          },
+          "outcome_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Reason"
+          },
+          "pmid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pmid"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          },
+          "publication_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Publication Types",
+            "type": "array"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "registry_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Registry Ids",
+            "type": "array"
+          },
+          "reveal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Reveal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "second_opinion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecondOpinionContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          }
+        },
+        "required": [
+          "ref",
+          "title",
+          "abstract",
+          "authors",
+          "journal",
+          "year",
+          "publication_types",
+          "pmid",
+          "doi",
+          "registry_ids",
+          "decisions"
+        ],
+        "title": "TableRow",
+        "type": "object"
+      },
       "Target": {
         "type": "string"
       },
@@ -9951,6 +10392,45 @@
           "direction"
         ],
         "title": "WorkUpdate",
+        "type": "object"
+      },
+      "WorkingExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "scope_id": {
+            "title": "Scope Id",
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/Stage"
+          },
+          "topic_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic Id"
+          },
+          "view": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExportView"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "scope_id",
+          "stage"
+        ],
+        "title": "WorkingExportRequest",
         "type": "object"
       },
       "WrongDocument": {
@@ -14179,6 +14659,66 @@
         ]
       }
     },
+    "/api/projects/{project_id}/reports/working-export": {
+      "post": {
+        "description": "The working spreadsheet (XLSX) of a stage, or of the caller's table view: a screener's or\nauditor's own rows, or the whole stage for the methods lead. Stored by hash and recorded in\nthe ledger. Not the audit bundle.",
+        "operationId": "exportWorkingSpreadsheet",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkingExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Working",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
     "/api/projects/{project_id}/retrieval/missing": {
       "get": {
         "description": "The reports sought for retrieval without a usable full text, with every attempt for each.",
@@ -15743,6 +16283,100 @@
           }
         },
         "summary": "Status Route",
+        "tags": [
+          "screening"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/screening/table": {
+      "get": {
+        "description": "The stage as rows. A screener or auditor gets their own assignments in queue order, decided\nones included, with no AI reading their own decision did not reveal and no sentinel or audit\nflags. The methods lead gets every item with every decision, the outcome, and the AI's\nreading. Anyone else is not assigned (404).",
+        "operationId": "getScreeningTable",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope_id",
+            "required": true,
+            "schema": {
+              "title": "Scope Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "stage",
+            "required": true,
+            "schema": {
+              "enum": [
+                "title_abstract",
+                "full_text"
+              ],
+              "title": "Stage",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Needed only when the scope is screened in several topics.",
+            "in": "query",
+            "name": "topic_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Needed only when the scope is screened in several topics.",
+              "title": "Topic Id"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningTable"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Table",
         "tags": [
           "screening"
         ]
