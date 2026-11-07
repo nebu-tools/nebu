@@ -18,7 +18,15 @@ from kittum.people import members
 from kittum.protocol import Stage
 from kittum.screening import store
 from kittum.screening.metrics import RecordOutcome, record_outcomes
-from kittum.screening.types import NotAssigned, Outcome, RecordFacts, Reveal
+from kittum.screening.service import _ai_before
+from kittum.screening.types import (
+    AiColumn,
+    NotAssigned,
+    Outcome,
+    RecordFacts,
+    Reveal,
+    SecondOpinionContext,
+)
 
 if TYPE_CHECKING:
     from kittum.db import Tx
@@ -28,18 +36,20 @@ type ItemFlag = Literal["sentinel", "audit", "rescreen"]
 
 
 class TableDecision(Record):
-    """One human's decision on a row: the reviewer's own, or, for the lead, each screener's and
-    the auditor's. `state` says whether it is final yet."""
+    """One human's decision on a row: the reviewer's own, or, for the lead, each screener's, the
+    auditor's, and a second opinion's. `state` says whether it is final yet."""
 
     reviewer_id: Id | None = None
     """Who decided. Empty in a reviewer's own rows."""
     name: str | None = None
-    role: Literal["screener", "auditor"] | None = None
+    role: Literal["screener", "auditor", "second_opinion"] | None = None
     state: AssignmentState
     outcome: Outcome | None = None
     reason_criterion_id: str | None = None
     comment: str | None = None
     decided_at: datetime | None = None
+    second_opinion: bool = False
+    """Mode S: the decision asks another screener of the pool for a second opinion."""
 
 
 class TableRow(Record):
@@ -64,6 +74,11 @@ class TableRow(Record):
     """The reviewer's own decision (one entry), or every assignment's for the lead."""
     reveal: Reveal | None = None
     """The AI reading the reviewer's own provisional decision revealed. Reviewer's table only."""
+    ai: AiColumn | None = None
+    """The AI's reading before the decision, in a stage that reveals `before`, once the AI has
+    read the record. Reviewer's table only; empty in every other stage."""
+    second_opinion: SecondOpinionContext | None = None
+    """Mode S: this row is a second opinion, asked on this decision. Reviewer's table only."""
     outcome: RecordOutcome = None
     """The record's outcome, for the lead: by consensus or adjudication, or in conflict."""
     outcome_reason: str | None = None
@@ -145,9 +160,14 @@ def _reviewer_rows(tx: Tx, stage_id: Id, reviewer_id: Id) -> list[TableRow]:
                     reason_criterion_id=r["reason_criterion_id"],
                     comment=r["comment"],
                     decided_at=r["decided_at"],
+                    second_opinion=r["asked_second_opinion"],
                 ),
             ),
             reveal=Reveal.model_validate(r["own_reveal"]) if r["own_reveal"] else None,
+            ai=_ai_before(r["ai_before"], r["title"], r["text"]),
+            second_opinion=SecondOpinionContext.model_validate(r["consult"])
+            if r["consult"]
+            else None,
         )
         for r in rows
     ]
@@ -160,11 +180,15 @@ def _lead_rows(tx: Tx, project_id: Id, stage: dict[str, Any]) -> list[TableRow]:
     by_item: dict[str, list[TableDecision]] = {}
     for a in tx.execute(
         "select a.item_ref, a.reviewer_id, a.role, a.state, d.outcome, d.reason_criterion_id,"
-        " d.comment, d.decided_at"
+        " d.comment, d.decided_at, coalesce(d.second_opinion, false) as second_opinion"
         " from screening_assignment a"
         " left join screening_decision d"
         " on d.id = coalesce(a.final_decision_id, a.provisional_decision_id)"
-        " where a.stage_id = %s order by a.role desc, a.reviewer_id",
+        # A second opinion whose request was taken back is not part of the record any more.
+        " where a.stage_id = %s"
+        " and (a.role <> 'second_opinion' or a.consults_decision_id is not null)"
+        " order by case a.role when 'screener' then 0 when 'second_opinion' then 1 else 2 end,"
+        " a.reviewer_id",
         (stage_id,),
     ).fetchall():
         by_item.setdefault(a["item_ref"], []).append(
@@ -177,6 +201,7 @@ def _lead_rows(tx: Tx, project_id: Id, stage: dict[str, Any]) -> list[TableRow]:
                 reason_criterion_id=a["reason_criterion_id"],
                 comment=a["comment"],
                 decided_at=a["decided_at"],
+                second_opinion=a["second_opinion"],
             )
         )
     adjudicated = {
@@ -234,6 +259,10 @@ def _outcome_reason(
         return None
     if adjudicated is not None:
         return adjudicated
+    # Mode S: a second opinion settles the record.
+    settled = [d for d in decisions if d.role == "second_opinion" and d.state == "decided"]
+    if settled:
+        return settled[-1].reason_criterion_id
     reasons = dict.fromkeys(
         d.reason_criterion_id
         for d in decisions

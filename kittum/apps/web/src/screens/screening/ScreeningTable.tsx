@@ -24,6 +24,7 @@ import { useKeys } from "../../ui/keys.ts";
 import { OUTCOMES, Status, VERDICTS } from "../../ui/Status.tsx";
 import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
+import { AiBefore, AskSecondOpinion, SecondOpinionAsked } from "./Targeted.tsx";
 import { numbered, shortLabel } from "./criteria.ts";
 import { haystack, matcher } from "./table/fuzzy.ts";
 import type { Haystack } from "./table/fuzzy.ts";
@@ -43,12 +44,18 @@ const decisionText = (d: TableDecision | undefined, criteria: ReadonlyArray<Crit
   if (!d || !d.outcome) return "Not decided";
   const reason = d.reason_criterion_id ? ` on ${numbered(criteria, d.reason_criterion_id)}` : "";
   const waiting = d.state === "awaiting_final" ? ", AI shown" : "";
-  return `${OUTCOMES[d.outcome].label}${reason}${waiting}`;
+  const asked = d.second_opinion ? ", second opinion asked" : "";
+  return `${OUTCOMES[d.outcome].label}${reason}${waiting}${asked}`;
 };
 
 const people = (row: TableRow, criteria: ReadonlyArray<Criterion>) =>
   row.decisions
-    .map((d) => `${d.name ?? "?"}: ${d.outcome ? decisionText(d, criteria) : "not decided"}`)
+    .map(
+      (d) =>
+        `${d.name ?? "?"}${d.role === "second_opinion" ? " (second opinion)" : ""}: ${
+          d.outcome ? decisionText(d, criteria) : "not decided"
+        }`,
+    )
     .join("; ");
 
 const OUTCOME_WORDS = { include: "Include", exclude: "Exclude", conflict: "Conflict" } as const;
@@ -132,10 +139,27 @@ function columnsFor(
         id: "ai",
         header: "AI reading",
         width: 150,
+        text: (r) => {
+          if (r.reveal)
+            return `${VERDICTS[r.reveal.status].label} on ${numbered(criteria, r.reveal.criterion_id)}`;
+          // A stage that reveals `before` (mode S) shows the reading before the decision.
+          const notMet = r.ai?.criteria.filter((c) => c.status === "not_met") ?? [];
+          if (!r.ai) return "";
+          return notMet.length
+            ? `Not met on ${notMet.map((c) => numbered(criteria, c.criterion_id)).join(", ")}`
+            : "Nothing not met";
+        },
+      },
+      {
+        id: "second_opinion",
+        header: "Second opinion",
+        width: 130,
         text: (r) =>
-          r.reveal
-            ? `${VERDICTS[r.reveal.status].label} on ${numbered(criteria, r.reveal.criterion_id)}`
-            : "",
+          r.second_opinion
+            ? `Asked of you on ${OUTCOMES[r.second_opinion.outcome].label}`
+            : own(r)?.second_opinion
+              ? "You asked for one"
+              : "",
       },
     ];
   }
@@ -265,6 +289,7 @@ export function ScreeningTableScreen() {
       workbench={workbench}
       caller={caller}
       criteria={criteria}
+      labels={labels}
       scopeName={`${labels.scope} ${scopeLabel(stage.scope_id)}`}
       describeStage={(s) => `${scopeLabel(s.scope_id)} · ${STAGE_WORDS[s.stage]}`}
     />
@@ -278,6 +303,7 @@ function StageTable({
   workbench,
   caller,
   criteria,
+  labels,
   scopeName,
   describeStage,
 }: {
@@ -287,6 +313,7 @@ function StageTable({
   workbench: Workbench;
   caller: Caller;
   criteria: ReadonlyArray<Criterion>;
+  labels: Record<string, string>;
   scopeName: string;
   describeStage: (s: StageInfo) => string;
 }) {
@@ -297,6 +324,12 @@ function StageTable({
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState(false);
   const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  // Mode S, key f: the next decision on this row asks a colleague, with this comment.
+  const [asking, setAsking] = useState<{
+    ref: string;
+    comment: string;
+    typing: boolean;
+  } | null>(null);
   const search = useRef<HTMLInputElement>(null);
   const shown = useRef<{
     ref: string | null;
@@ -416,11 +449,15 @@ function StageTable({
   const decide = async (target: TableRow, outcome: Outcome, reason: string | null = null) => {
     if (!canDecide || busy || !target.assignment_id || !target.etag) return;
     const current = own(target);
+    // Mode S: a decision after f asks a colleague, with what the reviewer is unsure about.
+    const ask = asking?.ref === target.ref && !asking.typing ? asking : null;
+    if (ask) setAsking(null);
     const decision: Decision = {
       outcome,
       reason_criterion_id: outcome === "exclude" ? reason : null,
       evidence_anchor_ids: [],
-      comment: current?.comment ?? null,
+      comment: ask ? ask.comment.trim() || null : (current?.comment ?? null),
+      ...(ask ? { second_opinion: true } : {}),
     };
     const now = new Date().toISOString();
     const timing = shown.current.ref === target.ref ? shown.current : null;
@@ -470,6 +507,7 @@ function StageTable({
             reason_criterion_id: decision.reason_criterion_id,
             comment: decision.comment,
             decided_at: now,
+            second_opinion: decision.second_opinion ?? false,
           },
         ],
       }));
@@ -634,6 +672,7 @@ function StageTable({
         return true;
       case "Escape":
         setNotice(null);
+        setAsking(null);
         return true;
     }
     if (!canDecide || !row) return false;
@@ -646,6 +685,12 @@ function StageTable({
         return true;
       case "e":
         setArmed(true);
+        return true;
+      case "f":
+        if (stage.mode !== "S") return false;
+        if (row.second_opinion)
+          setNotice("This is a second opinion. Your decision settles the record.");
+        else setAsking({ ref: row.ref, comment: asking?.comment ?? "", typing: true });
         return true;
       case " ": {
         const d = own(row);
@@ -789,7 +834,16 @@ function StageTable({
           data-testid="row-pane"
         >
           {row ? (
-            <RowPane row={row} kind={kind} criteria={criteria} />
+            <RowPane row={row} kind={kind} criteria={criteria} labels={labels}>
+              {asking?.ref === row.ref ? (
+                <AskSecondOpinion
+                  comment={asking.comment}
+                  onComment={(comment) => setAsking({ ref: row.ref, comment, typing: true })}
+                  onDone={() => setAsking((a) => a && { ...a, typing: false })}
+                  onCancel={() => setAsking(null)}
+                />
+              ) : null}
+            </RowPane>
           ) : (
             <p className="px-4 py-4 text-xs text-ink-3">
               Select a record with <Key k="ArrowUp" /> <Key k="ArrowDown" /> or the mouse to read
@@ -830,6 +884,7 @@ function StageTable({
                 </KeyHint>
               </span>
               <KeyHint keys={["u"]}>{OUTCOMES.unclear.label}</KeyHint>
+              {stage.mode === "S" ? <KeyHint keys={["f"]}>Second opinion</KeyHint> : null}
               <KeyHint keys={[" "]}>
                 {row?.decisions[0]?.state === "awaiting_final" ? "Keep" : "Next"}
               </KeyHint>
@@ -874,10 +929,15 @@ function RowPane({
   row,
   kind,
   criteria,
+  labels,
+  children,
 }: {
   row: TableRow;
   kind: "reviewer" | "lead";
   criteria: ReadonlyArray<Criterion>;
+  labels: Record<string, string>;
+  /** The second-opinion prompt, while the reviewer writes it. */
+  children?: ReactNode;
 }) {
   const authors =
     row.authors.length > 3
@@ -907,7 +967,12 @@ function RowPane({
           {row.decisions.map((x) => (
             <li key={`${x.reviewer_id}`} className="flex gap-2">
               <span className="w-28 truncate text-ink-3">
-                {x.name} {x.role === "auditor" ? "(auditor)" : ""}
+                {x.name}{" "}
+                {x.role === "auditor"
+                  ? "(auditor)"
+                  : x.role === "second_opinion"
+                    ? "(second opinion)"
+                    : ""}
               </span>
               <DecisionCell decision={x} criteria={criteria} />
               {x.comment ? <span className="truncate text-ink-2">{x.comment}</span> : null}
@@ -915,6 +980,17 @@ function RowPane({
           ))}
         </ul>
       )}
+      {row.second_opinion || children || (row.ai && !row.reveal) ? (
+        <div className="mt-3 -mx-4 border-t border-rule">
+          {row.second_opinion ? (
+            <SecondOpinionAsked asked={row.second_opinion} criteria={criteria} labels={labels} />
+          ) : null}
+          {children}
+          {row.ai && !row.reveal ? (
+            <AiBefore ai={row.ai} criteria={criteria} labels={labels} marked={null} />
+          ) : null}
+        </div>
+      ) : null}
       {row.reveal ? (
         <section
           className="evidence-item mt-3 border-y border-rule px-2 py-2"

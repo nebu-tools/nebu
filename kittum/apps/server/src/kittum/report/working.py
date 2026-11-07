@@ -95,17 +95,37 @@ def _decision(d: TableDecision | None) -> Value:
         return None
     reason = f" ({d.reason_criterion_id})" if d.reason_criterion_id else ""
     final = "" if d.state == "decided" else ", provisional"
-    return f"{_OUTCOME[d.outcome]}{reason}{final}"
+    asked = ", asked a second opinion" if d.second_opinion else ""
+    return f"{_OUTCOME[d.outcome]}{reason}{final}{asked}"
 
 
 def _decisions(row: TableRow) -> Value:
-    parts = [f"{d.name or d.reviewer_id}: {_decision(d) or 'not decided'}" for d in row.decisions]
+    parts = [
+        f"{d.name or d.reviewer_id}{' (second opinion)' if d.role == 'second_opinion' else ''}:"
+        f" {_decision(d) or 'not decided'}"
+        for d in row.decisions
+    ]
     return "; ".join(parts) or None
 
 
 def _ai(row: TableRow) -> Value:
     r = row.reveal
-    return f"{_STATUS.get(r.status, r.status)} on {r.criterion_id}" if r else None
+    if r:
+        return f"{_STATUS.get(r.status, r.status)} on {r.criterion_id}"
+    if row.ai:  # a stage that reveals `before`
+        not_met = [c.criterion_id for c in row.ai.criteria if c.status == "not_met"]
+        return f"Not met on {', '.join(not_met)}" if not_met else "Nothing not met"
+    return None
+
+
+def _second_opinion(row: TableRow) -> Value:
+    """Mode S: the request this row answers, or the reviewer's own request."""
+    if c := row.second_opinion:
+        reason = f" ({c.reason_criterion_id})" if c.reason_criterion_id else ""
+        note = f": {c.comment}" if c.comment else ""
+        return f"Asked of you on {_OUTCOME[c.outcome]}{reason}{note}"
+    d = _own(row)
+    return "You asked for one" if d and d.second_opinion else None
 
 
 def _ai_excludes(row: TableRow) -> Value:
@@ -139,6 +159,7 @@ COLUMNS: dict[str, tuple[str, Callable[[TableRow], Value]]] = {
     "ai": ("AI reading", _ai),
     "ai_quote": ("AI quote", lambda r: r.reveal.quote or None if r.reveal else None),
     "ai_rationale": ("AI rationale", lambda r: r.reveal.rationale if r.reveal else None),
+    "second_opinion": ("Second opinion", _second_opinion),
     "outcome": ("Outcome", lambda r: _OUTCOME[r.outcome] if r.outcome else None),
     "outcome_reason": ("Outcome reason", lambda r: r.outcome_reason),
     "decisions": ("Decisions", _decisions),
@@ -166,6 +187,7 @@ REVIEWER_COLUMNS = (
     "reason",
     "comment",
     "decided_at",
+    "second_opinion",
     "ai",
     "ai_quote",
     "ai_rationale",

@@ -585,6 +585,10 @@ Module `kittum.screening`. Needs: `protocol`, `corpus`, `judge`, `ledger`, `runs
   it as one (rows are named by assignment ID). The methods lead (`sees_lead_data`) gets every
   item with each screener's and the auditor's decision, the outcome and its reason criterion, the
   AI's verified reading, and the flags; an adjudicator who screens nothing gets 404.
+  In mode S it lists what the S queue lists: records the judge has not read yet, the AI's
+  reading where the stage reveals `before`, and a second opinion first with the decision it is
+  asked on; a decision says whether it asked for one, and the lead's rows name second opinions
+  and take the outcome reason from the one that settled the record.
   `RecordFacts` and `QueueRecord` carry the record's authors, filled from the corpus.
   `tests/screening/test_table.py` checks over HTTP that a reviewer's table matches their queue,
   holds nothing of the other reviewer (their comment, their ID) or of a sentinel, shows a reveal
@@ -619,9 +623,9 @@ Left open:
 - The auditor's queue grows when an extra screen arrives, and the share of extra screens among
   the audit samples sets how much an item there hints that the AI disagreed. A larger audit
   percentage dilutes it; the rate is not tuned against the expected number of disagreements.
-- The table lists what the queue holds: records the AI judge has not read yet are not in it.
-  When a topic's queue stops waiting for the judge (direction decision 4), change
-  `screening_reviewer_table` with `screening_reviewer_queue`.
+- `screening_reviewer_table` repeats the row rules of `screening_reviewer_queue` (S records the
+  judge has not read, active second opinions first, the `before` reading). A change to one must
+  go to the other; `test_an_s_stage_table_lists_what_its_queue_lists` compares them.
 - The judge's filter confirms few exclusions on the example protocols (wordings with "without", or
   intervention keywords without a negation, fail the polarity check), so the verified reading
   mostly includes.
@@ -1188,7 +1192,9 @@ Done (branch `kittum/wp-16-workbench-design`, then `kittum/wp-15-integration`):
   The pane shows the selected record's abstract, decision, and the AI reading the reviewer saw.
   `Enter` opens the record in the queue (`?after=` starts the queue behind the record before it
   and wraps round once), and `i`, `e` then `1` to `9`, `u`, `Space`, and `Backspace` decide the
-  selected row through the queue's API. **Export view** and **Export stage** download the working
+  selected row through the queue's API; in a mode S stage `f` asks a second opinion, as in the
+  queue, and the pane shows the AI's reading before the decision and the decision a second
+  opinion is asked on. **Export view** and **Export stage** download the working
   spreadsheet. `src/screens/screening/table.test.tsx` drives it on the mock.
 - Less on screen (direction decision 6): the title and abstract strip names criteria by a short
   label (the protocol's optional `short_label`, or the start of the text), with the full wording

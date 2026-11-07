@@ -9362,7 +9362,7 @@
       },
       "TableDecision": {
         "additionalProperties": false,
-        "description": "One human's decision on a row: the reviewer's own, or, for the lead, each screener's and\nthe auditor's. `state` says whether it is final yet.",
+        "description": "One human's decision on a row: the reviewer's own, or, for the lead, each screener's, the\nauditor's, and a second opinion's. `state` says whether it is final yet.",
         "properties": {
           "comment": {
             "anyOf": [
@@ -9434,7 +9434,8 @@
               {
                 "enum": [
                   "screener",
-                  "auditor"
+                  "auditor",
+                  "second_opinion"
                 ],
                 "type": "string"
               },
@@ -9443,6 +9444,11 @@
               }
             ],
             "title": "Role"
+          },
+          "second_opinion": {
+            "default": false,
+            "title": "Second Opinion",
+            "type": "boolean"
           },
           "state": {
             "$ref": "#/components/schemas/AssignmentState"
@@ -9460,6 +9466,16 @@
           "abstract": {
             "title": "Abstract",
             "type": "string"
+          },
+          "ai": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AiColumn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "ai_excludes": {
             "anyOf": [
@@ -9603,6 +9619,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/Reveal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "second_opinion": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SecondOpinionContext"
               },
               {
                 "type": "null"

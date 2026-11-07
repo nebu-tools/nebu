@@ -13,18 +13,29 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from kittum.api import AppContext, create_app
-from kittum.core import new_id
-from kittum.report import COVER_TEXT, WORKING_EXPORTED_EVENT
+from kittum.core import SystemClock, new_id
+from kittum.report import COVER_TEXT, WORKING_EXPORTED_EVENT, working_export
+from kittum.screening import Decision, screening_table
 from kittum.settings import Settings
 from kittum.storage import MemoryStore
-from tests.screening.support import JUDGE_MARK, SCOPE, STAGE, build_world, timing
+from tests.screening.support import (
+    JUDGE_MARK,
+    SCOPE,
+    STAGE,
+    build_world,
+    recorded_backend,
+    timing,
+)
 from tests.screening.test_m1_api import TITLES, Reviewer
+from tests.screening.test_targeted import UNSURE, decide, open_s, queue, ref_of
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
 
+    from kittum.core import Id
     from kittum.db import Database
+    from kittum.screening import TableRow
     from tests.screening.support import World
 
 pytestmark = pytest.mark.postgres
@@ -257,3 +268,70 @@ def test_table_blinds_reviewers_and_exports_what_each_may_see(
     # B never received anything of A's, nor A's comment, through the table or the export.
     for seen in b.seen:
         assert note not in seen and str(world.people.a) not in seen
+
+
+def test_an_s_stage_table_lists_what_its_queue_lists(database: Database) -> None:
+    """Mode S: the table holds records the judge has not read yet, the AI's reading before the
+    decision once there is one, and a second opinion with the decision it is asked on; the
+    export says the same."""
+    world = build_world(database, "S")
+    a, b, lead = world.people.a, world.people.b, world.people.lead
+    open_s(world, (a, b))
+
+    def rows(reviewer: Id) -> list[TableRow]:
+        with world.db.transaction() as tx:
+            return list(screening_table(tx, world.project_id, reviewer, SCOPE, STAGE).rows)
+
+    # Before the judge has read anything, each screener's table is their queue.
+    mine = rows(a)
+    assert [r.assignment_id for r in mine] == [i.assignment_id for i in queue(world, a)]
+    assert mine and all(r.ai is None and r.second_opinion is None for r in mine)
+
+    # Once it has, the stage shows its reading before the decision, in the table too.
+    world.backend = recorded_backend(world.records, world.criteria())
+    world.run_judge_jobs(world.backend)
+    items = queue(world, a)
+    by_assignment = {r.assignment_id: r for r in rows(a)}
+    assert items and all(i.ai is not None for i in items)
+    assert all(by_assignment[i.assignment_id].ai == i.ai for i in items)
+
+    # A asks a second opinion; B's table has it first, with A's decision and comment.
+    unsure = items[0]
+    decide(world, a, unsure, UNSURE, ai_on_screen=True)
+    asked = next(r for r in rows(a) if r.assignment_id == unsure.assignment_id)
+    assert asked.decisions[0].second_opinion and asked.decisions[0].state == "decided"
+    consult = queue(world, b)[0]
+    first = rows(b)[0]
+    assert first.assignment_id == consult.assignment_id and first.position == 1
+    assert first.second_opinion is not None
+    assert first.second_opinion.comment == "Smokers? The abstract never says."
+
+    # B settles it; the row stays in B's table, and the lead sees both decisions and the outcome.
+    decide(world, b, consult, Decision(outcome="exclude", reason_criterion_id="POP"))
+    settled = next(r for r in rows(b) if r.assignment_id == consult.assignment_id)
+    assert settled.decisions[0].state == "decided" and settled.second_opinion is not None
+    lead_row = next(r for r in rows(lead) if r.ref == ref_of(world, unsure))
+    assert [(d.role, d.outcome, d.second_opinion) for d in lead_row.decisions] == [
+        ("screener", "include", True),
+        ("second_opinion", "exclude", False),
+    ]
+    assert (lead_row.outcome, lead_row.outcome_reason) == ("exclude", "POP")
+
+    # B's export says what the table says.
+    with world.db.transaction() as tx:
+        _, data = working_export(
+            tx,
+            world.project_id,
+            b,
+            SCOPE,
+            STAGE,
+            store=world.artifacts,
+            ledger=world.ledger,
+            clock=SystemClock(),
+        )
+    header, *body = sheet(data, "Records")
+    line = next(r for r in body if r[0] == str(consult.assignment_id))
+    assert line[header.index("Second opinion")] == (
+        "Asked of you on Include: Smokers? The abstract never says."
+    )
+    assert line[header.index("AI reading")] is not None
