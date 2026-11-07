@@ -16,7 +16,7 @@ Kittum's core does not depend on any jurisdiction. It rests on these principles:
 - A protocol is the source of truth.
 - Humans decide first.
 - The AI excludes only with verified verbatim quotes.
-- Screening modes come with a statistical audit.
+- Screening modes with complete documentation come with a statistical audit.
 - Provenance anchors survive re-parsing.
 - A hash-chained ledger records every decision, and a handover bundle carries it.
 - The reviewer workbench is blinded and keyboard-first.
@@ -88,10 +88,33 @@ for the mode, from the ledger.
 | M1 dual human, AI as third reader (default) | Two humans screen every record. | Independent third screener. A record that the AI includes and both humans exclude goes to an independent blind screen; a resulting human disagreement goes to adjudication. | Every critical topic. |
 | M2 single human, AI as second reader | One human screens every record. | Replaces the second human. A record on which the AI and the human disagree goes to an independent blind screen; a resulting human disagreement goes to adjudication. | Large topics, after a validation pack shows the AI's performance on pooled gold data. |
 | M3 prioritized dual screening with a certified stop | Humans screen in AI order and stop when a pre-specified statistical test passes. | Ranking only. | Topics with roughly 10,000 records and 100 expected relevant records. Rare in small reviews. |
+| S single screening with second opinions | One human per record, from a pool of one or more screeners; the records are split evenly in a seeded order. A screener who is unsure decides with a second-opinion flag (key `f`): another screener of the pool gets the record with the first decision and its comment, and their decision settles it. No adjudication, auditor, audit sample, sentinels, or extra screens. | Reads every record, but the queue does not wait for it. The stage may show its reading before the decision (reveal `before`). | Targeted searches for the team's own work: confounder research, searches for indirect comparisons, and "complete the pool" searches. Working documentation. |
 
 No mode lets the AI exclude a record that no human saw. Changing the mode mid-topic creates a new
 protocol version with a logged reason. A profile can narrow the choice further: a jurisdiction
-profile can require two-person screening and a written justification for anything else.
+profile can require two-person screening and a written justification for anything else. Modes M2,
+M3, and S need a `mode_rationale`.
+
+### Documentation levels
+
+Every search topic has a documentation level, derived from its mode: `complete` for M1, M2, and
+M3, and `working` for S. The compiled protocol, each screening stage, the progress figures, and the
+AI disclosure state it. A working topic loosens the method, never the record of what happened: the
+ledger records every decision, second opinion, and reveal in both.
+
+| | Complete (M1, M2, M3) | Working (S) |
+| --- | --- | --- |
+| Who screens a record | Two blind humans, or one human and the AI as second reader | One human of a pool; a second opinion on request, which sees the first decision |
+| Audit | Sentinels, a random audit sample, extra screens of AI-only disagreements, adjudication | None |
+| AI's reading before the decision | Never | Allowed (reveal `before`) |
+| Queue | Waits until the AI has read a record | Does not wait; the reading appears when it arrives |
+| Bulk decisions, spreadsheet import of decisions | Refused | Allowed (planned, see the work packages) |
+
+Two presets in the protocol editor fill in a topic's settings: "Documented SLR" (M1, complete) and
+"Targeted search" (S, working). The methods text, the AI disclosure, and every export label come
+from the settings and the recorded behaviour, never from a preset's name. The protocol compiler
+asks S for a rationale only; it refuses sentinels and an audit sample in S, as nobody would screen
+them. A profile can refuse working documentation: the G-BA profile does.
 
 ## The pipeline
 
@@ -131,7 +154,8 @@ Review(title, version, profile: id and version, or none)
 			decidable_at: title-abstract | full-text | both, applies_to: scopes)
 		SourcePlan (databases, registries, other methods, justified deviations)
 		ReferenceSet (development and validation known-includes, PRESS record)
-		ScreeningMode (M1 | M2 | M3) with AuditPlan, StoppingPlan, and a justification
+		ScreeningMode (M1 | M2 | M3 | S) with AuditPlan, StoppingPlan, and a justification;
+			the documentation level (complete or working) follows from it
 		FreshnessPolicy (maximum search age at submission)
 	extensions (per profile, validated by the profile's schema)
 ```
@@ -428,10 +452,12 @@ dependency one-way: a profile depends on the core, never the other way round.
 A profile can add rules and make existing ones stricter. It cannot weaken these:
 
 - The approved protocol is the source of truth, and every exclusion reason is a criterion ID.
-- A human commits a decision before seeing AI output, and blinding is enforced by the backend.
+- In a topic with complete documentation, a human commits a decision before seeing AI output, and
+  blinding is enforced by the backend.
 - No mode lets the AI exclude a record that no human saw, and an AI exclusion needs a verified
   verbatim quote.
-- Every mode other than M1 runs with a pre-specified statistical audit.
+- Every mode with complete documentation other than M1 runs with a pre-specified statistical
+  audit. Mode S has none, and every report says so.
 - Every accepted value carries an anchor or a reviewed grounding exception, and anchors survive
   re-parsing.
 - Every state change writes an event to the hash-chained ledger, and the handover bundle verifies
@@ -627,6 +653,11 @@ is for the PDF.
 
 ### Rules that apply to every screen
 
+The first two rules and the last apply to topics with complete documentation. A topic with working
+documentation (mode S) may show the AI's reading before the decision (reveal `before`), and will
+allow bulk decisions; the decision then records that the reading was on screen. Blinding by the
+backend, invisible audits where there are any, and no scores apply everywhere.
+
 - **The human goes first.** A reviewer commits a provisional decision before seeing any AI output.
   Studies on radiologists found that committing first reduces anchoring at no time cost. Showing
   explanations alone does not cure automation bias. Forced verification does.
@@ -634,13 +665,15 @@ is for the PDF.
   a slim banner names the criterion, highlights the quoted span, and gives one sentence. The
   reviewer keeps or revises. Kittum logs both decisions and the reveal time. The project setting
   `reveal` is `never`, `on_disagreement` (default), or `always`, and the AI disclosure reports it.
+  A working topic may also set `before`; a complete topic refuses it.
 - **Blinding is enforced by the backend.** Reviewers share no decisions, comments, labels, or
   counts. The API does not return the other reviewer's data until both have decided.
 - **Audits are invisible.** Audit samples and sentinels (2 to 3% of records with known labels)
   enter the normal queue. The reviewer screens them like any other record. Sentinel accuracy is the
   drift alarm.
 - **No scores, no ranks, no chat.** Reviewers see an order, never a probability. There is no "ask
-  the paper" box and no bulk include or exclude.
+  the paper" box, and a complete topic has no bulk include or exclude. A bulk confirmation in a
+  working topic is a human decision per record, recorded as one decision event each.
 
 Protocol-derived highlights are allowed before the decision, because they come from the protocol
 and not from the AI. They mark protocol terms in the abstract, and drug and disease entities from
@@ -655,9 +688,9 @@ the terms of their own templates.
 | --- | --- | --- |
 | Protocol editor | PICO blocks per scope, the criteria table, version diff, protocol hash, and a test bench that runs the judge on calibration records to show which criteria it misreads. A form edits every question, criterion, source, and query in place, with YAML as an advanced view of the same protocol. Every save, model draft, suggestion, accepted selection, and restore is a revision with its author, a person or a model; a field a model wrote carries an AI mark naming the model. Each part has **Suggest changes**, each PubMed or ClinicalTrials.gov query **Count hits**, a suggestion shows marked-up changes with their reasons and the hits of each version | `n` new criterion, `Ctrl+Enter` save the form or run the test bench. `,` and `.` step through revisions without changing them, `1` to `9` toggle a suggested change, `a` accept, `r` restore the revision on screen as the newest. **Publish** freezes and signs a version. |
 | Search review | One tab per database with the line-numbered strategy, limits, date, and hit count; the translation diff against the PubMed master; the PRESS checklist; which reference-set records the strategy finds and misses | `a` approve, `r` request changes |
-| Title and abstract queue | One record at a time: title, year, journal, publication type, registry ID, the abstract with structured labels and Methods first, and a criteria strip | `i` include, `e` then `1` to `9` exclude on a criterion, `u` unclear, `Backspace` undo, `Space` next. The next five records prefetch. Target median 15 to 25 seconds. |
+| Title and abstract queue | One record at a time: title, year, journal, publication type, registry ID, the abstract with structured labels and Methods first, and a criteria strip. In mode S, a second opinion shows the first decision and its comment, and a stage that reveals `before` shows the AI's reading | `i` include, `e` then `1` to `9` exclude on a criterion, `u` unclear, `Backspace` undo, `Space` next. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. The next five records prefetch. Target median 15 to 25 seconds. |
 | Studies | Proposed record-to-study clusters with the linking evidence (shared NCT number, DOI family, title similarity) | `Enter` confirm, `s` split, `m` merge |
-| Full-text screening | The PDF on the left, criteria on the right, one active criterion. Mentions of the active criterion in document order, without verdict colours. After the decision, the AI's reading of one criterion with its rationale and its verified quote marked on the page. | `,` and `.` step through mentions, `Enter` adopt a mention as evidence, `y` met, `n` not met, `?` unclear (optional). `i` include, `e` then `1` to `9` exclude on a criterion, `x` then `1` to `9` insufficient information, `w` wrong document, `q` show the AI's quote. |
+| Full-text screening | The PDF on the left, criteria on the right, one active criterion. Mentions of the active criterion in document order, without verdict colours. After the decision, the AI's reading of one criterion with its rationale and its verified quote marked on the page. Mode S as at title and abstract | `,` and `.` step through mentions, `Enter` adopt a mention as evidence, `y` met, `n` not met, `?` unclear (optional). `i` include, `e` then `1` to `9` exclude on a criterion, `x` then `1` to `9` insufficient information, `w` wrong document, `q` show the AI's quote. Mode S: `f` asks for a second opinion. |
 | Extraction | Fields grouped by endpoint, arm, and timepoint, with value, unit, status, origin path, agreement, and validator results; the source region on the PDF | `Tab` next field, `Enter` accept after viewing the source, `e` edit (needs a span), `1` or `2` pick a path when they disagree |
 | Adjudication | Reviewers A and B side by side, pseudonymized, each with outcome, criterion, span, and comment. At full text, the PDF with the mentions of the active criterion, for the adjudicator's own evidence. The AI column opens after the adjudicator commits: each criterion's verdict, rationale, and quote, the verified one marked in the record or on the page. | `1` adopt A, `2` adopt B, `i`, `e`, `u` own decision. At full text, `↑` and `↓` choose a criterion, `,` and `.` step through its mentions, `Enter` adopts one. After the decision, `,` and `.` step through the AI's criteria |
 | AI-exclusion audit | Strata, sample sizes, misses found, estimated missed relevant records with a 95% upper bound, pass or fail against the protocol's threshold | A found miss creates a queue of the 20 nearest AI-excluded records for human rescreening. |
