@@ -7,7 +7,15 @@ from fastapi import APIRouter, HTTPException, Query
 
 from kittum.api import AppContext, Context  # noqa: TC001
 from kittum.api.routes.projects import Viewer  # noqa: TC001 - FastAPI resolves it at runtime
-from kittum.app import LifecycleError, NotLead, ingest_corpus, request_enrichment, require_lead
+from kittum.api.routes.search import UploadEncoding, upload_bytes
+from kittum.app import (
+    LifecycleError,
+    NotLead,
+    import_pool_file,
+    ingest_corpus,
+    request_enrichment,
+    require_lead,
+)
 from kittum.core import Id, NotFoundError, Record
 from kittum.corpus import (
     CorpusLink,
@@ -15,12 +23,15 @@ from kittum.corpus import (
     CorpusRevision,
     CorpusSearch,
     IdentityRevision,
+    KnownPoolFile,
     LinkProposal,
+    PoolComparison,
     PrismaCounts,
     ProposalStatus,
     Relation,
     SplitLevel,
     StaleRevision,
+    compare_known_pool,
     confirm,
     confirm_exact,
     get_counts,
@@ -31,6 +42,7 @@ from kittum.corpus import (
     reports,
     searches,
     split,
+    withdraw_known_pool,
 )
 from kittum.ledger import Ledger  # noqa: TC001
 
@@ -216,6 +228,64 @@ def get_counts_route(
 ) -> PrismaCounts:
     with _errors(), ctx.db.transaction() as tx:
         return get_counts(tx, project_id, revision_id)
+
+
+class KnownPoolImportRequest(Record):
+    topic_id: str
+    data: str
+    """The file: its text, or for `records-xlsx` its bytes in base64."""
+    encoding: UploadEncoding = "text"
+    format: str
+    """Any search import format: RIS, NBIB, a records list as CSV or XLSX, and the rest."""
+    file_name: str | None = None
+    actor_id: Id
+
+
+class KnownPoolWithdrawRequest(Record):
+    actor_id: Id
+
+
+@router.post("/known-pool", operation_id="importKnownPool", status_code=201)
+def import_known_pool_route(
+    project_id: Id, body: KnownPoolImportRequest, ctx: Context
+) -> KnownPoolFile:
+    """Add a file of papers the topic's searches should find to its known pool."""
+    with _errors(), ctx.db.transaction() as tx:
+        require_lead(tx, project_id, body.actor_id)
+        return import_pool_file(
+            tx,
+            project_id,
+            body.topic_id,
+            upload_bytes(body.data, body.encoding),
+            body.format,
+            file_name=body.file_name,
+            actor_id=body.actor_id,
+            ledger=_ledger(ctx),
+            artifacts=ctx.artifacts,
+        )
+
+
+@router.get("/known-pool", operation_id="getKnownPool")
+def known_pool_route(
+    project_id: Id, viewer: Viewer, ctx: Context, topic_id: str = Query()
+) -> PoolComparison:
+    """The topic's known pool beside its searches: what they found of it, what they missed, and
+    what is new. For the methods lead only (403 otherwise)."""
+    with _errors(), ctx.db.transaction() as tx:
+        require_lead(tx, project_id, viewer)
+        return compare_known_pool(tx, project_id, topic_id)
+
+
+@router.post("/known-pool/{file_id}/withdraw", operation_id="withdrawKnownPoolFile")
+def withdraw_known_pool_route(
+    project_id: Id, file_id: Id, body: KnownPoolWithdrawRequest, ctx: Context
+) -> KnownPoolFile:
+    """Take a pool file out of the comparison. It stays listed, and in the ledger."""
+    with _errors(), ctx.db.transaction() as tx:
+        require_lead(tx, project_id, body.actor_id)
+        return withdraw_known_pool(
+            tx, project_id, file_id, actor_id=body.actor_id, ledger=_ledger(ctx)
+        )
 
 
 @contextmanager

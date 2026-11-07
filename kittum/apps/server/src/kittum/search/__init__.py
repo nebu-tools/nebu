@@ -17,7 +17,7 @@ from kittum.search.count import (
 )
 from kittum.search.ctgov import CtgovSource
 from kittum.search.europepmc import EuropePmcSource
-from kittum.search.imports import import_file
+from kittum.search.imports import IMPORT_FORMATS, import_file, parse_export
 from kittum.search.live import LIVE_PLATFORMS, live_source
 from kittum.search.models import SearchExecution, SearchPlan, Source, SourceError, SourceRecord
 from kittum.search.pubmed import PubMedSource
@@ -25,6 +25,7 @@ from kittum.search.service import run
 from kittum.search.store import get_execution, list_executions
 
 __all__ = [
+    "IMPORT_FORMATS",
     "LIVE_PLATFORMS",
     "SOURCE_NAMES",
     "TRANSPORT_ERRORS",
@@ -44,6 +45,7 @@ __all__ = [
     "import_file",
     "list_executions",
     "live_source",
+    "parse_export",
     "run",
     "unreachable",
 ]

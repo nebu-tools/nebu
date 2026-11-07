@@ -211,6 +211,19 @@ def _project_step(args: argparse.Namespace) -> int:
                     artifacts=ctx.artifacts,
                 )
                 _print({"execution_id": execution.id, "records": execution.retrieved_count})
+            case "import-pool":
+                pool_file = app.import_pool_file(
+                    tx,
+                    UUID(args.project),
+                    args.topic,
+                    Path(args.file).read_bytes(),
+                    args.format,
+                    file_name=Path(args.file).name,
+                    actor_id=UUID(args.by),
+                    ledger=ledger,
+                    artifacts=ctx.artifacts,
+                )
+                _print({"file_id": pool_file.id, "entries": pool_file.entries})
             case "ingest":
                 revision = app.ingest_corpus(
                     tx, UUID(args.project), actor_id=UUID(args.by), ledger=ledger
@@ -304,6 +317,8 @@ def _verify_project(project: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from kittum.search import IMPORT_FORMATS
+
     parser = argparse.ArgumentParser(prog="kittum")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("openapi", help="print the OpenAPI document as JSON")
@@ -358,7 +373,10 @@ def main(argv: list[str] | None = None) -> int:
     imported = step("import-search", "file")
     for flag in ("--topic", "--source", "--platform", "--strategy"):
         imported.add_argument(flag, required=True)
-    imported.add_argument("--format", default="ris")
+    imported.add_argument("--format", default="ris", choices=IMPORT_FORMATS)
+    pool = step("import-pool", "file")
+    pool.add_argument("--topic", required=True)
+    pool.add_argument("--format", default="ris", choices=IMPORT_FORMATS)
     live = step("run-search")
     live.add_argument("--source", choices=["pubmed", "europepmc", "ctgov"], required=True)
     live.add_argument("--topic", required=True)

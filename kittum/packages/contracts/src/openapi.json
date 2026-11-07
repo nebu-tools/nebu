@@ -3705,6 +3705,10 @@
             "title": "Data",
             "type": "string"
           },
+          "encoding": {
+            "$ref": "#/components/schemas/UploadEncoding",
+            "default": "text"
+          },
           "format": {
             "title": "Format",
             "type": "string"
@@ -3843,6 +3847,129 @@
           "value"
         ],
         "title": "KnownInclude",
+        "type": "object"
+      },
+      "KnownPoolFile": {
+        "additionalProperties": false,
+        "description": "One imported pool file. A withdrawn file stays listed but no longer counts.",
+        "properties": {
+          "entries": {
+            "title": "Entries",
+            "type": "integer"
+          },
+          "file_hash": {
+            "title": "File Hash",
+            "type": "string"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "imported_at": {
+            "format": "date-time",
+            "title": "Imported At",
+            "type": "string"
+          },
+          "imported_by": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "topic_id": {
+            "title": "Topic Id",
+            "type": "string"
+          },
+          "withdrawn_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Withdrawn At"
+          }
+        },
+        "required": [
+          "id",
+          "topic_id",
+          "format",
+          "file_hash",
+          "entries",
+          "imported_by",
+          "imported_at"
+        ],
+        "title": "KnownPoolFile",
+        "type": "object"
+      },
+      "KnownPoolImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "data": {
+            "title": "Data",
+            "type": "string"
+          },
+          "encoding": {
+            "$ref": "#/components/schemas/UploadEncoding",
+            "default": "text"
+          },
+          "file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Name"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "topic_id": {
+            "title": "Topic Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_id",
+          "data",
+          "format",
+          "actor_id"
+        ],
+        "title": "KnownPoolImportRequest",
+        "type": "object"
+      },
+      "KnownPoolWithdrawRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "actor_id"
+        ],
+        "title": "KnownPoolWithdrawRequest",
         "type": "object"
       },
       "LanguageCode": {
@@ -5071,6 +5198,124 @@
           "descriptive"
         ],
         "type": "string"
+      },
+      "PoolBasis": {
+        "enum": [
+          "reports",
+          "records"
+        ],
+        "type": "string"
+      },
+      "PoolComparison": {
+        "additionalProperties": false,
+        "description": "The topic's pool beside its searches.\n\n`basis` is `reports` once the corpus is built: `refs` are report IDs (the screening item\nreferences) and `searched` and `new` count deduplicated reports. Before that it is `records`:\n`refs` are occurrence IDs and the counts are search records before deduplication.",
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/PoolBasis"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/KnownPoolFile"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "found": {
+            "items": {
+              "$ref": "#/components/schemas/PoolMatch"
+            },
+            "title": "Found",
+            "type": "array"
+          },
+          "in_pool": {
+            "title": "In Pool",
+            "type": "integer"
+          },
+          "new": {
+            "title": "New",
+            "type": "integer"
+          },
+          "not_found": {
+            "items": {
+              "$ref": "#/components/schemas/PoolEntry"
+            },
+            "title": "Not Found",
+            "type": "array"
+          },
+          "pool_size": {
+            "title": "Pool Size",
+            "type": "integer"
+          },
+          "searched": {
+            "title": "Searched",
+            "type": "integer"
+          },
+          "topic_id": {
+            "title": "Topic Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "topic_id",
+          "basis",
+          "files",
+          "pool_size",
+          "found",
+          "not_found",
+          "searched",
+          "in_pool",
+          "new"
+        ],
+        "title": "PoolComparison",
+        "type": "object"
+      },
+      "PoolEntry": {
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "record": {
+            "$ref": "#/components/schemas/SourceRecord"
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "record"
+        ],
+        "title": "PoolEntry",
+        "type": "object"
+      },
+      "PoolMatch": {
+        "additionalProperties": false,
+        "description": "A pool paper the topic's searches found: the search results it is (`refs`), and why.",
+        "properties": {
+          "entry": {
+            "$ref": "#/components/schemas/PoolEntry"
+          },
+          "evidence": {
+            "title": "Evidence",
+            "type": "string"
+          },
+          "refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entry",
+          "refs",
+          "evidence"
+        ],
+        "title": "PoolMatch",
+        "type": "object"
       },
       "PositivePercent": {
         "pattern": "^[0-9]{1,3}(\\.[0-9]+)?$",
@@ -9550,6 +9795,17 @@
             "title": "Flags",
             "type": "array"
           },
+          "in_known_pool": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In Known Pool"
+          },
           "journal": {
             "anyOf": [
               {
@@ -10037,6 +10293,13 @@
         ],
         "title": "UploadCandidate",
         "type": "object"
+      },
+      "UploadEncoding": {
+        "enum": [
+          "text",
+          "base64"
+        ],
+        "type": "string"
       },
       "UploadResult": {
         "additionalProperties": false,
@@ -12459,6 +12722,185 @@
           }
         },
         "summary": "Ingest Route",
+        "tags": [
+          "corpus"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/corpus/known-pool": {
+      "get": {
+        "description": "The topic's known pool beside its searches: what they found of it, what they missed, and\nwhat is new. For the methods lead only (403 otherwise).",
+        "operationId": "getKnownPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "topic_id",
+            "required": true,
+            "schema": {
+              "title": "Topic Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolComparison"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Known Pool Route",
+        "tags": [
+          "corpus"
+        ]
+      },
+      "post": {
+        "description": "Add a file of papers the topic's searches should find to its known pool.",
+        "operationId": "importKnownPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnownPoolImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnownPoolFile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Import Known Pool Route",
+        "tags": [
+          "corpus"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/corpus/known-pool/{file_id}/withdraw": {
+      "post": {
+        "description": "Take a pool file out of the comparison. It stays listed, and in the ledger.",
+        "operationId": "withdrawKnownPoolFile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "file_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "File Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KnownPoolWithdrawRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KnownPoolFile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Withdraw Known Pool Route",
         "tags": [
           "corpus"
         ]

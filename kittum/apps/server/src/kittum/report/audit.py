@@ -399,6 +399,21 @@ def _describe(
             f" proposed {p.get('proposals')} links between them"
         )
         facts.append(("Identity revision", p.get("identity_revision_id")))
+    elif t == "corpus.pool_imported":
+        kind = "identity"
+        summary = (
+            f"{who} added {p.get('entries')} known papers to the pool of topic"
+            f" {p.get('topic_id')}, to compare with its searches"
+        )
+        facts += [("File", p.get("file_name")), ("Format", p.get("format"))]
+        artifacts.append(names.artifact(p.get("file_hash"), "Known pool file"))
+    elif t == "corpus.pool_withdrawn":
+        kind = "identity"
+        summary = (
+            f"{who} took a file of {p.get('entries')} known papers out of the pool of topic"
+            f" {p.get('topic_id')}"
+        )
+        artifacts.append(names.artifact(p.get("file_hash"), "Known pool file"))
     elif t in ("corpus.confirmed", "corpus.merged", "corpus.split"):
         kind = "identity"
         verb = {"corpus.confirmed": "confirmed", "corpus.merged": "merged"}.get(t, "split")

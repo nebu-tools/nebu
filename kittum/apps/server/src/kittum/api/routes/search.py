@@ -1,6 +1,8 @@
 """Search HTTP routes for the reviewer workbench."""
 
-from typing import TYPE_CHECKING
+import base64
+import binascii
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException
 
@@ -36,11 +38,26 @@ class RunSearchRequest(Record):
     actor_id: Id
 
 
+type UploadEncoding = Literal["text", "base64"]
+
+
 class ImportSearchRequest(Record):
     plan: SearchPlan
     data: str
+    """The file: its text, or for a binary format (`records-xlsx`) its bytes in base64."""
+    encoding: UploadEncoding = "text"
     format: str
     actor_id: Id
+
+
+def upload_bytes(data: str, encoding: UploadEncoding) -> bytes:
+    """The bytes of a file sent in a JSON body."""
+    if encoding == "text":
+        return data.encode("utf-8")
+    try:
+        return base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="the file is not valid base64") from exc
 
 
 def _require_lead(tx: Tx, project_id: Id, viewer: Id) -> None:
@@ -118,7 +135,7 @@ def import_search(
                 tx,
                 project_id,
                 body.plan,
-                body.data,
+                upload_bytes(body.data, body.encoding),
                 body.format,
                 ledger=ledger,
                 actor_id=body.actor_id,

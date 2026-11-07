@@ -1,0 +1,66 @@
+FN Clarivate Analytics Web of Science
+VR 1.0
+PT J
+AU Wainwright, CE
+   Elborn, JS
+   Ramsey, BW
+AF Wainwright, C. E.
+   Elborn, J. S.
+   Ramsey, B. W.
+GP TRAFFIC Study Grp
+   TRANSPORT Study Grp
+TI Lumacaftor-Ivacaftor in Patients with Cystic Fibrosis Homozygous for
+   Phe508del CFTR
+SO NEW ENGLAND JOURNAL OF MEDICINE
+LA English
+DT Article
+AB BACKGROUND Cystic fibrosis is a life-limiting disease that is caused by
+   defective or deficient cystic fibrosis transmembrane conductance regulator
+   (CFTR) protein activity. METHODS We conducted two phase 3, randomized,
+   double-blind, placebo-controlled studies (TRAFFIC and TRANSPORT).
+SN 0028-4793
+EI 1533-4406
+J9 NEW ENGL J MED
+JI N. Engl. J. Med.
+PD JUL 16
+PY 2015
+VL 373
+IS 3
+BP 220
+EP 231
+DI 10.1056/NEJMoa1409547
+PG 12
+WC Medicine, General & Internal
+UT WOS:000357843900007
+PM 25981758
+DA 2024-05-10
+ER
+
+PT J
+AU Milla, CE
+   Ratjen, F
+   Marigowda, G
+AF Milla, Carlos E.
+   Ratjen, Felix
+   Marigowda, Gautham
+TI Lumacaftor/Ivacaftor in Patients Aged 6-11 Years with Cystic Fibrosis and
+   Homozygous for F508del-CFTR
+SO AMERICAN JOURNAL OF RESPIRATORY AND CRITICAL CARE MEDICINE
+LA English
+DT Article
+AB Rationale: Lumacaftor/ivacaftor combination therapy demonstrated clinical
+   benefits in patients with cystic fibrosis homozygous for the
+   Phe508del-CFTR mutation. Trial registration: NCT01897233.
+PD APR 1
+PY 2017
+VL 195
+IS 7
+BP 912
+EP 920
+DI 10.1164/rccm.201608-1754OC
+UT WOS:000398030500016
+PM 27805836
+DA 2024-05-10
+ER
+
+EF
