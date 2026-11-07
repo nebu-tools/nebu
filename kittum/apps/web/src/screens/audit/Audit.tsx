@@ -643,6 +643,7 @@ const KIND_LABEL: Record<TracedEvent["kind"], string> = {
   adjudication: "Adjudication",
   full_text: "Full text",
   extraction: "Extraction",
+  appraisal: "Risk of bias",
   report: "Report",
   ledger: "Ledger",
   project: "Project",

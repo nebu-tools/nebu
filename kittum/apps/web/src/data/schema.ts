@@ -353,3 +353,19 @@ export type ExtractionSchema = KittumApi.ExtractionSchema;
 export type ReportInfo = KittumApi.ReportInfo;
 export type Acceptance = KittumApi.Acceptance;
 export type Assertion = KittumApi.Assertion;
+
+// kittum.appraisal, as the server serves it: risk-of-bias appraisals of included reports, one
+// result each, with the instrument's questions, the answers, their quotes, and the judgements.
+
+export type Appraisal = KittumApi.Appraisal;
+export type AppraisalQuestion = KittumApi.QuestionView;
+export type AppraisableReport = KittumApi.AppraisableReport;
+export type Judgement = KittumApi.Judgement;
+export type Answer = KittumApi.Answer;
+
+/** An appraisal beside its report: the full text's layer, and each question's mentions. */
+export interface AppraisalScreen {
+  readonly appraisal: Appraisal;
+  readonly layer: LayerSummary;
+  readonly mentions: ReadonlyArray<readonly [string, ReadonlyArray<Anchor>]>;
+}

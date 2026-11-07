@@ -10,6 +10,10 @@ import type {
   AdjudicationItem,
   AdjudicationResult,
   Anchor,
+  Answer,
+  AppraisableReport,
+  Appraisal,
+  AppraisalScreen,
   ArtifactCheck,
   AsOf,
   Assertion,
@@ -41,6 +45,7 @@ import type {
   FullTextAssignment,
   HeldUpload,
   IdentityRevision,
+  Judgement,
   LayerSummary,
   LedgerSummary,
   KnownPoolFile,
@@ -554,6 +559,37 @@ export interface Workbench {
   ) => Call<ReadonlyArray<Acceptance>>;
   /** The accepted values of the project, the latest per semantic key: what reports use. */
   readonly assertions: (caller: Caller) => Call<ReadonlyArray<Assertion>>;
+
+  // Risk of bias. A report included at full text is appraised one result at a time; like
+  // extraction, the server shows it only to a lead who screens nothing or to someone who has
+  // decided every screen of it.
+
+  /** The reports included at full text with a full text, each with its appraisals. */
+  readonly appraisableReports: (caller: Caller) => Call<ReadonlyArray<AppraisableReport>>;
+  /** A new RoB 2 appraisal of one result of a report. */
+  readonly startAppraisal: (
+    request: Caller & { readonly reportId: string; readonly result: string },
+  ) => Call<Appraisal>;
+  readonly appraisal: (request: Caller & { readonly appraisalId: string }) => Call<AppraisalScreen>;
+  /** One signalling question's answer with its quotes; the proposed judgements come back. */
+  readonly answerQuestion: (
+    request: Caller & {
+      readonly appraisalId: string;
+      readonly questionId: string;
+      readonly answer: Answer;
+      readonly anchorIds: ReadonlyArray<string>;
+    },
+  ) => Call<Appraisal>;
+  /** A domain's (or with `target` "overall" the result's) judgement against the algorithm's,
+   * with a reason; a null judgement takes the override back. */
+  readonly overrideJudgement: (
+    request: Caller & {
+      readonly appraisalId: string;
+      readonly target: string;
+      readonly judgement: Judgement | null;
+      readonly reason: string | null;
+    },
+  ) => Call<Appraisal>;
 }
 
 export const run = <A>(call: Call<A>): Promise<A> => Effect.runPromise(call);
