@@ -1,80 +1,128 @@
 """Risk-of-bias appraisal (DESIGN.md, "Appraisal").
 
-Forms are data. The core instruments are RoB 2 and ROBINS-I V2; profiles add their own with
-`register_instrument` under IDs of the form `<profile id>.<name>`. The AI only assembles quotes per
-signalling question; humans answer.
+Forms are data: domains, signalling questions with their answer options and conditions, and
+words that point at the passages each question is about. The core instrument is RoB 2 for
+randomized trials (`kittum.appraisal.rob2`), with its published algorithms for the suggested
+domain judgements and the overall rule. Profiles add their own forms with `register_instrument`
+under IDs of the form `<profile id>.<name>`; a form without algorithms gets every judgement from
+the reviewer.
 
-Owner: WP-12. Shipped now: the types and the instrument registry. Still to build: the core
-instrument definitions, quote assembly, and rendering.
+A named human answers every question. An appraisal is of one result of one report, on the
+report's full text: each answer carries quotes as anchors on that document, and Kittum checks
+each quote with `find_quote`. The algorithm proposes each domain's judgement once its applicable
+questions are answered; the reviewer may override a domain or the overall judgement with a
+reason. Every answer and override is a ledger event.
+
+    with ctx.db.transaction() as tx:
+        appraisal = appraisal.start(tx, ledger, command_id=..., instrument_id="rob2", ...)
+        appraisal = appraisal.answer(tx, ledger, appraisal_id=..., question_id="1.1",
+                                     answer="probably_yes", anchor_ids=(anchor.id,), ...)
+
+No model answers or assembles anything yet. Owner: WP-12.
 """
 
 from typing import Literal, get_args
 
-from kittum.core import Id, Record
+from kittum.appraisal.forms import (
+    ANSWERS,
+    JUDGEMENTS,
+    Answer,
+    Applies,
+    Condition,
+    Domain,
+    DomainAlgorithm,
+    InstrumentDefinition,
+    Judgement,
+    OverallRule,
+    SignallingQuestion,
+    applicability,
+    propose,
+)
+from kittum.appraisal.rob2 import ALGORITHMS as ROB2_ALGORITHMS
+from kittum.appraisal.rob2 import ROB2, worst
+from kittum.appraisal.store import (
+    ANSWERED,
+    OVERALL,
+    OVERRIDDEN,
+    STARTED,
+    Appraisal,
+    AppraisalError,
+    DomainView,
+    Instrument,
+    Override,
+    QuestionMentions,
+    QuestionView,
+    answer,
+    appraisals,
+    get,
+    instrument,
+    mentions,
+    override,
+    register,
+    registered,
+    start,
+)
 
-type CoreInstrument = Literal["rob2", "robins_i_v2"]
-type Instrument = str  # a CoreInstrument, or "<profile id>.<name>" from a profile
-type Answer = Literal["yes", "probably_yes", "probably_no", "no", "no_information"]
-
-
-class SignallingQuestion(Record):
-    id: str
-    text_de: str
-    text_en: str
-
-
-class InstrumentDefinition(Record):
-    id: Instrument
-    title: str
-    questions: tuple[SignallingQuestion, ...]
-
-
-class QuestionDraft(Record):
-    question_id: str
-    quote_anchor_ids: tuple[Id, ...]
-    answer: Answer | None = None  # set by a human only
-
-
-class AppraisalDraft(Record):
-    study_id: Id
-    instrument: Instrument
-    questions: tuple[QuestionDraft, ...]
-
+type CoreInstrument = Literal["rob2"]
 
 CORE_INSTRUMENTS: tuple[CoreInstrument, ...] = get_args(CoreInstrument.__value__)
-_profile_instruments: dict[Instrument, InstrumentDefinition] = {}
+
+register(Instrument(definition=ROB2, algorithms=ROB2_ALGORITHMS, overall=worst))
 
 
-def register_instrument(definition: InstrumentDefinition) -> None:
+def register_instrument(
+    definition: InstrumentDefinition,
+    algorithms: dict[str, DomainAlgorithm] | None = None,
+    overall: OverallRule | None = None,
+) -> None:
     """Add a profile's instrument. Called from the entry points, once per process."""
     profile, dot, name = definition.id.partition(".")
     if not (profile and dot and name):
         raise ValueError(
             f"profile instruments are named '<profile id>.<name>', got {definition.id!r}"
         )
-    if definition.id in _profile_instruments:
-        raise ValueError(f"instrument {definition.id!r} is already registered")
-    _profile_instruments[definition.id] = definition
+    register(Instrument(definition=definition, algorithms=algorithms or {}, overall=overall))
 
 
-def instruments() -> tuple[Instrument, ...]:
-    return (*CORE_INSTRUMENTS, *sorted(_profile_instruments))
-
-
-def draft(study_id: Id, instrument: Instrument) -> AppraisalDraft:
-    raise NotImplementedError("WP-12")
+def instruments() -> tuple[str, ...]:
+    """The core instruments, then the profiles', by ID."""
+    return (*CORE_INSTRUMENTS, *sorted(i for i in registered() if i not in CORE_INSTRUMENTS))
 
 
 __all__ = [
+    "ANSWERED",
+    "ANSWERS",
     "CORE_INSTRUMENTS",
+    "JUDGEMENTS",
+    "OVERALL",
+    "OVERRIDDEN",
+    "ROB2",
+    "STARTED",
     "Answer",
-    "AppraisalDraft",
+    "Applies",
+    "Appraisal",
+    "AppraisalError",
+    "Condition",
     "CoreInstrument",
-    "Instrument",
+    "Domain",
+    "DomainAlgorithm",
+    "DomainView",
     "InstrumentDefinition",
-    "QuestionDraft",
+    "Judgement",
+    "OverallRule",
+    "Override",
+    "QuestionMentions",
+    "QuestionView",
     "SignallingQuestion",
-    "draft",
+    "answer",
+    "applicability",
+    "appraisals",
+    "get",
+    "instrument",
     "instruments",
+    "mentions",
+    "override",
+    "propose",
     "register_instrument",
+    "start",
 ]
