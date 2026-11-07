@@ -37,6 +37,7 @@ import type {
   IdentityRevision,
   LayerSummary,
   LedgerSummary,
+  KnownPoolFile,
   LinkProposal,
   Member,
   Milestone,
@@ -45,6 +46,7 @@ import type {
   PageLayer,
   ParsedSource,
   Phase,
+  PoolComparison,
   Progress,
   ProjectSummary,
   ProtocolDiff,
@@ -182,10 +184,29 @@ export interface Workbench {
 
   /** A live search (PubMed or ClinicalTrials.gov) through the server's gateway. */
   readonly runSearch: (request: Caller & { readonly plan: SearchPlan }) => Call<SearchExecution>;
-  /** An export file: RIS, Cochrane, Embase, PubMed XML, or a registry's CSV. */
+  /** An export file: RIS, NBIB, Scopus, Web of Science, PubMed XML, a registry's CSV, or a
+   * team's list as CSV or XLSX. `data` is the file's text, or its bytes for `records-xlsx`. */
   readonly importSearch: (
-    request: Caller & { readonly plan: SearchPlan; readonly data: string; readonly format: string },
+    request: Caller & {
+      readonly plan: SearchPlan;
+      readonly data: string | Uint8Array;
+      readonly format: string;
+    },
   ) => Call<SearchExecution>;
+  /** A topic's known pool beside its searches: found, missed, and new. */
+  readonly knownPool: (request: Caller & { readonly topicId: string }) => Call<PoolComparison>;
+  /** Adds a file of known papers (any search import format) to a topic's known pool. */
+  readonly importKnownPool: (
+    request: Caller & {
+      readonly topicId: string;
+      readonly data: string | Uint8Array;
+      readonly format: string;
+      readonly fileName: string;
+    },
+  ) => Call<KnownPoolFile>;
+  readonly withdrawKnownPool: (
+    request: Caller & { readonly fileId: string },
+  ) => Call<KnownPoolFile>;
   /** Deduplicates every search into the first identity revision. */
   readonly ingestCorpus: (caller: Caller) => Call<CorpusRevision>;
   /** A sentinel file as `kittum project open-stage --sentinels` reads it. */

@@ -60,12 +60,28 @@ const people = (row: TableRow, criteria: ReadonlyArray<Criterion>) =>
 
 const OUTCOME_WORDS = { include: "Include", exclude: "Exclude", conflict: "Conflict" } as const;
 
+/** Whether the rows say which records are in the topic's known pool (DESIGN.md, "Complete the
+ * pool"). A complete topic's reviewer screens blind to it. */
+const pooled = (table: ScreeningTable | null) =>
+  table?.rows.some((r) => r.in_known_pool !== null && r.in_known_pool !== undefined) ?? false;
+
 function columnsFor(
   kind: ScreeningTable["view"],
   criteria: ReadonlyArray<Criterion>,
+  pool: boolean,
 ): ReadonlyArray<Column<TableRow>> {
   const common: Column<TableRow>[] = [
     { id: "title", header: "Title", width: 440, text: (r) => r.title },
+    ...(pool
+      ? [
+          {
+            id: "in_known_pool",
+            header: "In the known pool",
+            width: 136,
+            text: (r: TableRow) => (r.in_known_pool ? "Yes" : "No"),
+          },
+        ]
+      : []),
     {
       id: "authors",
       header: "Authors",
@@ -225,8 +241,10 @@ const DEFAULT_COLUMNS = {
   lead: ["title", "year", "outcome", "outcome_reason", "decisions", "flags"],
 } as const;
 
-const initial = (kind: "reviewer" | "lead"): ViewState => ({
-  columns: [...DEFAULT_COLUMNS[kind]],
+const initial = (kind: "reviewer" | "lead", pool: boolean): ViewState => ({
+  columns: DEFAULT_COLUMNS[kind].flatMap((c): string[] =>
+    pool && c === "title" ? [c, "in_known_pool"] : [c],
+  ),
   widths: {},
   sort: [],
   filters: {},
@@ -353,9 +371,10 @@ function StageTable({
 
   const kind = table?.view ?? "reviewer";
   const loaded = table !== null;
+  const pool = pooled(table);
   const columns = useMemo(
-    () => (loaded ? columnsFor(kind, criteria) : []),
-    [loaded, kind, criteria],
+    () => (loaded ? columnsFor(kind, criteria, pool) : []),
+    [loaded, kind, criteria, pool],
   );
 
   // Views are kept per reviewer and stage, in this browser.
@@ -366,8 +385,8 @@ function StageTable({
   const [edited, setState] = useState<ViewState | null>(null);
   const [lastView] = useState(() => views.last);
   const opening = useMemo(
-    () => (loaded ? (lastView ? fit(lastView, columns) : initial(kind)) : null),
-    [loaded, lastView, columns, kind],
+    () => (loaded ? (lastView ? fit(lastView, columns) : initial(kind, pool)) : null),
+    [loaded, lastView, columns, kind, pool],
   );
   const state = edited ?? opening;
   useEffect(() => {
@@ -801,7 +820,7 @@ function StageTable({
               setViewName(null);
             }}
             onReset={() => {
-              setState(initial(kind));
+              setState(initial(kind, pool));
               setViewName(null);
             }}
           />
