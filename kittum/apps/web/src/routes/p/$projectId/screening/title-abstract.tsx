@@ -9,5 +9,11 @@ export const Route = createFileRoute("/p/$projectId/screening/title-abstract")({
     ...(typeof search["scope"] === "string" ? { scope: search["scope"] } : {}),
     ...(typeof search["after"] === "string" ? { after: search["after"] } : {}),
   }),
-  component: TitleAbstractQueue,
+  component: Queue,
 });
+
+/** A new scope or start is a new queue: nothing of the one before carries over. */
+function Queue() {
+  const { scope, after } = Route.useSearch();
+  return <TitleAbstractQueue key={`${scope ?? ""}|${after ?? ""}`} />;
+}
