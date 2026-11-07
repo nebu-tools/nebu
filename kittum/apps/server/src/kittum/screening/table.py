@@ -140,8 +140,9 @@ def screening_table(
         raise NotAssigned(
             f"actor {viewer_id} neither screens this stage nor is a methods lead who sees it"
         )
-    pool = known_pool_refs(tx, project_id, row["topic_id"])
-    if pool is not None and (view == "lead" or row["mode"] == "S"):
+    shown = view == "lead" or row["mode"] == "S"
+    pool = known_pool_refs(tx, project_id, row["topic_id"]) if shown else None
+    if pool is not None:
         refs = _item_refs(tx, row["id"], viewer_id) if view == "reviewer" else {}
         rows = [
             r.model_copy(update={"in_known_pool": refs.get(r.ref, r.ref) in pool}) for r in rows

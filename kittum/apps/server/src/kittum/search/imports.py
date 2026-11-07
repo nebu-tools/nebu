@@ -257,6 +257,14 @@ def parse_export(
         raise ValueError(
             f"unsupported import format {format!r}; supported: {', '.join(IMPORT_FORMATS)}"
         )
+    if name == "records-csv":
+        try:
+            text = _decode(raw)
+        except ValueError:
+            # A team's own list saved as plain "CSV" by Excel in a Western European locale is
+            # windows-1252, not UTF-8.
+            text = raw.decode("cp1252", errors="strict")
+        return parse(text, raw_hash, source)
     return parse(_decode(raw), raw_hash, source)
 
 

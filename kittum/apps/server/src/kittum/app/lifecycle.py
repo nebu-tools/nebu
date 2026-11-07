@@ -382,6 +382,8 @@ def import_pool_file(
         raise LifecycleError(f"the protocol has no search topic {topic_id!r}")
     file_hash = sha256_hex(data)
     records = parse_export(data, format, raw_hash=file_hash, source="known_pool")
+    if not records:
+        raise ValueError("the file has no records")  # refused before its bytes are stored
     artifacts.put(data)
     return import_known_pool(
         tx,

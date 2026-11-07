@@ -179,6 +179,11 @@ def test_a_teams_list_as_csv_or_xlsx(pg: Tx, project_id: uuid.UUID, actor_id: uu
     assert second.pmid == "27805836" and second.doi is None and second.year == 2017
     assert third.authors == ("Burgel PR", "Durieu I") and third.journal == "Eur Respir J"
 
+    # Excel's plain "CSV" in a German locale: windows-1252, not UTF-8.
+    german = "Title;Authors;Year\nLumacaftor bei Patienten in München;Müller K;2019\n"
+    (umlauts,) = _import(pg, project_id, actor_id, german.encode("cp1252"), "records-csv").records
+    assert umlauts.title.endswith("München") and umlauts.authors == ("Müller K",)
+
     xlsx = team_list_xlsx()
     k1, k2 = _import(pg, project_id, actor_id, xlsx, "records-xlsx").records
     assert k1.provider_record_id == "K1" and k1.doi == WAINWRIGHT and k1.year == 2015
