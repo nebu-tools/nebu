@@ -114,6 +114,8 @@ export interface Decision {
   readonly comment: string | null;
   /** Full text: one reading per criterion, with its evidence. */
   readonly criteria?: ReadonlyArray<CriterionDecision>;
+  /** Mode S: ask another screener of the pool, who sees this decision and its comment. */
+  readonly second_opinion?: boolean;
 }
 
 /** Per-item timing the workbench reports with each decision (DESIGN.md "Metrics"). */
@@ -157,7 +159,10 @@ const SearchTopic = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
   kind: Schema.String,
-  mode: Schema.Literals(["M1", "M2", "M3"]),
+  mode: Schema.Literals(["M1", "M2", "M3", "S"]),
+  /** `working` for mode S (a targeted search), `complete` otherwise. Only `working` allows the
+   * AI's reading before the decision. */
+  documentation: Schema.Literals(["complete", "working"]),
   mode_rationale: Schema.NullOr(Schema.String),
   scopes: Schema.Array(Scope),
   criteria: Schema.Array(Criterion),
@@ -296,6 +301,10 @@ export const FullTextAssignment = Schema.Struct({
   phase: Schema.Literals(["provisional", "final"]),
   /** The AI's reading, when an earlier provisional decision of this reviewer revealed it. */
   reveal: Schema.NullOr(KittumApi.Reveal),
+  /** The AI's reading before the decision: only in a stage that reveals `before`. */
+  ai: Schema.NullOr(KittumApi.AiColumn),
+  /** Set when this is a second opinion (mode S): the decision it is asked on. */
+  second_opinion: Schema.NullOr(KittumApi.SecondOpinionContext),
   report: ReportSummary,
   document: Document,
   layer: LayerSummary,

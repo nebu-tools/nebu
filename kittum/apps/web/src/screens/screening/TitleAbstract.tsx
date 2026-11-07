@@ -13,6 +13,7 @@ import { Mark, OUTCOMES, Status } from "../../ui/Status.tsx";
 import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
 import { Marked, orderSections, placeQuote } from "./RecordText.tsx";
+import { AiBefore, AskSecondOpinion, beforeQuote, SecondOpinionAsked } from "./Targeted.tsx";
 import { useQueue } from "./useQueue.ts";
 import type { SessionStats } from "./useQueue.ts";
 
@@ -26,8 +27,11 @@ export function TitleAbstractQueue() {
     () => ({ projectId: project.id, as: me.actor_id }),
     [project.id, me.actor_id],
   );
-  const queue = useQueue(workbench, caller, scopeId);
+  const queue = useQueue(workbench, caller, scopeId, "title_abstract", stage?.reveal === "before");
   const [armed, setArmed] = useState(false);
+  // Mode S, key f: the next decision asks a colleague, with this comment.
+  const [asking, setAsking] = useState<{ comment: string; typing: boolean } | null>(null);
+  const ask = asking && !asking.typing ? { comment: asking.comment } : null;
   const [status, setStatus] = useState<ScopeStatus | null>(null);
   const [poll, setPoll] = useState(0);
   const { current } = queue;
@@ -68,8 +72,10 @@ export function TitleAbstractQueue() {
       setArmed(false);
       if (/^[1-9]$/.test(key)) {
         const criterion = criteria[Number(key) - 1];
-        if (criterion) void queue.decide("exclude", criterion.id);
-        else
+        if (criterion) {
+          void queue.decide("exclude", criterion.id, ask);
+          setAsking(null);
+        } else
           queue.setNotice(`There is no criterion ${key}. Press e, then 1 to ${criteria.length}.`);
         return true;
       }
@@ -77,10 +83,19 @@ export function TitleAbstractQueue() {
     }
     switch (key) {
       case "i":
-        void queue.decide("include");
-        return true;
       case "u":
-        void queue.decide("unclear");
+        void queue.decide(key === "i" ? "include" : "unclear", null, ask);
+        setAsking(null);
+        return true;
+      case "f":
+        if (stage?.mode !== "S") return false;
+        if (current.item.second_opinion)
+          queue.setNotice("This is a second opinion. Your decision settles the record.");
+        else setAsking({ comment: asking?.comment ?? "", typing: true });
+        return true;
+      case "Escape":
+        if (!asking) return false;
+        setAsking(null);
         return true;
       case "e":
         queue.touch();
@@ -119,7 +134,7 @@ export function TitleAbstractQueue() {
           <RecordView
             key={current.item.assignment_id}
             item={current.item}
-            reveal={current.reveal}
+            reveal={current.reveal ?? beforeQuote(current.item)}
             criteria={criteria}
             labels={labels}
           />
@@ -136,6 +151,29 @@ export function TitleAbstractQueue() {
         )}
       </div>
       <footer className="border-t border-rule-strong bg-sheet-2">
+        {current?.item.second_opinion ? (
+          <SecondOpinionAsked
+            asked={current.item.second_opinion}
+            criteria={criteria}
+            labels={labels}
+          />
+        ) : null}
+        {current?.item.ai && !current.reveal ? (
+          <AiBefore
+            ai={current.item.ai}
+            criteria={criteria}
+            labels={labels}
+            marked={beforeQuote(current.item)?.criterion_id ?? null}
+          />
+        ) : null}
+        {current && asking ? (
+          <AskSecondOpinion
+            comment={asking.comment}
+            onComment={(comment) => setAsking({ comment, typing: true })}
+            onDone={() => setAsking((a) => a && { ...a, typing: false })}
+            onCancel={() => setAsking(null)}
+          />
+        ) : null}
         {current?.reveal ? (
           <RevealBanner
             key={`${current.item.assignment_id}-${current.revealedAt}`}
@@ -163,6 +201,11 @@ export function TitleAbstractQueue() {
             </KeyHint>
           </span>
           <KeyHint keys={["u"]}>{OUTCOMES.unclear.label}</KeyHint>
+          {stage?.mode === "S" ? (
+            <KeyHint keys={["f"]} on={Boolean(asking)}>
+              {asking ? "Asking for a second opinion" : "Second opinion"}
+            </KeyHint>
+          ) : null}
           <KeyHint keys={["Backspace"]}>Undo</KeyHint>
           <KeyHint keys={[" "]}>
             {current?.reveal && !current.settled ? "Keep and next" : "Next"}

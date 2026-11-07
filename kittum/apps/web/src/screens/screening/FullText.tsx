@@ -27,6 +27,7 @@ import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
 import type { CriterionName } from "./AiReading.tsx";
 import { Mentions, useEvidence } from "./evidence.tsx";
+import { AiBefore, AskSecondOpinion, SecondOpinionAsked } from "./Targeted.tsx";
 
 const VERDICT_KEYS: Record<string, CriterionStatus> = { y: "met", n: "not_met", "?": "unclear" };
 /** Outcomes that name one criterion: the key, then the criterion's number. */
@@ -131,7 +132,8 @@ function FullTextScreen({
   onDecided?: () => void;
 }) {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, labels, criteriaFor } = useProject();
+  const { project, me, labels, criteriaFor, screeningStage } = useProject();
+  const targeted = screeningStage("full_text")?.mode === "S";
   const criteria = useMemo(
     () => criteriaFor("full_text", assignment.scope_id),
     [criteriaFor, assignment.scope_id],
@@ -177,8 +179,11 @@ function FullTextScreen({
   // DESIGN.md "Metrics": when the report appeared and when the reviewer first acted on it.
   const [shownAt] = useState(() => new Date().toISOString());
   const firstKeyAt = useRef<string | null>(null);
-  // A reveal that came with the item was shown when the item was.
-  const revealedAt = useRef<string | null>(assignment.reveal ? shownAt : null);
+  // A reveal that came with the item was shown when the item was, and so was a reading the stage
+  // shows before the decision.
+  const revealedAt = useRef<string | null>(assignment.reveal || assignment.ai ? shownAt : null);
+  // Mode S, key f: the decision asks a colleague, with this comment.
+  const [asking, setAsking] = useState<{ comment: string; typing: boolean } | null>(null);
 
   // The AI's quote on the page, once its reading is shown: the server places it.
   const revealed = reveal !== null;
@@ -237,8 +242,12 @@ function FullTextScreen({
     setFollow("mention");
   };
 
-  const send = async (decision: Decision, phase: "provisional" | "final") => {
+  const send = async (given: Decision, phase: "provisional" | "final") => {
     const now = new Date().toISOString();
+    const decision: Decision =
+      asking && !asking.typing
+        ? { ...given, comment: asking.comment.trim() || null, second_opinion: true }
+        : given;
     setBusy(true);
     try {
       const result = await run(
@@ -403,6 +412,16 @@ function FullTextScreen({
       if (key === "Escape" || key === "Backspace" || key in ON_A_CRITERION) return true;
     }
     if (key === " ") return keep();
+    if (key === "f" && targeted) {
+      if (assignment.second_opinion)
+        setNotice("This is a second opinion. Your decision settles the record.");
+      else setAsking({ comment: asking?.comment ?? "", typing: true });
+      return true;
+    }
+    if (key === "Escape" && asking) {
+      setAsking(null);
+      return true;
+    }
     if (key === "ArrowDown" || key === "j") {
       setActive((a) => Math.min(a + 1, criteria.length - 1));
       return true;
@@ -549,6 +568,24 @@ function FullTextScreen({
             );
           })}
         </ol>
+        {assignment.second_opinion ? (
+          <SecondOpinionAsked
+            asked={assignment.second_opinion}
+            criteria={criteria}
+            labels={labels}
+          />
+        ) : null}
+        {assignment.ai && !reveal ? (
+          <AiBefore ai={assignment.ai} criteria={criteria} labels={labels} marked={null} />
+        ) : null}
+        {asking && !outcome ? (
+          <AskSecondOpinion
+            comment={asking.comment}
+            onComment={(comment) => setAsking({ comment, typing: true })}
+            onDone={() => setAsking((a) => a && { ...a, typing: false })}
+            onCancel={() => setAsking(null)}
+          />
+        ) : null}
         {reveal ? (
           <FullTextReveal
             reveal={reveal}
@@ -601,6 +638,11 @@ function FullTextScreen({
                 Insufficient information
               </KeyHint>
               <KeyHint keys={["w"]}>Wrong document</KeyHint>
+              {targeted ? (
+                <KeyHint keys={["f"]} on={Boolean(asking)}>
+                  {asking ? "Asking for a second opinion" : "Second opinion"}
+                </KeyHint>
+              ) : null}
             </div>
             <p
               className="mt-2 min-h-5 text-xs text-ink-2"

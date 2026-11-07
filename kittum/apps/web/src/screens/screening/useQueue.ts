@@ -4,7 +4,8 @@
 // settles it (the AI agrees, or the project never reveals) or returns a reveal, which stays on
 // screen until the reviewer keeps (Space) or revises (another decision key). Backspace reopens the
 // previous record; a new decision on it takes the old one back on the server first (undo), and
-// Space leaves it as it was.
+// Space leaves it as it was. In a stage that reveals `before`, the AI's reading comes with the
+// record, and the decision reports when it was shown.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Decision, Outcome, QueueItem, Reveal, Stage } from "../../data/schema.ts";
@@ -40,9 +41,10 @@ const enter = (item: QueueItem): Entry => ({
   etag: item.etag,
   decision: null,
   settled: false,
-  // An item that comes back awaiting a final decision brings the reviewer's own reveal.
+  // An item that comes back awaiting a final decision brings the reviewer's own reveal; in a
+  // stage that reveals `before`, the AI's reading is on screen from the start.
   reveal: item.reveal,
-  revealedAt: item.reveal ? new Date().toISOString() : null,
+  revealedAt: item.reveal || item.ai ? new Date().toISOString() : null,
   shownAt: new Date().toISOString(),
   shownMs: performance.now(),
   firstKeyAt: null,
@@ -60,6 +62,9 @@ export function useQueue(
   caller: Caller,
   scopeId: string | null,
   stage: Stage = "title_abstract",
+  /** The stage shows the AI's reading before the decision (mode S): records loaded before the
+   * judge read them take its reading when it arrives. */
+  readingBefore = false,
 ) {
   // The current record and the buffer change together, so they are one state. `forward` holds
   // records that undo stepped back over, whole, so they return with their decision and revision.
@@ -134,6 +139,42 @@ export function useQueue(
       });
   }, [workbench, caller, scopeId, stage, exhausted, current, forward, ahead, history]);
 
+  // A record on screen, undecided, that the judge has not read yet: ask again every few seconds,
+  // and give it and the records behind it their reading once there is one.
+  const unread =
+    readingBefore && current !== null && !current.item.ai && current.decision === null
+      ? current.item.assignment_id
+      : null;
+  useEffect(() => {
+    if (unread === null || scopeId === null) return;
+    const timer = window.setInterval(() => {
+      run(workbench.queue({ ...caller, scopeId, stage, after: null, limit: AHEAD + 1 }))
+        .then((items) => {
+          const read = new Map(
+            items.flatMap((i) => (i.ai ? [[i.assignment_id, i.ai] as const] : [])),
+          );
+          if (read.size === 0) return;
+          setView((v) => {
+            const now = v.current;
+            const ai = now ? read.get(now.item.assignment_id) : undefined;
+            return {
+              ...v,
+              current:
+                now && ai && !now.item.ai && now.decision === null
+                  ? { ...now, item: { ...now.item, ai }, revealedAt: new Date().toISOString() }
+                  : now,
+              ahead: v.ahead.map((q) => {
+                const found = read.get(q.assignment_id);
+                return q.ai || !found ? q : { ...q, ai: found };
+              }),
+            };
+          });
+        })
+        .catch(() => undefined);
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [unread, workbench, caller, scopeId, stage]);
+
   const advance = useCallback((settled: Entry) => {
     setHistory((h) => [...h, settled]);
     if (!timings.current.has(settled.item.assignment_id)) {
@@ -163,15 +204,27 @@ export function useQueue(
   }, []);
 
   const decide = useCallback(
-    async (outcome: Outcome, reasonCriterionId: string | null = null) => {
+    async (
+      outcome: Outcome,
+      reasonCriterionId: string | null = null,
+      /** Mode S: ask a colleague of the pool, with what the reviewer is unsure about. */
+      secondOpinion: { readonly comment: string } | null = null,
+    ) => {
       if (!current || busy) return;
+      const revising = current.reveal !== null && !current.settled;
+      // A decision revised after a reveal keeps the request for a second opinion it made.
+      const asked =
+        secondOpinion ??
+        (revising && current.decision?.second_opinion
+          ? { comment: current.decision.comment ?? "" }
+          : null);
       const decision: Decision = {
         outcome,
         reason_criterion_id: outcome === "exclude" ? reasonCriterionId : null,
         evidence_anchor_ids: [],
-        comment: null,
+        comment: asked?.comment.trim() || null,
+        ...(asked ? { second_opinion: true } : {}),
       };
-      const revising = current.reveal !== null && !current.settled;
       const now = new Date().toISOString();
       setBusy(true);
       setNotice(null);

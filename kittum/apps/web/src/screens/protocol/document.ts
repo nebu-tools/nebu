@@ -37,6 +37,14 @@ export interface Topic {
   readonly id: string;
   readonly label: Localized;
   readonly mode: string;
+  readonly mode_rationale?: Localized | null;
+  readonly validation_pack?: string | null;
+  readonly stopping?: unknown;
+  readonly audit?: {
+    readonly sentinel_percent?: string;
+    readonly random_audit_percent?: string;
+    readonly census_of_disagreements?: boolean;
+  };
   readonly scopes: ReadonlyArray<Scope>;
   readonly criteria: ReadonlyArray<Criterion>;
   readonly source_plan: { readonly sources: ReadonlyArray<Source> };
@@ -94,6 +102,45 @@ export const blankDoc = (): Doc => ({
       ],
     } as Topic,
   ],
+});
+
+/**
+ * The two ways a team works, as settings of a search topic. A preset only fills in the settings;
+ * the methods text and the disclosure come from the settings, never from the preset's name.
+ */
+export const PRESETS = {
+  documented: {
+    label: "Documented SLR",
+    description:
+      "Mode M1 with complete documentation: two people screen every record blind, the AI is a third screener, sentinels and an audit sample check the screening.",
+  },
+  targeted: {
+    label: "Targeted search",
+    description:
+      "Mode S with working documentation: one person of a pool screens each record and asks a colleague for a second opinion when unsure. No auditor, no sentinels. The AI's reading may show before the decision.",
+  },
+} as const;
+export type Preset = keyof typeof PRESETS;
+
+/** The preset a topic's settings match, or null for M2 and M3, which only the mode list sets. */
+export const presetOf = (topic: Topic): Preset | null =>
+  topic.mode === "M1" ? "documented" : topic.mode === "S" ? "targeted" : null;
+
+/** The topic with a preset's settings. A rationale stays: S needs one, and only the lead can
+ * write it. */
+export const withPreset = (topic: Topic, preset: Preset): Topic => ({
+  ...topic,
+  mode: preset === "documented" ? "M1" : "S",
+  mode_rationale: preset === "documented" ? null : (topic.mode_rationale ?? null),
+  validation_pack: null,
+  stopping: null,
+  audit: {
+    ...topic.audit,
+    census_of_disagreements: true,
+    ...(preset === "documented"
+      ? { sentinel_percent: "1", random_audit_percent: "10" }
+      : { sentinel_percent: "0", random_audit_percent: "0" }),
+  },
 });
 
 export const PUBMED = (id: string): Source => ({

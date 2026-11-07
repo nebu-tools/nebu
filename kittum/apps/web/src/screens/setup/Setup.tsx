@@ -69,10 +69,17 @@ export function SetupScreen() {
   }, [workbench, project.id, me.actor_id, seesLeadData, tick, project.stages.length]);
 
   const topics = protocol?.protocol.topics ?? [];
-  const needed = topics.some((t) => t.mode !== "M2") || topics.length === 0 ? 2 : 1;
+  // Targeted searches (mode S) need reviewers only: no auditor and no adjudication.
+  const targeted = topics.length > 0 && topics.every((t) => t.mode === "S");
+  const needed = targeted
+    ? 1
+    : topics.some((t) => t.mode !== "M2" && t.mode !== "S") || topics.length === 0
+      ? 2
+      : 1;
   const count = (role: Role) => project.members.filter((m) => m.roles.includes(role)).length;
   const reviewers = count("reviewer");
-  const peopleDone = reviewers >= needed && count("auditor") > 0 && count("adjudicator") > 0;
+  const peopleDone =
+    reviewers >= needed && (targeted || (count("auditor") > 0 && count("adjudicator") > 0));
   const searches = progress?.searches ?? 0;
   const identified = progress?.identification;
   const taOpen = project.stages.filter((s) => s.stage === "title_abstract");
@@ -83,8 +90,13 @@ export function SetupScreen() {
       title: "People",
       done: peopleDone,
       summary: peopleDone
-        ? `${project.members.length} people: ${reviewers} ${reviewers === 1 ? "reviewer" : "reviewers"}, ${count("auditor")} auditor, ${count("adjudicator")} ${count("adjudicator") === 1 ? "adjudicator" : "adjudicators"}`
-        : `Add ${needed === 2 ? "two reviewers" : "a reviewer"}, an auditor, and an adjudicator`,
+        ? `${project.members.length} people: ${reviewers} ${reviewers === 1 ? "reviewer" : "reviewers"}` +
+          (targeted
+            ? ""
+            : `, ${count("auditor")} auditor, ${count("adjudicator")} ${count("adjudicator") === 1 ? "adjudicator" : "adjudicators"}`)
+        : targeted
+          ? "Add the reviewers who share the records"
+          : `Add ${needed === 2 ? "two reviewers" : "a reviewer"}, an auditor, and an adjudicator`,
     },
     {
       id: "protocol",
@@ -123,7 +135,7 @@ export function SetupScreen() {
       done: taOpen.length > 0,
       summary: taOpen.length
         ? `Open for ${taOpen.map((s) => scopeLabel(s.scope_id)).join(", ")}`
-        : `Open a stage per ${labels.scope.toLowerCase()}, with its sentinels`,
+        : `Open a stage per ${labels.scope.toLowerCase()}${targeted ? "" : ", with its sentinels"}`,
       screen: { to: "/p/$projectId/progress", label: "Watch progress" },
     },
     {
