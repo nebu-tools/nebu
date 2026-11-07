@@ -4,11 +4,14 @@ import copy
 from typing import TYPE_CHECKING
 
 import pytest
+from fastapi.testclient import TestClient
 
+from kittum.api import AppContext, create_app
 from kittum.core import new_id
 from kittum.ledger import PostgresLedger
 from kittum.protocol import compile, publish, save_draft
 from kittum.screening import InvalidDecision, Screening, StageSpec
+from kittum.settings import Settings
 from kittum.storage import MemoryStore
 from tests.screening.support import (
     CONFIG,
@@ -24,6 +27,8 @@ from tests.screening.support import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from kittum.db import Database
 
 pytestmark = pytest.mark.postgres
@@ -46,7 +51,7 @@ def two_topics() -> dict:
     return source
 
 
-def test_topic_id_scopes_queue_and_progress(database: Database) -> None:
+def test_topic_id_scopes_queue_and_progress(database: Database, tmp_path: Path) -> None:
     ledger = PostgresLedger()
     artifacts = MemoryStore()
     with database.transaction() as tx:
@@ -106,3 +111,16 @@ def test_topic_id_scopes_queue_and_progress(database: Database) -> None:
             assert (own.view, own.screened, own.remaining) == ("reviewer", 0, len(recs) + 1)
         with pytest.raises(InvalidDecision, match="several topics"):
             world.screening.queue(tx, people.project_id, a, SCOPE, STAGE)
+
+    # The working export of such a scope needs its topic too: without one it is a 422 that says
+    # so, not a server error.
+    settings = Settings(database_url="postgresql://unused", artifact_dir=tmp_path)
+    context = AppContext(settings=settings, db=database, artifacts=artifacts, ledger=ledger)
+    with TestClient(create_app(context)) as client:
+        response = client.post(
+            f"/api/projects/{people.project_id}/reports/working-export",
+            headers={"X-Kittum-Reviewer": str(a)},
+            json={"scope_id": SCOPE, "stage": STAGE},
+        )
+    assert response.status_code == 422, response.text
+    assert "several topics" in response.text
