@@ -27,6 +27,7 @@ import { run, WorkbenchError } from "../../data/workbench.ts";
 import type { Caller, Workbench } from "../../data/workbench.ts";
 import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
+import { usePoll } from "../../ui/poll.ts";
 import { OUTCOMES, Status, VERDICTS } from "../../ui/Status.tsx";
 import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
@@ -573,6 +574,8 @@ function StageTable({
           rows: targets.map((r) => ({
             assignment_id: r.assignment_id as string,
             expected_etag: r.etag as string,
+            // The proposal on screen: if a re-judge changed it since, the server refuses.
+            ...(action === "accept_ai" ? { proposal: r.ai_proposal ?? null } : {}),
           })),
           action,
           reasonCriterionId: action === "exclude" ? reason : null,
@@ -606,6 +609,16 @@ function StageTable({
       setBusy(false);
     }
   };
+
+  // After a re-judge the lead's rows still read with the old version until the worker has read
+  // them again: re-read the table until every reading is the new one.
+  const renewing =
+    kind === "lead" && table
+      ? table.rows.filter((r) => r.ai_protocol_hash && r.ai_protocol_hash !== table.protocol_hash)
+          .length
+      : 0;
+  const refresh = useCallback(() => setReload((n) => n + 1), []);
+  usePoll(renewing > 0, refresh, 4000);
 
   const [rejudging, setRejudging] = useState(false);
   const rejudge = async () => {
@@ -1018,6 +1031,11 @@ function StageTable({
           >
             The AI proposes to exclude {table.known_includes.proposed_exclude} of{" "}
             {table.known_includes.known} known includes
+          </span>
+        ) : null}
+        {renewing > 0 ? (
+          <span className="whitespace-nowrap text-ink-3" role="status" data-testid="renewing">
+            {renewing} {renewing === 1 ? "record waits" : "records wait"} for the new reading
           </span>
         ) : null}
         {kind === "lead" && published && published.hash !== table.protocol_hash ? (

@@ -980,8 +980,8 @@ def _method_paragraphs(d: dict[str, Any]) -> list[str]:
                 + (
                     f"{accepted} of them took over the AI's proposal for the record"
                     + (
-                        f", {unverified} of those an exclusion on a quote Kittum could not "
-                        "find word for word in the record."
+                        f", {unverified} of those an exclusion whose quote Kittum's filter "
+                        "could not verify."
                         if unverified
                         else "."
                     )

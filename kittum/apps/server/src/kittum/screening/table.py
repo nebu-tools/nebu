@@ -114,6 +114,9 @@ class TableRow(Record):
     a reviewer's table of a complete-documentation topic, which screens blind to the pool."""
     ai_proposal: AiProposal | None = None
     """What the AI proposes: for the lead, and in a reviewer's table where `ai` is shown."""
+    ai_protocol_hash: str | None = None
+    """The protocol version the AI's reading was made under, for the lead: after a re-judge,
+    rows still on the old version are waiting for their new reading."""
     known_include: bool = False
     """One of the topic's known includes. For the lead, and in topics with working
     documentation."""
@@ -235,8 +238,12 @@ def _reviewer_rows(
     tx: Tx, stage_id: Id, reviewer_id: Id, documentation: DocumentationLevel
 ) -> list[_Row]:
     rows = tx.execute(
-        "select t.*, a.item_ref from screening_reviewer_table(%s, %s) t"
-        " join screening_assignment a on a.id = t.assignment_id order by t.position",
+        # The item reference and the reading's flags stay on the server: the flags only keep a
+        # record that tried to instruct the model from having a proposal.
+        "select t.*, a.item_ref, r.flags as ai_flags from screening_reviewer_table(%s, %s) t"
+        " join screening_assignment a on a.id = t.assignment_id"
+        " left join screening_ai_reading r on r.stage_id = a.stage_id and r.item_ref = a.item_ref"
+        " order by t.position",
         (stage_id, reviewer_id),
     ).fetchall()
     return [
@@ -264,7 +271,7 @@ def _reviewer_rows(
                 second_opinion=SecondOpinionContext.model_validate(r["consult"])
                 if r["consult"]
                 else None,
-                ai_proposal=proposal(_reading(r["ai_before"]), documentation),
+                ai_proposal=proposal(_reading(r["ai_before"], r["ai_flags"] or []), documentation),
             ),
         )
         for r in rows
@@ -316,7 +323,7 @@ def _lead_rows(
     }
     items = tx.execute(
         "select i.item_ref, i.kind, i.audit, i.rescreen, i.title, i.text, i.facts,"
-        " r.excludes, r.criteria, r.rank, r.flags"
+        " r.excludes, r.criteria, r.rank, r.flags, r.protocol_hash as ai_protocol_hash"
         " from screening_item i left join screening_ai_reading r"
         " on r.stage_id = i.stage_id and r.item_ref = i.item_ref"
         " where i.stage_id = %s and i.withdrawn_event_id is null"
@@ -354,6 +361,7 @@ def _lead_rows(
                         _reading(i, i["flags"]) if i["criteria"] is not None else None,
                         documentation,
                     ),
+                    ai_protocol_hash=i["ai_protocol_hash"],
                 ),
             )
         )

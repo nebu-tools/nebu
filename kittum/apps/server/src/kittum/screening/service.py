@@ -658,7 +658,8 @@ class Screening:
             decision: RunDecision[tuple[str, list[Verdict]]],
             events: tuple[AuditEvent, ...],
         ):
-            assert decision.changes is not None
+            if decision.changes is None:
+                return  # nothing new: read already, or under a version the stage left
             judged_under, new = decision.changes
             rows = [
                 (
@@ -1000,6 +1001,8 @@ class Screening:
             )
 
         def apply(tx: Tx, _: RunDecision[None], events: tuple[AuditEvent, ...]):
+            if not events:
+                return  # the run has its verdicts already
             tx.execute(
                 "update screening_bench set verdicts = %s, finished_event_id = %s,"
                 " finished_at = %s where id = %s",
@@ -1512,7 +1515,8 @@ class Screening:
         the outcome and reason the AI proposes for it (`accept_ai`, only in a stage that showed
         the AI's reading before the decision). Each record gets its own decision, under the rules
         of `decide`, with `origin: bulk`, the batch, and `filter_description` (the table's
-        filter, in the reviewer's words); the batch is one `screening.bulk_decided` event. The
+        filter, in the reviewer's words); `accept_ai` rows carry the proposal the table showed,
+        and one a re-judge changed since counts as stale. The batch is one `screening.bulk_decided` event. The
         batch decides all its records or none: a stale `etag`, a record decided already, a
         second opinion (a consult, decided on its own), or a record without an AI proposal
         rejects it. A complete topic refuses bulk decisions.
@@ -1592,6 +1596,10 @@ class Screening:
                     raise NotAssigned(f"assignment {r.assignment_id} not found")
                 _refuse_withdrawn(a)
                 stale += a["etag"] != r.expected_etag
+                if action == "accept_ai" and r.proposal != proposal(
+                    readings.get(a["item_ref"]), "working"
+                ):
+                    stale += 1  # a re-judge renewed the reading since the table showed it
                 taken += a["state"] != "pending"
                 consults += a["role"] != "screener"
                 if action == "accept_ai":
@@ -1771,11 +1779,11 @@ class Screening:
                 )
 
         self._commands.execute(tx, command, decide, load=load, apply=apply)
+        # From the batch's own decisions, so a retry gets the answer the first call got.
         batch = tx.execute(
-            "select b.id, b.reviewer_id, b.recorded_at,"
-            " count(*) filter (where a.state = 'awaiting_final') as waiting"
+            "select b.id, b.reviewer_id, b.recorded_at, count(*) as decisions,"
+            " count(*) filter (where d.reveal is not null) as waiting"
             " from screening_batch b join screening_decision d on d.batch_id = b.id"
-            " join screening_assignment a on a.id = d.assignment_id"
             " where b.command_id = %s group by b.id",
             (command_id,),
         ).fetchone()
@@ -1783,7 +1791,7 @@ class Screening:
             raise NotAssigned(f"command {command_id} recorded no batch of this reviewer")
         return BulkResult(
             batch_id=batch["id"],
-            decided=len(rows) - batch["waiting"],
+            decided=batch["decisions"] - batch["waiting"],
             awaiting_final=batch["waiting"],
             recorded_at=batch["recorded_at"],
         )

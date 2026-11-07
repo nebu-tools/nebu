@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from kittum.core import new_id
-from kittum.judge import instructions_hash, rendered_prompt
+from kittum.judge import instructions_hash, load_verdicts, rendered_prompt
 from kittum.protocol import JudgeInstructions, compile, publish, save_draft
 from kittum.report import load_review, render_files, trace
 from kittum.screening import (
@@ -215,6 +215,19 @@ def test_a_rejudge_renews_the_readings_and_keeps_every_human_decision(database: 
         world.protocol.version.content_hash: len(world.records),
         v2.version.content_hash: len(world.records),
     }
+    # A late job of the first round attaches nothing: the stage reads with another version now.
+    with world.db.transaction() as tx:
+        old = load_verdicts(tx, world.project_id, scope_id=SCOPE)
+        world.screening.attach_verdicts(
+            tx,
+            command_id=new_id(),
+            project_id=world.project_id,
+            actor_id=world.people.model,
+            stage_id=stage.stage_id,
+            verdicts=old,
+            protocol_hash=world.protocol.version.content_hash,
+        )
+    assert row(table(world, a), "patch").ai_proposal == patch.ai_proposal
     (rejudged,) = events(world, REJUDGED)
     assert rejudged["to_instructions_hash"] == instructions_hash(judge)
     renewed = events(world, AI_READ)[-1]["readings"]
@@ -396,8 +409,9 @@ def test_the_bench_runs_a_draft_on_known_includes_and_settled_records(database: 
 
 
 def rows_of(t: ScreeningTable, *keys: str) -> tuple[BulkRow, ...]:
+    """The rows as the table showed them, with the AI's proposal on screen."""
     return tuple(
-        BulkRow(assignment_id=r.assignment_id, expected_etag=r.etag)  # type: ignore[arg-type]
+        BulkRow(assignment_id=r.assignment_id, expected_etag=r.etag, proposal=r.ai_proposal)  # type: ignore[arg-type]
         for r in (row(t, k) for k in keys)
     )
 
@@ -445,6 +459,17 @@ def test_a_working_topic_decides_in_bulk_and_accepts_the_ai_proposals(database: 
             rows_of(mine, "patch"),
             action="include",
             reason_criterion_id="POP",
+        )
+
+    # A proposal other than the one on screen (a re-judge renewed it since) is stale.
+    shown = rows_of(mine, "colitis")
+    with pytest.raises(StaleRevision):
+        bulk(
+            world,
+            a,
+            stage.stage_id,
+            (shown[0].model_copy(update={"proposal": None}),),
+            action="accept_ai",
         )
 
     # A accepts the AI's proposals for three records, filtered on them in the table.
@@ -514,7 +539,10 @@ def test_a_working_topic_decides_in_bulk_and_accepts_the_ai_proposals(database: 
         "ai_disclosure.md"
     ]
     assert "5 decisions were made in bulk from the table, in 2 batches" in text
-    assert "3 of them took over the AI's proposal for the record, 2 of those" in text
+    assert (
+        "3 of them took over the AI's proposal for the record, 2 of those an exclusion whose quote"
+        in text
+    )
 
 
 def test_a_complete_topic_refuses_bulk_decisions(database: Database) -> None:
@@ -575,7 +603,12 @@ def test_the_routes_take_the_lead_and_the_screener_through_it(
         body = {
             "command_id": str(new_id()),
             "rows": [
-                {"assignment_id": r["assignment_id"], "expected_etag": r["etag"]} for r in chosen
+                {
+                    "assignment_id": r["assignment_id"],
+                    "expected_etag": r["etag"],
+                    "proposal": r["ai_proposal"],
+                }
+                for r in chosen
             ],
             "action": "accept_ai",
             "filter": "AI proposes: exclude",
@@ -587,7 +620,7 @@ def test_the_routes_take_the_lead_and_the_screener_through_it(
         again = client.post(
             f"{base}/stages/{stage.stage_id}/bulk-decide", json=body, headers=as_(a)
         )
-        assert again.json()["batch_id"] == done.json()["batch_id"]  # a retry decides nothing new
+        assert again.json() == done.json()  # a retry decides nothing new and answers the same
 
         prompt = client.get(
             f"{base}/stages/{stage.stage_id}/prompt",

@@ -282,6 +282,9 @@ class BulkRow(Record):
     assignment_id: Id
     expected_etag: str
     """The `etag` the client last saw for the row; a stale one rejects the whole batch."""
+    proposal: AiProposal | None = None
+    """For "accept the AI's proposals": the proposal the table showed. If a re-judge changed it
+    since, the batch is stale."""
 
 
 class BulkResult(Record):
