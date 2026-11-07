@@ -44,7 +44,7 @@ from kittum.models import (
     backends_from_endpoints,
 )
 from kittum.runs import Commands, PermanentJobError, PostgresJobQueue, PostgresReceipts
-from kittum.screening import JUDGE_JOB, Screening, judge_handler
+from kittum.screening import BENCH_JOB, JUDGE_JOB, Screening, bench_handler, judge_handler
 from kittum.storage import ArtifactStore, FilesystemStore
 
 if TYPE_CHECKING:
@@ -374,9 +374,9 @@ def register_job_handler(kind: str, factory: HandlerFactory) -> None:
     JOB_HANDLERS[kind] = factory
 
 
-def _judge_jobs(ctx: AppContext) -> Handler | None:
+def _judge_jobs(ctx: AppContext, kind: str = JUDGE_JOB) -> Handler | None:
     if ctx.judge is None:
-        log.warning("no judge is configured, so this worker runs no %s jobs", JUDGE_JOB)
+        log.warning("no judge is configured, so this worker runs no %s jobs", kind)
         return None
     with ctx.db.transaction() as tx:
         actor_id = ctx.judge.actor(tx)
@@ -384,7 +384,8 @@ def _judge_jobs(ctx: AppContext) -> Handler | None:
         actor_id=actor_id, ledger=ctx.require_ledger(), store=ctx.artifacts, clock=ctx.clock
     )
     screening = ctx.screening()
-    inner = judge_handler(ctx.db, screening, runner, actor_id=actor_id)
+    make = bench_handler if kind == BENCH_JOB else judge_handler
+    inner = make(ctx.db, screening, runner, actor_id=actor_id)
     config_id = ctx.judge.config.id
 
     def handle(job: Job, job_ctx: JobContext) -> JobOutput:
@@ -401,6 +402,13 @@ def _judge_jobs(ctx: AppContext) -> Handler | None:
 
 
 register_job_handler(JUDGE_JOB, _judge_jobs)
+
+
+def _bench_jobs(ctx: AppContext) -> Handler | None:
+    return _judge_jobs(ctx, BENCH_JOB)
+
+
+register_job_handler(BENCH_JOB, _bench_jobs)
 
 
 def _extraction_jobs(ctx: AppContext) -> Handler | None:

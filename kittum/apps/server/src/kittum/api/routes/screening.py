@@ -9,9 +9,10 @@ can reach the API can claim any actor ID.
 """
 
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status
+from pydantic import Field
 
 from kittum.api import AppContext, Context  # noqa: TC001 - FastAPI resolves it at runtime
 from kittum.app import (
@@ -27,15 +28,20 @@ from kittum.app import (
     mentions,
     open_screening,
     parse_sentinels,
+    rejudge_screening,
     require_lead,
 )
 from kittum.core import Id, NotFoundError, Record
 from kittum.documents import get_layer
-from kittum.protocol import Stage
+from kittum.protocol import ProtocolError, Stage, compile
 from kittum.runs import CommandIdReused
 from kittum.screening import (
     AdjudicationItem,
     AdjudicationResult,
+    BenchResult,
+    BulkAction,
+    BulkResult,
+    BulkRow,
     DecideResult,
     Decision,
     DecisionTiming,
@@ -43,6 +49,7 @@ from kittum.screening import (
     NotAssigned,
     Phase,
     QueueItem,
+    RecordPrompt,
     RevealSetting,
     ScopeStatus,
     Screening,
@@ -120,6 +127,37 @@ class OpenStageRequest(Record):
     screeners: tuple[Id, ...] | None = None
     """Mode S only: the pool of reviewers who share the records; every reviewer of the project
     if left out. The other modes take their screeners from the project's reviewers."""
+
+
+class RejudgeRequest(Record):
+    actor_id: Id
+    """The methods lead who re-judges."""
+    command_id: Id
+    protocol_version_id: Id | None = None
+    """A published version; the newest one if left out."""
+
+
+class BenchRequest(Record):
+    actor_id: Id
+    """The methods lead who runs the bench."""
+    command_id: Id
+    source: dict[str, Any]
+    """The draft protocol, as the form or the YAML editor holds it. It is compiled, not saved."""
+    limit: Annotated[int, Field(ge=0, le=200)] = 50
+    """At most this many settled records, besides the topic's known includes."""
+
+
+class BulkDecideRequest(Record):
+    command_id: Id
+    """Chosen by the client; a retry with the same ID returns the first result."""
+    rows: tuple[BulkRow, ...] = Field(min_length=1, max_length=5000)
+    action: BulkAction
+    reason_criterion_id: str | None = None
+    """The criterion to exclude on, for `exclude`."""
+    filter: str | None = Field(default=None, max_length=2000)
+    """The table's filter when the rows were selected, in words, for the ledger."""
+    timing: DecisionTiming
+    """When the selection started (`shown_at`) and when it was decided."""
 
 
 class SentinelFile(Record):
@@ -387,3 +425,100 @@ def status_route(
     screening = _screening(ctx)
     with _errors(), ctx.db.transaction() as tx:
         return screening.status(tx, project_id, reviewer, scope_id, stage, topic_id=topic_id)
+
+
+@router.post("/stages/{stage_id}/rejudge", operation_id="rejudgeScreeningStage")
+def rejudge(project_id: Id, stage_id: Id, body: RejudgeRequest, ctx: Context) -> StageInfo:
+    """Re-judge an open stage under a newer published protocol version that changes only what
+    the AI reads (the topic's strictness and guidance, the criteria's keywords and examples).
+    New readings replace the old for display; the old stay in the ledger and the disclosure.
+    Human decisions stay as they are. 422 for a version that changes more."""
+    with _errors(), ctx.db.transaction() as tx:
+        require_lead(tx, project_id, body.actor_id)
+        return rejudge_screening(
+            tx,
+            ctx,
+            project_id,
+            stage_id,
+            actor_id=body.actor_id,
+            command_id=body.command_id,
+            protocol_version_id=body.protocol_version_id,
+        )
+
+
+@router.post("/stages/{stage_id}/bench", operation_id="runScreeningBench", status_code=201)
+def run_bench(project_id: Id, stage_id: Id, body: BenchRequest, ctx: Context) -> BenchResult:
+    """The test bench: the stage's judge, with a draft protocol's instructions, on the topic's
+    known includes among the stage's records and up to `limit` records people have settled. A
+    job judges them; read the result with `getScreeningBench`. 422 for a draft that does not
+    compile."""
+    try:
+        draft = compile(body.source)
+    except ProtocolError as e:
+        detail = [
+            {"loc": ["body", "source", *i.path.split(".")], "msg": i.message, "type": "protocol"}
+            for i in e.issues
+        ]
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail=detail) from e
+    screening = _screening(ctx)
+    with _errors(), ctx.db.transaction() as tx:
+        require_lead(tx, project_id, body.actor_id)
+        bench_id = screening.request_bench(
+            tx,
+            command_id=body.command_id,
+            project_id=project_id,
+            actor_id=body.actor_id,
+            stage_id=stage_id,
+            protocol=draft,
+            limit=body.limit,
+        )
+        return screening.bench(tx, project_id, body.actor_id, bench_id)
+
+
+@router.get("/bench/{bench_id}", operation_id="getScreeningBench")
+def get_bench(project_id: Id, bench_id: Id, reviewer: Reviewer, ctx: Context) -> BenchResult:
+    """A bench run's flips against the current readings and the human decisions, known includes
+    first. The methods lead's only."""
+    with _errors(), ctx.db.transaction() as tx:
+        return _screening(ctx).bench(tx, project_id, reviewer, bench_id)
+
+
+@router.post("/stages/{stage_id}/bulk-decide", operation_id="bulkDecideScreening")
+def bulk_decide(
+    project_id: Id, stage_id: Id, body: BulkDecideRequest, reviewer: Reviewer, ctx: Context
+) -> BulkResult:
+    """Decide many of the caller's own records at once, in a topic with working documentation:
+    include them, exclude them on one criterion, or accept the AI's proposal for each. One
+    decision per record with `origin: bulk`, and one batch event with the filter. A complete
+    topic refuses (422)."""
+    with _errors(), ctx.db.transaction() as tx:
+        return _screening(ctx).bulk_decide(
+            tx,
+            command_id=body.command_id,
+            project_id=project_id,
+            reviewer_id=reviewer,
+            stage_id=stage_id,
+            rows=body.rows,
+            action=body.action,
+            reason_criterion_id=body.reason_criterion_id,
+            filter_description=body.filter,
+            timing=body.timing,
+        )
+
+
+@router.get("/stages/{stage_id}/prompt", operation_id="getScreeningRecordPrompt")
+def record_prompt(
+    project_id: Id,
+    stage_id: Id,
+    reviewer: Reviewer,
+    ctx: Context,
+    assignment_id: Annotated[
+        Id | None, Query(description="One of the caller's assignments (working topics).")
+    ] = None,
+    item_ref: Annotated[str | None, Query(description="Any record, for the methods lead.")] = None,
+) -> RecordPrompt:
+    """The prompt the AI judge reads a record with under the stage's protocol version."""
+    with _errors(), ctx.db.transaction() as tx:
+        return _screening(ctx).record_prompt(
+            tx, project_id, reviewer, stage_id, assignment_id=assignment_id, item_ref=item_ref
+        )

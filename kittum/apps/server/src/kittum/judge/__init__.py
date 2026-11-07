@@ -11,7 +11,10 @@ then recorded as `unclear` for every criterion.
 `judge` runs one record. `judge_many` runs a batch with bounded concurrency, writes each verdict
 with its raw outputs and a `judge.verdict_recorded` event, and skips records whose cache key
 (stage version, input, protocol, rendered prompt, weights, decoding, schema) is already recorded.
-`build_request` renders the exact request, for replay and for recorded tests.
+`build_request` renders the exact request, for replay and for recorded tests. A topic's
+`JudgeInstructions` (strictness and guidance) are the only editable part of the prompt;
+`prompt_template` gives the fixed parts around them for the protocol editor, and
+`instructions_hash` names the wording they select for the AI disclosure.
 `VERIFIER_LIMITS` lists what the filter cannot catch, for the AI disclosure.
 
 `judge_metrics`, `pair_metrics`, and `fleiss_kappa` measure judges on gold data: recall,
@@ -30,7 +33,18 @@ from kittum.judge.metrics import (
     judge_metrics,
     pair_metrics,
 )
-from kittum.judge.prompt import PROMPT_VERSION, USER_TEMPLATE, answer_schema, build_request
+from kittum.judge.prompt import (
+    INSTRUCTIONS_VERSION,
+    PROMPT_VERSION,
+    USER_TEMPLATE,
+    PromptTemplate,
+    RenderedPrompt,
+    answer_schema,
+    build_request,
+    instructions_hash,
+    prompt_template,
+    rendered_prompt,
+)
 from kittum.judge.run import applicable, run_judge
 from kittum.judge.store import (
     VERDICT_RECORDED,
@@ -52,7 +66,7 @@ from kittum.judge.verify import LIMITS as VERIFIER_LIMITS
 
 if TYPE_CHECKING:
     from kittum.models import LlmBackend
-    from kittum.protocol import Criterion
+    from kittum.protocol import Criterion, JudgeInstructions
 
 
 def judge(
@@ -61,12 +75,15 @@ def judge(
     criteria: tuple[Criterion, ...],
     config: JudgeConfig,
     backend: LlmBackend,
+    instructions: JudgeInstructions | None = None,
 ) -> Verdict:
-    """Judge one record against the criteria that apply to the scope at its stage."""
-    return run_judge(item, scope_id, criteria, config, backend).verdict
+    """Judge one record against the criteria that apply to the scope at its stage, with the
+    topic's instructions."""
+    return run_judge(item, scope_id, criteria, config, backend, instructions).verdict
 
 
 __all__ = [
+    "INSTRUCTIONS_VERSION",
     "PROMPT_VERSION",
     "USER_TEMPLATE",
     "VERDICT_RECORDED",
@@ -78,6 +95,8 @@ __all__ = [
     "JudgeConfigConflict",
     "JudgeMetrics",
     "PairMetrics",
+    "PromptTemplate",
+    "RenderedPrompt",
     "ScreeningItem",
     "Verdict",
     "answer_schema",
@@ -86,10 +105,13 @@ __all__ = [
     "cache_key",
     "cohen_kappa",
     "fleiss_kappa",
+    "instructions_hash",
     "judge",
     "judge_many",
     "judge_metrics",
     "load_verdicts",
     "pair_metrics",
+    "prompt_template",
     "register_config",
+    "rendered_prompt",
 ]

@@ -3,12 +3,18 @@
 // decision revealed it; the server leaves out everything else. The methods lead sees the whole
 // stage. Filters, sort, and the quick search change what is on screen, never the queue order.
 // A reviewer decides the selected row with the queue's keys, or opens it in the queue with Enter.
+// In a topic with working documentation (mode S) the table is also where a screener decides many
+// records at once: mark rows (Shift or Ctrl click, Shift+↑/↓, a for every row in view), then
+// include them, exclude them on a criterion, or accept the AI's proposal for each. The server
+// refuses bulk decisions in complete topics.
 import { Popover } from "@base-ui/react/popover";
 import { useNavigate, useRouteContext } from "@tanstack/react-router";
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import type {
+  AiProposal,
+  BulkAction,
   Criterion,
   Decision,
   Outcome,
@@ -24,6 +30,7 @@ import { useKeys } from "../../ui/keys.ts";
 import { OUTCOMES, Status, VERDICTS } from "../../ui/Status.tsx";
 import { useProject } from "../project.tsx";
 import { AiReading } from "./AiReading.tsx";
+import { ShowPrompt } from "./Prompt.tsx";
 import { AiBefore, AskSecondOpinion, SecondOpinionAsked } from "./Targeted.tsx";
 import { numbered, shortLabel } from "./criteria.ts";
 import { haystack, matcher } from "./table/fuzzy.ts";
@@ -64,6 +71,30 @@ const OUTCOME_WORDS = { include: "Include", exclude: "Exclude", conflict: "Confl
  * pool"). A complete topic's reviewer screens blind to it. */
 const pooled = (table: ScreeningTable | null) =>
   table?.rows.some((r) => r.in_known_pool !== null && r.in_known_pool !== undefined) ?? false;
+
+/** "Exclude on 2, unverified": what the AI proposes, as the "AI proposes" column says it. */
+const proposalText = (p: AiProposal | null | undefined, criteria: ReadonlyArray<Criterion>) => {
+  if (!p) return "";
+  if (p.outcome === "include") return "Include";
+  const on = p.reason_criterion_id ? ` on ${numbered(criteria, p.reason_criterion_id)}` : "";
+  return `Exclude${on}${p.verified === false ? ", unverified" : ""}`;
+};
+
+const aiColumns = (criteria: ReadonlyArray<Criterion>): Column<TableRow>[] => [
+  {
+    id: "ai_proposal",
+    header: "AI proposes",
+    width: 150,
+    text: (r) => proposalText(r.ai_proposal, criteria),
+    render: (r) => <ProposalCell proposal={r.ai_proposal} criteria={criteria} />,
+  },
+  {
+    id: "known_include",
+    header: "Known include",
+    width: 90,
+    text: (r) => (r.known_include ? "Known include" : ""),
+  },
+];
 
 function columnsFor(
   kind: ScreeningTable["view"],
@@ -166,6 +197,7 @@ function columnsFor(
             : "Nothing not met";
         },
       },
+      ...aiColumns(criteria),
       {
         id: "second_opinion",
         header: "Second opinion",
@@ -217,6 +249,7 @@ function columnsFor(
       text: (r) => (r.ai_not_met ?? []).map((id) => numbered(criteria, id)).join(", "),
       values: (r) => (r.ai_not_met ?? []).map((id) => numbered(criteria, id)),
     },
+    ...aiColumns(criteria),
     {
       id: "flags",
       header: "Flags",
@@ -241,10 +274,14 @@ const DEFAULT_COLUMNS = {
   lead: ["title", "year", "outcome", "outcome_reason", "decisions", "flags"],
 } as const;
 
-const initial = (kind: "reviewer" | "lead", pool: boolean): ViewState => ({
-  columns: DEFAULT_COLUMNS[kind].flatMap((c): string[] =>
-    pool && c === "title" ? [c, "in_known_pool"] : [c],
-  ),
+const initial = (kind: "reviewer" | "lead", pool: boolean, working = false): ViewState => ({
+  // A working topic shows what the AI proposes, before the decision where the stage allows it.
+  columns: [
+    ...DEFAULT_COLUMNS[kind].flatMap((c): string[] =>
+      pool && c === "title" ? [c, "in_known_pool"] : [c],
+    ),
+    ...(working ? ["ai_proposal", "known_include"] : []),
+  ],
   widths: {},
   sort: [],
   filters: {},
@@ -266,7 +303,7 @@ const stageKey = (s: StageInfo) => s.stage_id;
 
 export function ScreeningTableScreen() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, criteriaFor, scopeLabel, seesLeadData, labels } = useProject();
+  const { project, me, protocol, criteriaFor, scopeLabel, seesLeadData, labels } = useProject();
   const stages = useMemo(
     () =>
       project.stages.filter(
@@ -308,6 +345,9 @@ export function ScreeningTableScreen() {
       caller={caller}
       criteria={criteria}
       labels={labels}
+      published={
+        protocol ? { hash: protocol.content_hash, label: protocol.protocol.version_label } : null
+      }
       scopeName={`${labels.scope} ${scopeLabel(stage.scope_id)}`}
       describeStage={(s) => `${scopeLabel(s.scope_id)} · ${STAGE_WORDS[s.stage]}`}
     />
@@ -322,6 +362,7 @@ function StageTable({
   caller,
   criteria,
   labels,
+  published,
   scopeName,
   describeStage,
 }: {
@@ -332,6 +373,8 @@ function StageTable({
   caller: Caller;
   criteria: ReadonlyArray<Criterion>;
   labels: Record<string, string>;
+  /** The published protocol version, which a lead may re-judge the stage with. */
+  published: { readonly hash: string; readonly label: string } | null;
   scopeName: string;
   describeStage: (s: StageInfo) => string;
 }) {
@@ -342,6 +385,12 @@ function StageTable({
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState(false);
   const [selectedRef, setSelectedRef] = useState<string | null>(null);
+  // Rows marked for a bulk decision (working topics), and where a Shift range starts.
+  const [marked, setMarked] = useState<ReadonlySet<string>>(() => new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
+  const [bulkArmed, setBulkArmed] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [reload, setReload] = useState(0);
   // Mode S, key f: the next decision on this row asks a colleague, with this comment.
   const [asking, setAsking] = useState<{
     ref: string;
@@ -367,7 +416,7 @@ function StageTable({
     return () => {
       live = false;
     };
-  }, [workbench, caller, stage.scope_id, stage.stage]);
+  }, [workbench, caller, stage.scope_id, stage.stage, reload]);
 
   const kind = table?.view ?? "reviewer";
   const loaded = table !== null;
@@ -385,8 +434,13 @@ function StageTable({
   const [edited, setState] = useState<ViewState | null>(null);
   const [lastView] = useState(() => views.last);
   const opening = useMemo(
-    () => (loaded ? (lastView ? fit(lastView, columns) : initial(kind, pool)) : null),
-    [loaded, lastView, columns, kind, pool],
+    () =>
+      loaded
+        ? lastView
+          ? fit(lastView, columns)
+          : initial(kind, pool, table?.documentation === "working")
+        : null,
+    [loaded, lastView, columns, kind, pool, table?.documentation],
   );
   const state = edited ?? opening;
   useEffect(() => {
@@ -443,12 +497,36 @@ function StageTable({
   }, [rows, selectedRef]);
   const row = selected === null ? null : (rows[selected] ?? null);
 
+  const bulkable =
+    kind === "reviewer" && stage.stage === "title_abstract" && table?.documentation === "working";
+
   const select = useCallback(
-    (index: number) => {
-      const next = rows[Math.max(0, Math.min(rows.length - 1, index))];
+    (index: number, mods?: { readonly shift: boolean; readonly toggle: boolean }) => {
+      const at = Math.max(0, Math.min(rows.length - 1, index));
+      const next = rows[at];
       if (!next) return;
+      if (bulkable && mods?.shift) {
+        // A range from the anchor (or the selected row) to this one, added to the marks.
+        const from = rows.findIndex((r) => r.ref === (anchor ?? selectedRef ?? next.ref));
+        const [lo, hi] = from < 0 ? [at, at] : [Math.min(from, at), Math.max(from, at)];
+        setMarked((m) => new Set([...m, ...rows.slice(lo, hi + 1).map((r) => r.ref)]));
+        if (!anchor) setAnchor(rows[from]?.ref ?? next.ref);
+      } else if (bulkable && mods?.toggle) {
+        setMarked((m) => {
+          const copy = new Set(m);
+          if (copy.has(next.ref)) copy.delete(next.ref);
+          else copy.add(next.ref);
+          return copy;
+        });
+        setAnchor(next.ref);
+      } else if (mods) {
+        // A plain click starts over.
+        setMarked(new Set());
+        setAnchor(next.ref);
+      }
       setSelectedRef(next.ref);
       setArmed(false);
+      setBulkArmed(false);
       if (shown.current.ref !== next.ref)
         shown.current = {
           ref: next.ref,
@@ -458,8 +536,94 @@ function StageTable({
           reveal: next.reveal || next.ai ? new Date().toISOString() : null,
         };
     },
-    [rows],
+    [rows, bulkable, anchor, selectedRef],
   );
+
+  /** The marked rows a bulk decision can take: the reviewer's own, not yet decided, no
+   * second opinions (a consult is decided on its own). */
+  const markedRows = useMemo(
+    () => (table ? table.rows.filter((r) => marked.has(r.ref)) : []),
+    [table, marked],
+  );
+  const decidable = markedRows.filter(
+    (r) => own(r)?.state === "pending" && !r.second_opinion && r.assignment_id && r.etag,
+  );
+  const withProposal = decidable.filter((r) => r.ai_proposal);
+
+  const bulkDecide = async (action: BulkAction, reason: string | null = null) => {
+    if (!bulkable || busy || !table || !state) return;
+    const targets = action === "accept_ai" ? withProposal : decidable;
+    if (targets.length === 0) {
+      setNotice(
+        action === "accept_ai"
+          ? "None of the marked records has an AI proposal to accept yet."
+          : "None of the marked records is waiting for a decision.",
+      );
+      return;
+    }
+    const now = new Date().toISOString();
+    setBusy(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const result = await run(
+        workbench.bulkDecide({
+          ...caller,
+          stageId: stage.stage_id,
+          rows: targets.map((r) => ({
+            assignment_id: r.assignment_id as string,
+            expected_etag: r.etag as string,
+          })),
+          action,
+          reasonCriterionId: action === "exclude" ? reason : null,
+          filter: describe(columns, { ...state, query }, "All rows, in queue order"),
+          timing: {
+            shown_at: shown.current.at || now,
+            first_key_at: now,
+            decided_at: now,
+            reveal_shown_at: null,
+          },
+        }),
+      );
+      const what =
+        action === "include"
+          ? "Included"
+          : action === "exclude"
+            ? `Excluded on ${numbered(criteria, reason)}`
+            : "Gave the AI's proposals to";
+      setMarked(new Set());
+      setAnchor(null);
+      setReload((n) => n + 1);
+      setNotice(
+        `${what} ${targets.length} ${targets.length === 1 ? "record" : "records"}, one decision each and one batch in the ledger.` +
+          (result.awaiting_final
+            ? ` ${result.awaiting_final} wait for a final decision: the AI reads them differently.`
+            : ""),
+      );
+    } catch (e) {
+      setError(e instanceof WorkbenchError ? e.message : "The bulk decision was not recorded.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const [rejudging, setRejudging] = useState(false);
+  const rejudge = async () => {
+    if (!published || rejudging) return;
+    setRejudging(true);
+    setError(null);
+    try {
+      await run(workbench.rejudgeStage({ ...caller, stageId: stage.stage_id }));
+      setNotice(
+        `The AI reads the stage again with version ${published.label}. Its new readings replace the old ones as they arrive; people's decisions stay.`,
+      );
+      setReload((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof WorkbenchError ? e.message : "The stage was not re-judged.");
+    } finally {
+      setRejudging(false);
+    }
+  };
 
   const canDecide = kind === "reviewer" && stage.stage === "title_abstract";
 
@@ -653,6 +817,34 @@ function StageTable({
     if (event.repeat && !/^(Arrow|Page)/.test(key)) return true;
     if (shown.current.ref === row?.ref && !shown.current.firstKey && /^[iue1-9 ]$/.test(key))
       shown.current = { ...shown.current, firstKey: new Date().toISOString() };
+    if (bulkArmed) {
+      setBulkArmed(false);
+      // Shift may still be held: read the digit from the key's position.
+      const digit = /^Digit([1-9])$/.exec(event.code)?.[1] ?? (/^[1-9]$/.test(key) ? key : null);
+      if (digit) {
+        const criterion = criteria[Number(digit) - 1];
+        if (criterion) void bulkDecide("exclude", criterion.id);
+        else setNotice(`There is no criterion ${digit}.`);
+        return true;
+      }
+      if (key === "Escape" || key === "E") return true;
+    }
+    if (bulkable && marked.size > 0) {
+      switch (key) {
+        case "I":
+          void bulkDecide("include");
+          return true;
+        case "E":
+          setBulkArmed(true);
+          setNotice(
+            `Exclude the marked records on which criterion? Press 1 to ${criteria.length}.`,
+          );
+          return true;
+        case "A":
+          void bulkDecide("accept_ai");
+          return true;
+      }
+    }
     if (armed) {
       setArmed(false);
       if (/^[1-9]$/.test(key) && row) {
@@ -663,6 +855,16 @@ function StageTable({
       }
       if (key === "Escape" || key === "e") return true;
     }
+    if (bulkable && event.shiftKey && (key === "ArrowDown" || key === "ArrowUp")) {
+      // Shift+↑/↓ marks rows from the anchor, as a spreadsheet extends a selection.
+      const from = selected ?? 0;
+      if (selected !== null && marked.size === 0) setAnchor(rows[from]?.ref ?? null);
+      select(selected === null ? 0 : from + (key === "ArrowDown" ? 1 : -1), {
+        shift: true,
+        toggle: false,
+      });
+      return true;
+    }
     switch (key) {
       case "ArrowDown":
       case "j":
@@ -672,6 +874,17 @@ function StageTable({
       case "k":
         select(selected === null ? 0 : selected - 1);
         return true;
+      case "a":
+        if (!bulkable) return false;
+        setMarked(new Set(rows.map((r) => r.ref)));
+        setNotice(`Marked all ${rows.length} rows in view.`);
+        return true;
+      case "p":
+        if (kind === "lead" || table.documentation === "working") {
+          setPromptOpen((o) => !o);
+          return true;
+        }
+        return false;
       case "PageDown":
         select((selected ?? 0) + PAGE);
         return true;
@@ -694,6 +907,8 @@ function StageTable({
       case "Escape":
         setNotice(null);
         setAsking(null);
+        setMarked(new Set());
+        setAnchor(null);
         return true;
     }
     if (!canDecide || !row) return false;
@@ -794,6 +1009,22 @@ function StageTable({
           {" · "}
           {kind === "reviewer" ? `${decided} decided` : `${decided} with an outcome`}
         </span>
+        {table.known_includes && table.known_includes.proposed_exclude > 0 ? (
+          <span
+            role="status"
+            className="truncate rounded-[2px] bg-exclude-wash px-1.5 text-exclude"
+            data-testid="known-includes-warning"
+            title="The topic's reference set lists these records as relevant. A warning, not a block."
+          >
+            The AI proposes to exclude {table.known_includes.proposed_exclude} of{" "}
+            {table.known_includes.known} known includes
+          </span>
+        ) : null}
+        {kind === "lead" && published && published.hash !== table.protocol_hash ? (
+          <ToolButton onClick={() => void rejudge()} disabled={rejudging}>
+            {rejudging ? "Re-judging…" : `Re-judge with version ${published.label}`}
+          </ToolButton>
+        ) : null}
         <span className="ml-auto flex items-center gap-2">
           <ColumnChooser columns={columns} state={state} onState={onState} />
           <ViewMenu
@@ -820,7 +1051,7 @@ function StageTable({
               setViewName(null);
             }}
             onReset={() => {
-              setState(initial(kind, pool));
+              setState(initial(kind, pool, table.documentation === "working"));
               setViewName(null);
             }}
           />
@@ -841,6 +1072,7 @@ function StageTable({
           onState={onState}
           selected={selected}
           onSelect={select}
+          marked={marked}
           onOpen={(i) => {
             const target = rows[i];
             if (target) open(target);
@@ -855,7 +1087,25 @@ function StageTable({
           data-testid="row-pane"
         >
           {row ? (
-            <RowPane row={row} kind={kind} criteria={criteria} labels={labels}>
+            <RowPane
+              row={row}
+              kind={kind}
+              criteria={criteria}
+              labels={labels}
+              prompt={
+                kind === "lead" || table.documentation === "working" ? (
+                  <ShowPrompt
+                    caller={caller}
+                    stageId={stage.stage_id}
+                    {...(kind === "lead"
+                      ? { itemRef: row.ref }
+                      : { assignmentId: row.assignment_id ?? null })}
+                    open={promptOpen}
+                    onToggle={() => setPromptOpen((o) => !o)}
+                  />
+                ) : null
+              }
+            >
               {asking?.ref === row.ref ? (
                 <AskSecondOpinion
                   comment={asking.comment}
@@ -874,6 +1124,43 @@ function StageTable({
         </aside>
       </div>
       <footer className="border-t border-rule-strong bg-sheet-2 text-xs">
+        {bulkable && marked.size > 0 ? (
+          <div
+            className="flex h-8 items-center gap-3 border-b border-rule bg-petrol-wash px-3"
+            role="toolbar"
+            aria-label="Bulk decision"
+            data-testid="bulk-bar"
+          >
+            <span className="font-semibold text-ink" data-testid="bulk-count">
+              {marked.size} marked · {decidable.length} to decide
+            </span>
+            <ToolButton onClick={() => void bulkDecide("include")} disabled={busy}>
+              Include all <Key k="I" />
+            </ToolButton>
+            <BulkExclude
+              criteria={criteria}
+              armed={bulkArmed}
+              disabled={busy}
+              onExclude={(id) => void bulkDecide("exclude", id)}
+            />
+            <ToolButton onClick={() => void bulkDecide("accept_ai")} disabled={busy}>
+              Accept the AI's proposals ({withProposal.length}) <Key k="A" />
+            </ToolButton>
+            <button
+              type="button"
+              className="text-ink-2 hover:underline"
+              onClick={() => {
+                setMarked(new Set());
+                setAnchor(null);
+              }}
+            >
+              Clear
+            </button>
+            <span className="ml-auto text-ink-3">
+              One decision per record, recorded as a bulk decision with the filter in view.
+            </span>
+          </div>
+        ) : null}
         {canDecide ? (
           <ol
             aria-label="Criteria"
@@ -910,6 +1197,7 @@ function StageTable({
                 {row?.decisions[0]?.state === "awaiting_final" ? "Keep" : "Next"}
               </KeyHint>
               <KeyHint keys={["Backspace"]}>Take back</KeyHint>
+              {bulkable ? <KeyHint keys={["a"]}>Mark all in view</KeyHint> : null}
             </>
           ) : null}
           <span className="ml-auto min-w-0 truncate" aria-live="polite">
@@ -946,17 +1234,72 @@ function DecisionCell({
   );
 }
 
+function ProposalCell({
+  proposal,
+  criteria,
+}: {
+  proposal: AiProposal | null | undefined;
+  criteria: ReadonlyArray<Criterion>;
+}) {
+  if (!proposal) return null;
+  const term = OUTCOMES[proposal.outcome];
+  return <Status term={term}>{proposalText(proposal, criteria)}</Status>;
+}
+
+function BulkExclude({
+  criteria,
+  armed,
+  disabled,
+  onExclude,
+}: {
+  criteria: ReadonlyArray<Criterion>;
+  armed: boolean;
+  disabled: boolean;
+  onExclude: (criterionId: string) => void;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger
+        className={`h-6 flex-none rounded-[2px] border bg-sheet px-2 whitespace-nowrap hover:bg-sheet-2 ${armed ? "border-exclude text-exclude" : "border-rule-strong"}`}
+        disabled={disabled}
+      >
+        {armed ? `Now 1 to ${criteria.length}` : "Exclude all on…"} <Key k="E" />
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Positioner sideOffset={2} side="top" className="z-30">
+          <Popover.Popup className={`${POPUP} w-[260px] py-1`} data-testid="bulk-exclude-menu">
+            {criteria.map((c, i) => (
+              <button
+                key={c.id}
+                type="button"
+                className="flex h-[24px] w-full items-center gap-1.5 px-2 text-left hover:bg-sheet-2"
+                onClick={() => onExclude(c.id)}
+              >
+                <Key k={String(i + 1)} />
+                <span className="truncate">{shortLabel(c)}</span>
+              </button>
+            ))}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 function RowPane({
   row,
   kind,
   criteria,
   labels,
+  prompt,
   children,
 }: {
   row: TableRow;
   kind: "reviewer" | "lead";
   criteria: ReadonlyArray<Criterion>;
   labels: Record<string, string>;
+  /** "Show the prompt", where the viewer may see what the AI reads. */
+  prompt?: ReactNode;
   /** The second-opinion prompt, while the reviewer writes it. */
   children?: ReactNode;
 }) {
@@ -1034,9 +1377,21 @@ function RowPane({
           />
         </section>
       ) : null}
+      {row.ai_proposal || row.known_include ? (
+        <p className="mt-2 flex items-center gap-2 text-xs" data-testid="row-proposal">
+          {row.ai_proposal ? (
+            <>
+              <span className="text-ink-3">AI proposes</span>
+              <ProposalCell proposal={row.ai_proposal} criteria={criteria} />
+            </>
+          ) : null}
+          {row.known_include ? <span className="text-ink-2">Known include</span> : null}
+        </p>
+      ) : null}
       <p className="mt-3 text-xs leading-[19px] whitespace-pre-line text-ink">
         {row.abstract || <span className="text-ink-3">This record has no abstract.</span>}
       </p>
+      {prompt ? <div className="-mx-4 mt-3">{prompt}</div> : null}
     </article>
   );
 }

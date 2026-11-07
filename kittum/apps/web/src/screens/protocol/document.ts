@@ -50,6 +50,8 @@ export interface Topic {
   readonly scopes: ReadonlyArray<Scope>;
   readonly criteria: ReadonlyArray<Criterion>;
   readonly source_plan: { readonly sources: ReadonlyArray<Source> };
+  /** The AI judge's strictness and the team's guidance; left out while both are the default. */
+  readonly judge?: { readonly strictness?: string; readonly guidance?: string | null };
 }
 interface Outcome {
   readonly id: string;

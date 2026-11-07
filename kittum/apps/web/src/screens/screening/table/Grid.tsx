@@ -22,7 +22,13 @@ interface GridProps<R> {
   readonly state: ViewState;
   readonly onState: (update: (state: ViewState) => ViewState) => void;
   readonly selected: number | null;
-  readonly onSelect: (index: number) => void;
+  /** A click selects a row; with Shift or Ctrl (Cmd) it also marks rows for a bulk decision. */
+  readonly onSelect: (
+    index: number,
+    mods?: { readonly shift: boolean; readonly toggle: boolean },
+  ) => void;
+  /** Rows marked for a bulk decision, by key. */
+  readonly marked?: ReadonlySet<string>;
   readonly onOpen?: (index: number) => void;
   readonly rowKey: (row: R) => string;
   /** Marks a row, e.g. one the reviewer has decided. */
@@ -38,6 +44,7 @@ export function Grid<R>({
   onState,
   selected,
   onSelect,
+  marked,
   onOpen,
   rowKey,
   rowTone,
@@ -108,20 +115,27 @@ export function Grid<R>({
         {rows.slice(first, last).map((row, offset) => {
           const index = first + offset;
           const isSelected = index === selected;
+          const isMarked = marked?.has(rowKey(row)) ?? false;
           return (
             <div
               key={rowKey(row)}
               role="row"
               aria-rowindex={index + 2}
               aria-selected={isSelected}
+              data-marked={isMarked || undefined}
               data-row={rowKey(row)}
               className={`absolute left-0 flex cursor-default border-b border-rule ${
                 isSelected
                   ? "bg-marker-soft shadow-[inset_2px_0_0_var(--marker-edge)]"
-                  : `${rowTone?.(row) ?? ""} hover:bg-sheet-2`
-              }`}
+                  : isMarked
+                    ? "bg-petrol-wash"
+                    : `${rowTone?.(row) ?? ""} hover:bg-sheet-2`
+              } ${isMarked && isSelected ? "outline outline-1 -outline-offset-1 outline-petrol" : ""}`}
               style={{ top: index * ROW, height: ROW, width: total }}
-              onMouseDown={() => onSelect(index)}
+              onMouseDown={(e) => {
+                if (e.shiftKey) e.preventDefault(); // no text selection on a range click
+                onSelect(index, { shift: e.shiftKey, toggle: e.ctrlKey || e.metaKey });
+              }}
               onDoubleClick={() => onOpen?.(index)}
             >
               {shown.map(({ column, width }) => (

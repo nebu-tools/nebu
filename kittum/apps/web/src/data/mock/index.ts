@@ -486,6 +486,9 @@ export const makeMockWorkbench = (
         scope_id: scopeId,
         stage,
         view: "reviewer",
+        documentation: "complete",
+        reveal: "on_disagreement",
+        protocol_hash: "0".repeat(64),
         rows:
           stage === "title_abstract" && scopeId === SCOPE_A
             ? RECORDS.map((r) => {
@@ -519,6 +522,12 @@ export const makeMockWorkbench = (
             : [],
       })),
     workingExport: unavailable,
+    bulkDecide: unavailable,
+    recordPrompt: unavailable,
+    promptTemplate: unavailable,
+    runBench: unavailable,
+    bench: unavailable,
+    rejudgeStage: unavailable,
 
     status: ({ scopeId, stage }) =>
       call("other", "status", { scopeId, stage }, (): ScopeStatus => {

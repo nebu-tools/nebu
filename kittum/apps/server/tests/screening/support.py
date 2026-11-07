@@ -37,6 +37,7 @@ from kittum.people import record_roles
 from kittum.protocol import compile, publish, save_draft
 from kittum.runs import PostgresJobQueue, Worker
 from kittum.screening import (
+    BENCH_JOB,
     JUDGE_JOB,
     DecisionTiming,
     QueueItem,
@@ -46,6 +47,7 @@ from kittum.screening import (
     Sentinel,
     StageInfo,
     StageSpec,
+    bench_handler,
     criteria_for,
     judge_handler,
     topic_for,
@@ -57,7 +59,7 @@ from kittum.storage import MemoryStore
 if TYPE_CHECKING:
     from kittum.core import Id
     from kittum.db import Database, Tx
-    from kittum.protocol import Criterion, Stage, StoredProtocol
+    from kittum.protocol import Criterion, JudgeInstructions, Stage, StoredProtocol
     from kittum.search import SearchExecution
 
 HERE = Path(__file__).parent
@@ -375,18 +377,26 @@ def recorded_backend(
     *,
     stage: Stage = STAGE,
     answers: dict[str, str] | None = None,
+    instructions: JudgeInstructions | None = None,
+    strict: bool = False,
 ) -> RecordedBackend:
-    """Recorded completions keyed by the exact request the judge sends for each record."""
+    """Recorded completions keyed by the exact request the judge sends for each record, with a
+    topic's instructions if it has any. A `strict` backend has no answer for any other request,
+    so a prompt without the instructions fails the call."""
     table = {}
     for r in records:
         item = ScreeningItem(item_ref=r.item_ref, stage=stage, title=r.title, text=r.text)
-        request = build_request(item, applicable(criteria, SCOPE, item), CONFIG)
+        request = build_request(
+            item, applicable(criteria, SCOPE, item), CONFIG, instructions=instructions
+        )
         found = (answers or {}).get(r.item_ref)
         table[RecordedBackend.key(request)] = found or (
             ai_answer(r) if stage == STAGE else unclear_answer(criteria)
         )
     return RecordedBackend(
-        table, default=unclear_answer(criteria), model_identity="Qwen/Qwen3.8-27B"
+        table,
+        default=None if strict else unclear_answer(criteria),
+        model_identity="Qwen/Qwen3.8-27B",
     )
 
 
@@ -563,11 +573,13 @@ class World:
         )
 
     def run_judge_jobs(self, backend: RecordedBackend) -> int:
-        """Run judge jobs until none is due; returns how many ran."""
-        handler = judge_handler(
-            self.db, self.screening, self.runner(backend), actor_id=self.people.model
-        )
-        worker = Worker(self.db, PostgresJobQueue(), {JUDGE_JOB: handler}, name=f"judge-{new_id()}")
+        """Run judge jobs and test bench jobs until none is due; returns how many ran."""
+        runner = self.runner(backend)
+        handlers = {
+            JUDGE_JOB: judge_handler(self.db, self.screening, runner, actor_id=self.people.model),
+            BENCH_JOB: bench_handler(self.db, self.screening, runner, actor_id=self.people.model),
+        }
+        worker = Worker(self.db, PostgresJobQueue(), handlers, name=f"judge-{new_id()}")
         ran = 0
         while worker.run_once():
             ran += 1

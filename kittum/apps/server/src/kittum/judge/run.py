@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from kittum.judge.prompt import CriterionAnswer
     from kittum.judge.types import JudgeConfig, ScreeningItem
     from kittum.models import Completion, CompletionRequest, LlmBackend
-    from kittum.protocol import Criterion
+    from kittum.protocol import Criterion, JudgeInstructions
 
 
 @dataclass
@@ -84,6 +84,7 @@ def run_judge(
     criteria: tuple[Criterion, ...],
     config: JudgeConfig,
     backend: LlmBackend,
+    instructions: JudgeInstructions | None = None,
 ) -> JudgeRun:
     chosen = applicable(criteria, scope_id, item)
     if not chosen:
@@ -93,7 +94,7 @@ def run_judge(
     answers: dict[str, CriterionAnswer] | None = None
     stopped: str | None = None
     for n in range(config.max_attempts):
-        request = build_request(item, chosen, config, attempt=n)
+        request = build_request(item, chosen, config, attempt=n, instructions=instructions)
         completion = backend.complete(request)
         stopped = cut_off(request, completion)
         if stopped:

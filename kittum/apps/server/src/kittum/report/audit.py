@@ -487,6 +487,8 @@ def _describe(
             f"Kittum filed the AI's readings of {len(p.get('readings', []))} records with the"
             " stage. Screeners see a reading only after their own decision"
         )
+        if p.get("protocol_hash"):
+            facts.append(("Protocol", p.get("protocol_hash")))
         for r in readings[:1] if ref is not None else []:
             facts.append(
                 (
@@ -494,6 +496,8 @@ def _describe(
                     "Proposes to exclude" if r.get("excludes") else "No exclusion proposed",
                 )
             )
+            if r.get("replaces"):
+                facts.append(("Replaces the reading under", r.get("replaces")))
             artifacts.append(names.artifact(r.get("raw_output_hash"), "Answer text"))
     elif t == "screening.decided":
         kind = "decision"
@@ -514,6 +518,26 @@ def _describe(
             summary += " as a second opinion, having seen the first decision"
         if p.get("second_opinion"):
             summary += " and asked for a second opinion"
+        accepted = p.get("ai_proposal")
+        if p.get("origin") == "bulk":
+            summary += (
+                ", in bulk from the table, taking over the AI's proposal"
+                if accepted
+                else ", in bulk from the table"
+            )
+            facts += [
+                ("Batch", p.get("batch_id")),
+                ("Filter when selected", p.get("filter") or "None"),
+            ]
+            if accepted and accepted.get("outcome") == "exclude":
+                facts.append(
+                    (
+                        "AI's proposal",
+                        f"Exclude on {accepted.get('reason_criterion_id')}, quote "
+                        + ("verified" if accepted.get("verified") else "not verified")
+                        + (f' "{accepted["quote"]}"' if accepted.get("quote") else ""),
+                    )
+                )
         if role == "auditor":
             audit, rescreen = names.flags.get(
                 (str(stage_id), str(p.get("item_ref"))), (False, False)
@@ -578,6 +602,47 @@ def _describe(
         summary = (
             f"Kittum gave the record to {names.actor(p.get('reviewer_id'))} for a second"
             " opinion. They see the first decision and its comment."
+        )
+    elif t == "screening.bulk_decided":
+        kind = "decision"
+        n = p.get("decisions")
+        what = {
+            "include": "included",
+            "exclude": f"excluded on {names.criterion(p.get('reason_criterion_id'))}",
+            "accept_ai": "gave the AI's proposed outcome to",
+        }.get(str(p.get("action")), str(p.get("action")))
+        summary = f"{who} {what} {n} {'record' if n == 1 else 'records'} at once from the table"
+        facts += [("Filter when selected", p.get("filter") or "None"), ("Batch", p.get("batch_id"))]
+    elif t == "screening.rejudged":
+        kind = "ai"
+        summary = (
+            f"{who} had the AI read the stage's {p.get('items')} records again under another"
+            " protocol version, which changes only the AI's instructions. People's decisions"
+            " stay as they are."
+        )
+        facts += [
+            ("From protocol", p.get("from_protocol_hash")),
+            ("To protocol", p.get("to_protocol_hash")),
+            ("Strictness", p.get("strictness")),
+            ("Instructions SHA-256", p.get("to_instructions_hash")),
+        ]
+    elif t == "screening.bench_requested":
+        kind = "ai"
+        summary = (
+            f"{who} ran the test bench: the AI read {p.get('records')} records with a draft's"
+            f" instructions, {p.get('known_includes')} of them known includes. The readings do"
+            " not reach the stage."
+        )
+        facts += [
+            ("Draft protocol", p.get("protocol_hash")),
+            ("Strictness", p.get("strictness")),
+            ("Instructions SHA-256", p.get("instructions_hash")),
+        ]
+    elif t == "screening.bench_finished":
+        kind = "ai"
+        summary = (
+            f"The test bench finished: {p.get('verdicts')} readings, "
+            f"{p.get('proposed_exclusions')} proposing to exclude"
         )
     elif t == "screening.item_withdrawn":
         kind = "decision"

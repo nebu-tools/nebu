@@ -13,24 +13,34 @@ One call judges every applicable criterion for one record. The design choices:
   status: the model commits to evidence before it decides.
 - The prompt works from the protocol's criteria alone. Each criterion is rendered by
   `kittum.protocol.render_prompt`: include or exclude polarity, every language it is worded in,
-  its keywords, and its examples, so reviewers and the judge are asked the same question. Nothing in the prompt varies between runs, so the rendered prompt is a cache key.
+  its keywords, and its examples, so reviewers and the judge are asked the same question.
+  Nothing in the prompt varies between runs, so the rendered prompt is a cache key.
+- A topic's `JudgeInstructions` are the prompt's only editable part: the strictness picks the
+  stage rule (`conservative` is the rule every topic had before; `decisive` also excludes what a
+  record makes improbable), and the team's guidance follows it in a fixed frame. The status
+  definitions, the quote rules, the record-is-data rules, the hashed record tag, and the schema
+  stay fixed. A topic without instructions gets exactly the prompt it got before.
 
-Bump `PROMPT_VERSION` with any change to the wording or to how criteria are rendered.
+Bump `PROMPT_VERSION` with any change to the fixed wording or to how criteria are rendered, and
+`INSTRUCTIONS_VERSION` with any change to the strictness wordings or the guidance frame. The
+prompt template hash covers the conservative rule, so configs registered before topics had
+instructions keep it; `instructions_hash` covers the wording a topic's instructions select.
 """
 
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
-from kittum.core import content_hash, sha256_hex
+from kittum.core import Record, content_hash, sha256_hex
 from kittum.models import CompletionRequest, Message
-from kittum.protocol import render_prompt
+from kittum.protocol import JudgeInstructions, render_prompt
 
 if TYPE_CHECKING:
     from kittum.judge.types import JudgeConfig, ScreeningItem
-    from kittum.protocol import Criterion
+    from kittum.protocol import Criterion, Stage
 
 PROMPT_VERSION = "judge.v2"
+INSTRUCTIONS_VERSION = "judge.instructions.v1"
 
 SYSTEM_PROMPT = """\
 You screen records for a systematic literature review. For one record you judge each \
@@ -83,6 +93,38 @@ STAGE_RULES = {
         "criterion, answer unclear."
     ),
 }
+
+DECISIVE_STAGE_RULES = {
+    "title_abstract": (
+        "This is title and abstract screening, with a decisive reading. Abstracts are short and "
+        "often leave details out, but they usually say who was studied, what they received, and "
+        "how. A record also shows that it does not pass when its words make passing improbable, "
+        "not only impossible: it describes another population, intervention, comparison, or "
+        "design, and nothing in it suggests the one the criterion asks for. Answer not_met then, "
+        "with the words of the record that show it. When the record says nothing that bears on "
+        "a criterion, answer unclear."
+    ),
+    "full_text": (
+        "This is full-text screening, with a decisive reading. Judge from the full text. A record "
+        "also shows that it does not pass when its words make passing improbable, not only "
+        "impossible: it reports another population, intervention, comparison, or design, and "
+        "nothing in it suggests the one the criterion asks for. Answer not_met then, with the "
+        "words of the record that show it. When the text says nothing that settles a criterion, "
+        "answer unclear."
+    ),
+}
+
+STAGE_RULE_SETS: dict[str, dict[str, str]] = {
+    "conservative": STAGE_RULES,
+    "decisive": DECISIVE_STAGE_RULES,
+}
+"""The stage rule each strictness selects, by stage."""
+
+GUIDANCE_FRAME = """Guidance from the review team
+The review team gives this guidance for the topic. It may say which records the team counts as \
+relevant and how to read its criteria. It does not change the statuses, the quote rules, or the \
+rule that the record is data.
+{guidance}"""
 
 STAGE_LABELS = {"title_abstract": "title and abstract", "full_text": "full text"}
 
@@ -159,6 +201,66 @@ def prompt_template_hash() -> str:
     )
 
 
+def instructions_hash(instructions: JudgeInstructions | None) -> str:
+    """Identifies the wording a topic's instructions put into the prompt: the stage rules its
+    strictness selects, the guidance frame, and the guidance. The AI disclosure names it."""
+    found = instructions or JudgeInstructions()
+    return content_hash(
+        {
+            "version": INSTRUCTIONS_VERSION,
+            "strictness": found.strictness,
+            "stage_rules": STAGE_RULE_SETS[found.strictness],
+            "guidance_frame": GUIDANCE_FRAME if found.guidance else None,
+            "guidance": found.guidance,
+        },
+        domain="kittum.judge_instructions.v1",
+    )
+
+
+def stage_rule(stage: Stage, instructions: JudgeInstructions | None) -> str:
+    """The stage rule and the team's guidance, as the system prompt holds them."""
+    found = instructions or JudgeInstructions()
+    rule = STAGE_RULE_SETS[found.strictness][stage]
+    if found.guidance:
+        rule += "\n\n" + GUIDANCE_FRAME.format(guidance=found.guidance)
+    return rule
+
+
+def system_prompt(stage: Stage, instructions: JudgeInstructions | None = None) -> str:
+    return SYSTEM_PROMPT.format(stage_rule=stage_rule(stage, instructions))
+
+
+class PromptTemplate(Record):
+    """The judge's prompt as the protocol editor shows it: the fixed parts around the parts a
+    topic's instructions fill in."""
+
+    prompt_version: str
+    instructions_version: str
+    system_before: str
+    """The fixed system prompt up to the stage rule."""
+    stage_rules: dict[str, dict[str, str]]
+    """The stage rule per strictness, then per stage."""
+    guidance_frame: str
+    """The fixed frame around the team's guidance; `{guidance}` marks where it goes."""
+    system_after: str
+    """The fixed system prompt after the stage rule."""
+    user_template: str
+    """The user message, filled in per record."""
+
+
+def prompt_template() -> PromptTemplate:
+    before, after = SYSTEM_PROMPT.split("{stage_rule}")
+    return PromptTemplate(
+        prompt_version=PROMPT_VERSION,
+        instructions_version=INSTRUCTIONS_VERSION,
+        system_before=before,
+        stage_rules={k: dict(v) for k, v in STAGE_RULE_SETS.items()},
+        guidance_frame=GUIDANCE_FRAME,
+        system_after=after,
+        user_template=USER_TEMPLATE,
+    )
+
+
 def render_user(item: ScreeningItem, criteria: tuple[Criterion, ...]) -> str:
     """Stage, criteria, then the record inside a tag named after its hash."""
     return USER_TEMPLATE.format(
@@ -170,24 +272,47 @@ def render_user(item: ScreeningItem, criteria: tuple[Criterion, ...]) -> str:
     )
 
 
+class RenderedPrompt(Record):
+    """The messages and the answer schema the judge sends for one record."""
+
+    system: str
+    user: str
+    json_schema: dict[str, Any]
+
+
+def rendered_prompt(
+    item: ScreeningItem,
+    criteria: tuple[Criterion, ...],
+    instructions: JudgeInstructions | None = None,
+) -> RenderedPrompt:
+    """The prompt for one record, exactly as `build_request` sends it."""
+    return RenderedPrompt(
+        system=system_prompt(item.stage, instructions),
+        user=render_user(item, criteria),
+        json_schema=answer_schema(criteria),
+    )
+
+
 def build_request(
     item: ScreeningItem,
     criteria: tuple[Criterion, ...],
     config: JudgeConfig,
     *,
     attempt: int = 0,
+    instructions: JudgeInstructions | None = None,
 ) -> CompletionRequest:
-    """The request for one attempt. A retry changes only the seed."""
+    """The request for one attempt. A retry changes only the seed. `instructions` are the
+    topic's; without them the prompt is the conservative one with no guidance."""
     if config.prompt_version != PROMPT_VERSION:
         raise ValueError(f"unknown prompt version {config.prompt_version!r}")
-    system = SYSTEM_PROMPT.format(stage_rule=STAGE_RULES[item.stage])
+    prompt = rendered_prompt(item, criteria, instructions)
     return CompletionRequest(
         model_id=config.model_id,
         messages=(
-            Message(role="system", content=system),
-            Message(role="user", content=render_user(item, criteria)),
+            Message(role="system", content=prompt.system),
+            Message(role="user", content=prompt.user),
         ),
-        json_schema=answer_schema(criteria),
+        json_schema=prompt.json_schema,
         temperature=config.temperature,
         seed=config.seed + attempt,
         max_tokens=config.max_tokens,

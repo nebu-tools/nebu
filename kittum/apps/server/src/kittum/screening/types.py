@@ -2,7 +2,7 @@
 
 from collections import Counter
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
 
@@ -206,6 +206,23 @@ class AiColumn(Record):
     """Where each verified quote is in the record, by criterion ID."""
 
 
+class AiProposal(Record):
+    """What the AI proposes for a record: include, or exclude on one criterion.
+
+    In a topic with complete documentation only a verified exclusion is a proposal to exclude
+    (`Verdict.excludes`). In a working topic the model's own `not_met` with a quote is one too,
+    even if the quote filter could not verify it; it is then marked `verified = False`, never
+    quietly turned into an inclusion. A record whose text tried to instruct the model, or whose
+    answer was invalid, has no proposal."""
+
+    outcome: Literal["include", "exclude"]
+    reason_criterion_id: str | None = None
+    verified: bool = True
+    """For an exclusion: whether the quote filter confirmed the quote."""
+    quote: str | None = None
+    rationale: str | None = None
+
+
 class SecondOpinionContext(Record):
     """Mode S: the decision a screener of the pool asked a second opinion on. Shown to the second
     screener, because a second opinion is a consult, not a blind screen."""
@@ -254,6 +271,27 @@ class DecideResult(Record):
     etag: str
 
 
+type BulkAction = Literal["include", "exclude", "accept_ai"]
+"""What a bulk decision decides: include every selected record, exclude them all on one
+criterion, or give each the outcome and reason the AI proposes for it."""
+type DecisionOrigin = Literal["keyboard", "bulk"]
+"""Where a decision came from: a key on one record, or a bulk decision from the table."""
+
+
+class BulkRow(Record):
+    assignment_id: Id
+    expected_etag: str
+    """The `etag` the client last saw for the row; a stale one rejects the whole batch."""
+
+
+class BulkResult(Record):
+    batch_id: Id
+    decided: int
+    """Records the batch decided; a reveal may leave some waiting for a final decision."""
+    awaiting_final: int
+    recorded_at: datetime
+
+
 class UndoResult(Record):
     etag: str
     recorded_at: datetime
@@ -261,6 +299,66 @@ class UndoResult(Record):
 
 class WithdrawResult(Record):
     recorded_at: datetime
+
+
+class RecordPrompt(Record):
+    """The prompt the AI judge reads one record with under the stage's protocol version: the
+    instructions the topic sets, and the messages and schema exactly as `kittum.judge` renders
+    them. The Audit screen shows the requests that were sent."""
+
+    protocol_hash: str
+    strictness: str
+    guidance: str | None
+    instructions_hash: str
+    system: str
+    user: str
+    json_schema: dict[str, Any]
+
+
+class KnownIncludes(Record):
+    """How many of the topic's known includes (its reference set) the rows hold, and how many
+    of them the AI proposes to exclude. A warning, never a block."""
+
+    known: int
+    read: int
+    """Known includes the AI has read."""
+    proposed_exclude: int
+
+
+class BenchRow(Record):
+    item_ref: str
+    title: str
+    known_include: bool
+    human: Outcome | None
+    """The record's settled human outcome, if any."""
+    current: AiProposal | None
+    """What the stage's current reading proposes."""
+    draft: AiProposal | None
+    """What the judge proposes with the draft's instructions; None until it has read it."""
+    flip: bool
+    """The draft proposes another outcome than the current reading."""
+    against_human: bool
+    """The draft proposes another outcome than the humans decided (unclear counts as include)."""
+
+
+class BenchResult(Record):
+    """A test bench run: the draft's readings against the current ones and the human
+    decisions, known includes first, then flips."""
+
+    bench_id: Id
+    stage_id: Id
+    protocol_hash: str
+    state: Literal["running", "done", "failed"]
+    error: str | None = None
+    requested_at: datetime
+    finished_at: datetime | None = None
+    records: int
+    known: int
+    flips: int
+    against_human: int
+    known_proposed_exclude: int
+    """Known includes the draft proposes to exclude."""
+    rows: tuple[BenchRow, ...]
 
 
 # Adjudication

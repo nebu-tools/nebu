@@ -8,20 +8,39 @@ assignment IDs. The methods lead (`sees_lead_data`) gets every item of the stage
 human decision, the outcome, the AI's verified reading, and the item's flags. Anyone else, an
 adjudicator who does not screen included, is not assigned: the table lists records, and an
 adjudicator only ever sees the conflicts put to them.
+
+Each row says what the AI proposes (`rules.proposal`) where the viewer may see the AI's reading:
+the lead always, a reviewer where the stage shows the reading before the decision. In a topic
+with working documentation an unverified `not_met` is a proposal too, marked so. The topic's
+known includes (its reference set) are marked for the lead and in working topics, and the table
+says how many of them, and of the topic's known pool, the AI proposes to exclude: a warning,
+not a block. A complete topic's
+reviewer never learns which records are known includes, as they are what sentinels are made of.
 """
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from kittum.core import Id, Record
 from kittum.corpus import known_pool_refs
+from kittum.judge import CriterionVerdict
 from kittum.people import members
-from kittum.protocol import Stage
+from kittum.protocol import (
+    DocumentationLevel,
+    ScreeningMode,
+    Stage,
+    documentation_level,
+    get_version,
+)
 from kittum.screening import store
 from kittum.screening.metrics import RecordOutcome, record_outcomes
+from kittum.screening.rules import Reading, known_include_refs, proposal, topic_for
 from kittum.screening.service import _ai_before
 from kittum.screening.types import (
     AiColumn,
+    AiProposal,
+    KnownIncludes,
     NotAssigned,
     Outcome,
     RecordFacts,
@@ -93,6 +112,11 @@ class TableRow(Record):
     in_known_pool: bool | None = None
     """The record is a paper of the topic's known pool. Empty when the topic has no pool, and in
     a reviewer's table of a complete-documentation topic, which screens blind to the pool."""
+    ai_proposal: AiProposal | None = None
+    """What the AI proposes: for the lead, and in a reviewer's table where `ai` is shown."""
+    known_include: bool = False
+    """One of the topic's known includes. For the lead, and in topics with working
+    documentation."""
 
 
 class ScreeningTable(Record):
@@ -100,7 +124,14 @@ class ScreeningTable(Record):
     scope_id: str
     stage: Stage
     view: Literal["reviewer", "lead"]
+    documentation: DocumentationLevel
+    reveal: str
+    protocol_hash: str
+    """The protocol version the stage reads with now; a re-judge moves it."""
     rows: tuple[TableRow, ...]
+    known_includes: KnownIncludes | None = None
+    """How many known includes the rows hold and how many the AI proposes to exclude, where the
+    viewer may see both."""
 
 
 def _facts(row: dict[str, Any]) -> dict[str, Any]:
@@ -130,74 +161,119 @@ def screening_table(
     """The stage as the viewer may see it: a screener's or auditor's own rows in queue order, or
     every item for the methods lead. Raises `NotAssigned` for anyone else."""
     row = store.find_stage(tx, project_id, scope_id, stage, topic_id)
+    documentation = documentation_level(ScreeningMode(row["mode"]))
     if viewer_id in row["screeners"] or viewer_id == row["auditor_id"]:
-        rows = _reviewer_rows(tx, row["id"], viewer_id)
+        rows = _reviewer_rows(tx, row["id"], viewer_id, documentation)
         view: Literal["reviewer", "lead"] = "reviewer"
     elif store.sees_lead_data(tx, project_id, viewer_id):
-        rows = _lead_rows(tx, project_id, row)
+        rows = _lead_rows(tx, project_id, row, documentation)
         view = "lead"
     else:
         raise NotAssigned(
             f"actor {viewer_id} neither screens this stage nor is a methods lead who sees it"
         )
-    shown = view == "lead" or row["mode"] == "S"
+    # Known includes: the topic's reference set and its known pool (the papers the team has).
+    shown = view == "lead" or documentation == "working"
     pool = known_pool_refs(tx, project_id, row["topic_id"]) if shown else None
-    if pool is not None:
-        refs = _item_refs(tx, row["id"], viewer_id) if view == "reviewer" else {}
+    known_includes = None
+    if shown:
+        protocol = get_version(tx, project_id, row["protocol_version_id"]).version.protocol
+        topic = topic_for(protocol, row["scope_id"], row["topic_id"])
+        known = known_include_refs(topic.reference_set, {r.ref: r.facts for r in rows})
+        pooled = {r.ref for r in rows if pool is not None and r.ref in pool}
         rows = [
-            r.model_copy(update={"in_known_pool": refs.get(r.ref, r.ref) in pool}) for r in rows
+            r.row.model_copy(
+                update={
+                    "known_include": r.ref in known,
+                    **({"in_known_pool": r.ref in pooled} if pool is not None else {}),
+                }
+            )
+            for r in rows
         ]
+        marked = [r for r in rows if r.known_include or r.in_known_pool]
+        if marked:
+            known_includes = KnownIncludes(
+                known=len(marked),
+                read=sum(r.ai_proposal is not None for r in marked),
+                proposed_exclude=sum(
+                    r.ai_proposal is not None and r.ai_proposal.outcome == "exclude" for r in marked
+                ),
+            )
+    else:
+        rows = [r.row for r in rows]
     return ScreeningTable(
-        stage_id=row["id"], scope_id=scope_id, stage=stage, view=view, rows=tuple(rows)
+        stage_id=row["id"],
+        scope_id=scope_id,
+        stage=stage,
+        view=view,
+        documentation=documentation,
+        reveal=row["reveal"],
+        protocol_hash=row["protocol_hash"],
+        rows=tuple(rows),
+        known_includes=known_includes,
     )
 
 
-def _item_refs(tx: Tx, stage_id: Id, reviewer_id: Id) -> dict[str, str]:
-    """The item each of the reviewer's assignments is on, by assignment ID. Never returned to
-    the reviewer; it only says which of their rows are in the known pool."""
-    return {
-        str(r["id"]): r["item_ref"]
-        for r in tx.execute(
-            "select id, item_ref from screening_assignment where stage_id = %s"
-            " and reviewer_id = %s",
-            (stage_id, reviewer_id),
-        ).fetchall()
-    }
+@dataclass(frozen=True)
+class _Row:
+    ref: str  # the item reference, kept on the server
+    facts: RecordFacts
+    row: TableRow
 
 
-def _reviewer_rows(tx: Tx, stage_id: Id, reviewer_id: Id) -> list[TableRow]:
+def _reading(raw: dict[str, Any] | None, flags: list[str] | None = None) -> Reading | None:
+    if raw is None:
+        return None
+    return Reading(
+        excludes=raw["excludes"],
+        criteria=tuple(CriterionVerdict.model_validate(c) for c in raw["criteria"]),
+        flags=tuple(flags if flags is not None else raw.get("flags") or ()),
+    )
+
+
+def _reviewer_rows(
+    tx: Tx, stage_id: Id, reviewer_id: Id, documentation: DocumentationLevel
+) -> list[_Row]:
     rows = tx.execute(
-        "select * from screening_reviewer_table(%s, %s) order by position",
+        "select t.*, a.item_ref from screening_reviewer_table(%s, %s) t"
+        " join screening_assignment a on a.id = t.assignment_id order by t.position",
         (stage_id, reviewer_id),
     ).fetchall()
     return [
-        TableRow(
-            ref=str(r["assignment_id"]),
-            assignment_id=r["assignment_id"],
-            etag=r["etag"],
-            position=r["position"],
-            **_facts(r),
-            decisions=(
-                TableDecision(
-                    state=r["state"],
-                    outcome=r["outcome"],
-                    reason_criterion_id=r["reason_criterion_id"],
-                    comment=r["comment"],
-                    decided_at=r["decided_at"],
-                    second_opinion=r["asked_second_opinion"],
+        _Row(
+            r["item_ref"],
+            RecordFacts.model_validate(r["facts"]),
+            TableRow(
+                ref=str(r["assignment_id"]),
+                assignment_id=r["assignment_id"],
+                etag=r["etag"],
+                position=r["position"],
+                **_facts(r),
+                decisions=(
+                    TableDecision(
+                        state=r["state"],
+                        outcome=r["outcome"],
+                        reason_criterion_id=r["reason_criterion_id"],
+                        comment=r["comment"],
+                        decided_at=r["decided_at"],
+                        second_opinion=r["asked_second_opinion"],
+                    ),
                 ),
+                reveal=Reveal.model_validate(r["own_reveal"]) if r["own_reveal"] else None,
+                ai=_ai_before(r["ai_before"], r["title"], r["text"]),
+                second_opinion=SecondOpinionContext.model_validate(r["consult"])
+                if r["consult"]
+                else None,
+                ai_proposal=proposal(_reading(r["ai_before"]), documentation),
             ),
-            reveal=Reveal.model_validate(r["own_reveal"]) if r["own_reveal"] else None,
-            ai=_ai_before(r["ai_before"], r["title"], r["text"]),
-            second_opinion=SecondOpinionContext.model_validate(r["consult"])
-            if r["consult"]
-            else None,
         )
         for r in rows
     ]
 
 
-def _lead_rows(tx: Tx, project_id: Id, stage: dict[str, Any]) -> list[TableRow]:
+def _lead_rows(
+    tx: Tx, project_id: Id, stage: dict[str, Any], documentation: DocumentationLevel
+) -> list[_Row]:
     stage_id = stage["id"]
     names = {m.actor_id: m.display_name for m in members(tx, project_id)}
     outcomes = record_outcomes(tx, stage)
@@ -240,7 +316,7 @@ def _lead_rows(tx: Tx, project_id: Id, stage: dict[str, Any]) -> list[TableRow]:
     }
     items = tx.execute(
         "select i.item_ref, i.kind, i.audit, i.rescreen, i.title, i.text, i.facts,"
-        " r.excludes, r.criteria, r.rank"
+        " r.excludes, r.criteria, r.rank, r.flags"
         " from screening_item i left join screening_ai_reading r"
         " on r.stage_id = i.stage_id and r.item_ref = i.item_ref"
         " where i.stage_id = %s and i.withdrawn_event_id is null"
@@ -260,17 +336,25 @@ def _lead_rows(tx: Tx, project_id: Id, stage: dict[str, Any]) -> list[TableRow]:
         if i["rescreen"]:
             flags.append("rescreen")
         out.append(
-            TableRow(
-                ref=ref,
-                **_facts(i),
-                decisions=decisions,
-                outcome=outcome,
-                outcome_reason=_outcome_reason(outcome, adjudicated.get(ref), decisions),
-                ai_excludes=i["excludes"],
-                ai_not_met=tuple(
-                    c["criterion_id"] for c in i["criteria"] or () if c["status"] == "not_met"
+            _Row(
+                ref,
+                RecordFacts.model_validate(i["facts"]),
+                TableRow(
+                    ref=ref,
+                    **_facts(i),
+                    decisions=decisions,
+                    outcome=outcome,
+                    outcome_reason=_outcome_reason(outcome, adjudicated.get(ref), decisions),
+                    ai_excludes=i["excludes"],
+                    ai_not_met=tuple(
+                        c["criterion_id"] for c in i["criteria"] or () if c["status"] == "not_met"
+                    ),
+                    flags=tuple(flags),
+                    ai_proposal=proposal(
+                        _reading(i, i["flags"]) if i["criteria"] is not None else None,
+                        documentation,
+                    ),
                 ),
-                flags=tuple(flags),
             )
         )
     return out

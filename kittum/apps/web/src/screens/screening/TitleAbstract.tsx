@@ -15,6 +15,7 @@ import { AiReading } from "./AiReading.tsx";
 import { shortLabel } from "./criteria.ts";
 import { Marked, orderSections, placeQuote } from "./RecordText.tsx";
 import { AiBefore, AskSecondOpinion, beforeQuote, SecondOpinionAsked } from "./Targeted.tsx";
+import { ShowPrompt } from "./Prompt.tsx";
 import { useQueue } from "./useQueue.ts";
 import type { SessionStats } from "./useQueue.ts";
 
@@ -39,6 +40,9 @@ export function TitleAbstractQueue() {
   );
   const [armed, setArmed] = useState(false);
   const [fullCriteria, setFullCriteria] = useState(false);
+  // Working topics: the prompt the AI reads the record with, one key away (p).
+  const [promptOpen, setPromptOpen] = useState(false);
+  const working = stage?.documentation === "working";
   // Mode S, key f: the next decision asks a colleague, with this comment.
   const [asking, setAsking] = useState<{ comment: string; typing: boolean } | null>(null);
   const ask = asking && !asking.typing ? { comment: asking.comment } : null;
@@ -94,6 +98,10 @@ export function TitleAbstractQueue() {
     switch (key) {
       case "c":
         setFullCriteria((on) => !on);
+        return true;
+      case "p":
+        if (!working) return false;
+        setPromptOpen((on) => !on);
         return true;
       case "i":
       case "u":
@@ -177,6 +185,15 @@ export function TitleAbstractQueue() {
             criteria={criteria}
             labels={labels}
             marked={beforeQuote(current.item)?.criterion_id ?? null}
+          />
+        ) : null}
+        {current && working && stage ? (
+          <ShowPrompt
+            caller={caller}
+            stageId={stage.stage_id}
+            assignmentId={current.item.assignment_id}
+            open={promptOpen}
+            onToggle={() => setPromptOpen((on) => !on)}
           />
         ) : null}
         {current && asking ? (

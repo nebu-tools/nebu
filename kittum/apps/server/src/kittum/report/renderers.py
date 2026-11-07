@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from kittum.core import Id, Record
-from kittum.judge import VERIFIER_LIMITS
+from kittum.judge import VERIFIER_LIMITS, instructions_hash
 from kittum.report.extracted import as_csv, as_json
 from kittum.report.prisma import flows, svg
 from kittum.report.ris_format import ris_dumps, ris_entry
@@ -424,6 +424,11 @@ def disclosure(review: Review) -> dict[str, Any]:
             "validation_pack": t.validation_pack,
             "audit_plan": t.audit.model_dump(mode="json"),
             "stopping": t.stopping.model_dump(mode="json") if t.stopping else None,
+            "judge_instructions": {
+                "strictness": t.judge.strictness,
+                "guidance": t.judge.guidance,
+                "instructions_hash": instructions_hash(t.judge),
+            },
         }
         for t in protocol.search_topics
     ]
@@ -490,6 +495,16 @@ def disclosure(review: Review) -> dict[str, Any]:
                 "second_opinions": s.second_opinions.model_dump(mode="json")
                 if s.second_opinions
                 else None,
+                "protocol_hash": s.protocol_hash,
+                "opened_protocol_hash": s.opened_protocol_hash,
+                "rejudges": s.rejudges,
+                "reading_versions": [v.model_dump(mode="json") for v in s.reading_versions],
+                "bulk": {
+                    "decisions": s.bulk_decisions,
+                    "batches": s.bulk_batches,
+                    "accepted_ai_proposals": s.bulk_accepted_ai,
+                    "accepted_unverified": s.bulk_accepted_unverified,
+                },
             }
         )
     assistant = {
@@ -737,6 +752,27 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
                 for s in stages
             ],
         ),
+        "### The AI's screening instructions",
+        "",
+        "Each topic sets how strictly the AI reads its records and may add guidance in the "
+        "team's own words. Everything else in the prompt is fixed (section 6). Conservative means "
+        "the AI answers not met only when a record certainly fails a criterion; decisive means "
+        "it also does when the record makes passing improbable. Either way it must quote the "
+        "record.",
+        "",
+        md_table(
+            ["Topic", "Strictness", "Guidance", "Instructions SHA-256"],
+            [
+                [
+                    t["topic_id"],
+                    t["judge_instructions"]["strictness"],
+                    t["judge_instructions"]["guidance"] or "None",
+                    f"`{t['judge_instructions']['instructions_hash'][:16]}`",
+                ]
+                for t in d["topics"]
+            ],
+        ),
+        *_reading_version_lines(stages),
         "### Writing the protocol",
         "",
         "A model can draft the protocol or suggest changes to one part of it. A lead accepts or "
@@ -929,8 +965,81 @@ def _method_paragraphs(d: dict[str, Any]) -> list[str]:
                     else "."
                 )
             )
+        bulk = sum(s["bulk"]["decisions"] for s in s_stages)
+        if bulk:
+            accepted = sum(s["bulk"]["accepted_ai_proposals"] for s in s_stages)
+            unverified = sum(s["bulk"]["accepted_unverified"] for s in s_stages)
+            batches = sum(s["bulk"]["batches"] for s in s_stages)
+            text += (
+                f" {bulk} "
+                + ("decision was" if bulk == 1 else "decisions were")
+                + f" made in bulk from the table, in {batches} "
+                + ("batch" if batches == 1 else "batches")
+                + ": a person selected the records and decided them together, one decision "
+                "per record. "
+                + (
+                    f"{accepted} of them took over the AI's proposal for the record"
+                    + (
+                        f", {unverified} of those an exclusion on a quote Kittum could not "
+                        "find word for word in the record."
+                        if unverified
+                        else "."
+                    )
+                    if accepted
+                    else "None of them took over the AI's proposals."
+                )
+            )
         lines += [text, ""]
     return lines
+
+
+def _reading_version_lines(stages: list[dict[str, Any]]) -> list[str]:
+    """The protocol versions the AI read each stage with, and on how many records."""
+    rows = [
+        [
+            s["scope_id"],
+            STAGE_NAMES.get(s["stage"], s["stage"]),
+            v["version_label"] or "Unknown",
+            f"`{v['protocol_hash'][:16]}`",
+            v["strictness"] or "Unknown",
+            v["guidance"] or "None",
+            v["records"],
+            v["current"],
+        ]
+        for s in stages
+        for v in s["reading_versions"]
+    ]
+    if not rows:
+        return []
+    rejudged = sum(s["rejudges"] for s in stages)
+    lead = "The protocol versions the AI read the records with. "
+    if rejudged:
+        lead += (
+            f"A lead re-judged a stage in place {rejudged} "
+            + ("time" if rejudged == 1 else "times")
+            + " under a version that changed only the AI's instructions. The new readings "
+            "replaced the old ones for display; the old ones stay in the ledger. People's "
+            "decisions did not change."
+        )
+    else:
+        lead += "Every stage was read under one version."
+    return [
+        lead,
+        "",
+        md_table(
+            [
+                "Scope",
+                "Stage",
+                "Protocol",
+                "SHA-256",
+                "Strictness",
+                "Guidance",
+                "Records read",
+                "Readings in use",
+            ],
+            rows,
+        ),
+    ]
 
 
 def _second_opinion_lines(stages: list[dict[str, Any]]) -> list[str]:

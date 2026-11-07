@@ -811,6 +811,30 @@ def open_screening(
     return info
 
 
+def rejudge_screening(
+    tx: Tx,
+    ctx: AppContext,
+    project_id: Id,
+    stage_id: Id,
+    *,
+    actor_id: Id,
+    command_id: Id,
+    protocol_version_id: Id | None = None,
+) -> StageInfo:
+    """Re-judge an open stage in place under a published protocol version, the newest one by
+    default (`kittum.screening.Screening.rejudge_stage`). The worker's judge reads the records
+    again."""
+    version_id = protocol_version_id or _published(tx, project_id).id
+    return ctx.screening().rejudge_stage(
+        tx,
+        command_id=command_id,
+        project_id=project_id,
+        actor_id=actor_id,
+        stage_id=stage_id,
+        protocol_version_id=version_id,
+    )
+
+
 # Extraction
 
 

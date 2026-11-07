@@ -121,6 +121,25 @@ def queue_record(facts: dict[str, Any], **extra: Any) -> QueueRecord:
     return QueueRecord(**RecordFacts.model_validate(facts).model_dump(), **extra)
 
 
+def readings(tx: Tx, stage_id: Id, item_refs: Sequence[str]) -> dict[str, Reading]:
+    """The current AI readings of `item_refs`, by reference."""
+    rows = tx.execute(
+        "select item_ref, excludes, criteria, flags from screening_ai_reading"
+        " where stage_id = %s and item_ref = any(%s)",
+        (stage_id, list(item_refs)),
+    ).fetchall()
+    return {r["item_ref"]: reading_of(r) for r in rows}
+
+
+def bench_row(tx: Tx, project_id: Id, bench_id: Id) -> dict[str, Any]:
+    row = tx.execute(
+        "select * from screening_bench where id = %s and project_id = %s", (bench_id, project_id)
+    ).fetchone()
+    if row is None:
+        raise NotFoundError(f"bench run {bench_id} not found in project {project_id}")
+    return row
+
+
 def reading(tx: Tx, stage_id: Id, item_ref: str) -> Reading | None:
     row = tx.execute(
         "select excludes, criteria, flags from screening_ai_reading"
@@ -130,7 +149,7 @@ def reading(tx: Tx, stage_id: Id, item_ref: str) -> Reading | None:
     return reading_of(row) if row else None
 
 
-_ASSIGNMENT = """
+ASSIGNMENT_SQL = """
     select a.*, i.kind, i.audit, i.rescreen, i.withdrawn_event_id,
         p.outcome as p_outcome, p.reason_criterion_id as p_reason_criterion_id,
         p.evidence_anchor_ids as p_evidence_anchor_ids, p.comment as p_comment,
@@ -146,13 +165,13 @@ _ASSIGNMENT = """
 
 
 def assignment(tx: Tx, assignment_id: Id, *, lock: bool = False) -> dict[str, Any] | None:
-    sql = _ASSIGNMENT + " where a.id = %s" + (" for update of a" if lock else "")
+    sql = ASSIGNMENT_SQL + " where a.id = %s" + (" for update of a" if lock else "")
     return tx.execute(sql, (assignment_id,)).fetchone()
 
 
 def item_assignments(tx: Tx, stage_id: Id, item_ref: str) -> list[dict[str, Any]]:
     return tx.execute(
-        _ASSIGNMENT + " where a.stage_id = %s and a.item_ref = %s order by a.role, a.id",
+        ASSIGNMENT_SQL + " where a.stage_id = %s and a.item_ref = %s order by a.role, a.id",
         (stage_id, item_ref),
     ).fetchall()
 

@@ -15,7 +15,11 @@ import type {
   Assertion,
   AssistModel,
   AssistOutcome,
+  BenchResult,
   Box,
+  BulkAction,
+  BulkResult,
+  BulkRow,
   ChainAudit,
   CheckpointStatus,
   CorpusRevision,
@@ -45,6 +49,7 @@ import type {
   OpenAccessRun,
   PageLayer,
   ParsedSource,
+  PromptTemplate,
   Phase,
   PoolComparison,
   Progress,
@@ -58,6 +63,7 @@ import type {
   QueueItem,
   RecordEnrichment,
   RecordFlag,
+  RecordPrompt,
   RecordTrace,
   RenderedReport,
   ReportInfo,
@@ -261,6 +267,46 @@ export interface Workbench {
   /** The stage as rows: the reviewer's own assignments, decided ones included, or every record
    * for the methods lead. The server leaves out what the caller may not see. */
   readonly screeningTable: (request: StageRef) => Call<ScreeningTable>;
+  /**
+   * Decides many of the caller's own records at once, in a topic with working documentation:
+   * include them, exclude them on one criterion, or give each the AI's proposal. One decision per
+   * record and one batch in the ledger, with the table's filter in words. A complete topic
+   * refuses.
+   */
+  readonly bulkDecide: (
+    request: Caller & {
+      readonly stageId: string;
+      readonly rows: ReadonlyArray<BulkRow>;
+      readonly action: BulkAction;
+      readonly reasonCriterionId: string | null;
+      readonly filter: string | null;
+      readonly timing: DecisionTiming;
+    },
+  ) => Call<BulkResult>;
+  /** The prompt the AI judge reads a record with: any record for the methods lead (by its
+   * reference), one of the caller's own in a working topic (by assignment). */
+  readonly recordPrompt: (
+    request: Caller & {
+      readonly stageId: string;
+      readonly assignmentId?: string;
+      readonly itemRef?: string;
+    },
+  ) => Call<RecordPrompt>;
+  /** The judge's fixed prompt and the wordings a topic's strictness selects. */
+  readonly promptTemplate: () => Call<PromptTemplate>;
+  /** The test bench: the stage's judge with a draft protocol's instructions on the topic's known
+   * includes and up to `limit` settled records. A job judges them; read `bench` until done. */
+  readonly runBench: (
+    request: Caller & {
+      readonly stageId: string;
+      readonly source: ProtocolSource;
+      readonly limit?: number;
+    },
+  ) => Call<BenchResult>;
+  readonly bench: (request: Caller & { readonly benchId: string }) => Call<BenchResult>;
+  /** The methods lead re-judges an open stage under the newest published protocol version,
+   * which may change only what the AI reads. */
+  readonly rejudgeStage: (request: Caller & { readonly stageId: string }) => Call<StageInfo>;
   /** The working spreadsheet (XLSX) of the stage, or of the rows and columns in view, as the
    * caller may see it. The server stores it and records it in the ledger. */
   readonly workingExport: (

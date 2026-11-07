@@ -9,7 +9,8 @@ protocol it must compile to.
 - A mapping (`LocalizedText`, `{en: ..., de: ...}`) has no fixed keys, which strict decoding
   cannot express, so it becomes a list of `{key, value}` pairs.
 - `extensions` are left out: a profile's typed fields are the lead's to write. So is a
-  criterion's `short_label`, a display aid for the screening strip (and recorded drafts replay).
+  criterion's `short_label`, a display aid for the screening strip, and a topic's `judge`
+  instructions, which the lead tunes on the test bench (and recorded drafts replay).
 
 `from_strict` turns an answer back into the protocol's own shape: pairs into mappings, and a null
 for a property the model may leave out into no property, so its default applies. A key given twice
@@ -24,16 +25,38 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 _DROP = frozenset({"default", "title"})
-OMITTED = frozenset({"extensions", "short_label"})
+OMITTED = frozenset({"extensions", "short_label", "judge"})
 
 
 def strict_schema(model: type[BaseModel]) -> dict[str, Any]:
     raw = model.model_json_schema(mode="validation")
     defs = raw.pop("$defs", {})
     root = _strict(raw)
-    if defs:
-        root["$defs"] = {name: _strict(d) for name, d in defs.items()}
+    strict_defs = {name: _strict(d) for name, d in defs.items()}
+    # A definition only an omitted property uses (a topic's `judge`) is left out with it.
+    # `Extensions` stays, unused as it is: the recorded drafts were keyed with it.
+    used = _referenced(root, strict_defs) | ({"Extensions"} & set(strict_defs))
+    if used:
+        root["$defs"] = {name: d for name, d in strict_defs.items() if name in used}
     return root
+
+
+def _referenced(root: dict[str, Any], defs: dict[str, Any]) -> set[str]:
+    found: set[str] = set()
+    todo: list[Any] = [root]
+    while todo:
+        node = todo.pop()
+        if isinstance(node, dict):
+            ref = node.get("$ref")
+            if isinstance(ref, str):
+                name = ref.rsplit("/", 1)[-1]
+                if name not in found and name in defs:
+                    found.add(name)
+                    todo.append(defs[name])
+            todo += [v for k, v in node.items() if k != "$ref"]
+        elif isinstance(node, list):
+            todo += node
+    return found
 
 
 def wrap(properties: dict[str, dict[str, Any]]) -> dict[str, Any]:

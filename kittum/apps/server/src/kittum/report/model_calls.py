@@ -282,6 +282,26 @@ def _card(
 STAGE_LABELS = {"title_abstract": "Title and abstract", "full_text": "Full text"}
 
 
+def _protocol_labels(tx: Tx, project_id: Id, hashes: list[str]) -> dict[str, str]:
+    """ "protocol 0.4" for a version Kittum keeps, "a test bench draft" for one only the bench
+    judged with."""
+    labels = {
+        r["content_hash"]: f"protocol {r['version_label']}"
+        for r in tx.execute(
+            "select content_hash, version_label from protocol_version where project_id = %s"
+            " and content_hash = any(%s)",
+            (project_id, hashes),
+        ).fetchall()
+    }
+    for r in tx.execute(
+        "select distinct protocol_hash from screening_bench where project_id = %s"
+        " and protocol_hash = any(%s)",
+        (project_id, hashes),
+    ).fetchall():
+        labels.setdefault(r["protocol_hash"], "a test bench draft")
+    return labels
+
+
 def prompt_cards(
     tx: Tx,
     project_id: Id,
@@ -296,20 +316,30 @@ def prompt_cards(
     cards: list[PromptCard] = []
 
     verdict_ids = [e.payload["verdict_id"] for e in events if e.type == VERDICT_RECORDED]
-    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    groups: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for row in tx.execute(
-        "select judge_config_id, stage, scope_id, attempts, created_at from verdict"
+        "select judge_config_id, stage, scope_id, protocol_hash, attempts, created_at from verdict"
         " where project_id = %s and id = any(%s::uuid[]) order by created_at, id",
         (project_id, verdict_ids),
     ).fetchall():
-        groups.setdefault((row["judge_config_id"], row["stage"], row["scope_id"]), []).append(row)
-    for (config_id, stage, scope), rows in groups.items():
+        key = (row["judge_config_id"], row["stage"], row["scope_id"], row["protocol_hash"])
+        groups.setdefault(key, []).append(row)
+    # A scope read under several protocol versions (a re-judge, a test bench draft) gets one
+    # card per version: each sent its own instructions.
+    versions: dict[tuple[str, str, str], int] = {}
+    for config_id, stage, scope, _ in groups:
+        versions[config_id, stage, scope] = versions.get((config_id, stage, scope), 0) + 1
+    labels = _protocol_labels(tx, project_id, [k[3] for k in groups])
+    for (config_id, stage, scope, protocol_hash), rows in groups.items():
         judge = judges.get(config_id, {})
         recipe = judge.get("recipe") or {}
+        label = f"{STAGE_LABELS.get(stage, stage)}, scope {scope}"
+        if versions[config_id, stage, scope] > 1:
+            label += f", {labels.get(protocol_hash, 'protocol ' + protocol_hash[:12])}"
         cards.append(
             _card(
                 "judge",
-                f"{STAGE_LABELS.get(stage, stage)}, scope {scope}",
+                label,
                 [c for r in rows[:3] for c in judge_calls(r["attempts"], store)],
                 store,
                 total=sum(len(r["attempts"]) for r in rows),

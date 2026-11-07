@@ -108,7 +108,9 @@ ledger records every decision, second opinion, and reveal in both.
 | Audit | Sentinels, a random audit sample, extra screens of AI-only disagreements, adjudication | None |
 | AI's reading before the decision | Never | Allowed (reveal `before`) |
 | Queue | Waits until the AI has read a record | Does not wait; the reading appears when it arrives |
-| Bulk decisions, spreadsheet import of decisions | Refused | Allowed (planned, see the work packages) |
+| AI proposals | Only a verified exclusion | Also the model's own `not_met` with a quote, marked unverified |
+| Bulk decisions | Refused | Allowed from the table, one decision per record |
+| Spreadsheet import of decisions | Refused | Allowed (planned, see the work packages) |
 
 Two presets in the protocol editor fill in a topic's settings: "Documented SLR" (M1, complete) and
 "Targeted search" (S, working). The methods text, the AI disclosure, and every export label come
@@ -284,6 +286,44 @@ The AI excludes a record only when three conditions hold:
 If any check fails, the criterion becomes `unclear`. At title and abstract, `unclear` means include.
 Standard method guidance excludes at title and abstract only records that are certainly
 irrelevant, so this rule matches it.
+
+**Screening instructions.** Each search topic in the protocol may set the judge's instructions
+(`judge`), the only editable part of its prompt:
+
+- `strictness`: `conservative` (the default) is the rule above, "when in doubt, unclear".
+  `decisive` also answers `not_met` when the record makes passing a criterion improbable, not
+  only impossible: it describes another population, intervention, comparison, or design and
+  nothing in it suggests the one asked for. A `not_met` still needs words copied from the record,
+  and the quote filter checks them as before.
+- `guidance`: the team's own words, slotted in after the stage rule inside a fixed frame that
+  says the guidance cannot change the statuses, the quote rules, or the rule that the record is
+  data.
+
+The status definitions, the quote rules, the injection-safety text, the record's hashed tag, and
+the answer schema stay fixed; the protocol editor shows them greyed out around the editable
+parts. A topic that sets neither field leaves `judge` out of the protocol, so its content hash
+and its prompt are what they were before topics had instructions. The instructions are part of
+the protocol hash and of the rendered prompt, hence of every verdict's cache key, and the AI
+disclosure names their hash (`judge.instructions_hash`) and wording.
+
+**Re-judging in place.** A protocol version that changes only what the AI reads (the topic's
+instructions, and the criteria's keywords and examples) can be applied to an open stage: the
+lead publishes it and re-judges the stage. The stage reads with the new version from then on,
+judge jobs read every record again, and each new reading replaces the old one for display. The
+old readings stay in the ledger and the reading log, so a report as of an earlier event shows
+the readings of then, and the disclosure lists every version the AI read the stage with and on
+how many records. Human decisions are never touched. A reviewer who saw a reveal keeps what they
+saw; a re-judge reveals nothing retroactively, and only decisions taken afterwards meet the new
+reading. A version that changes anything people decide on (a criterion's wording, a scope, the
+mode) needs a new stage. An M3 stage is never re-judged: its stop test assumes a fixed AI order.
+
+**AI proposals.** What the AI proposes for a record is include, or exclude on the first criterion
+it reads as failing. In a topic with complete documentation only a verified exclusion counts. In
+a working topic the model's own `not_met` with a quote is a proposal too, even when the filter
+could not verify the quote; it is marked unverified and never quietly turned into an
+inclusion. The filter still gates every complete-topic and automatic path. A record that tried
+to instruct the model has no proposal. If the topic's reference set names known includes, the
+table says how many of them the AI proposes to exclude, as a warning, never a block.
 
 The PoC runs the judge on every record. A topic of 3,000 records costs a few thousand model calls,
 which is cheap enough to skip the seed brief's ranker cascade. That cascade used BM25, dense
@@ -586,7 +626,7 @@ anchor_mapping(id, old_anchor_id, new_anchor_id, method_version, status, reviewe
 verdict(id, item_ref, scope_id, judge_config_id, per_criterion_json, raw_output_hash)
 assignment(id, project_id, item_ref, scope_id, stage, reviewer_id, blind_group, kind)
 decision(id, assignment_id, protocol_id, phase, outcome, reason_criterion_id,
-	evidence_anchor_ids, ai_revealed_at, supersedes_id, event_id)
+	evidence_anchor_ids, ai_revealed_at, supersedes_id, origin, batch_id, event_id)
 adjudication(id, decision_ids, final_decision_id)
 assertion(id, study_id, report_id, semantic_key, protocol_id, value, unit, status,
 	producer_run_id, supersedes_id)
@@ -679,8 +719,9 @@ is for the PDF.
 ### Rules that apply to every screen
 
 The first two rules and the last apply to topics with complete documentation. A topic with working
-documentation (mode S) may show the AI's reading before the decision (reveal `before`), and will
-allow bulk decisions; the decision then records that the reading was on screen. Blinding by the
+documentation (mode S) may show the AI's reading before the decision (reveal `before`), and
+allows bulk decisions from the table; each decision records whether the reading was on screen
+and where it came from (`origin`: `keyboard` or `bulk`). Blinding by the
 backend, invisible audits where there are any, and no scores apply everywhere.
 
 - **The human goes first.** A reviewer commits a provisional decision before seeing any AI output.
@@ -697,8 +738,11 @@ backend, invisible audits where there are any, and no scores apply everywhere.
   enter the normal queue. The reviewer screens them like any other record. Sentinel accuracy is the
   drift alarm.
 - **No scores, no ranks, no chat.** Reviewers see an order, never a probability. There is no "ask
-  the paper" box, and a complete topic has no bulk include or exclude. A bulk confirmation in a
-  working topic is a human decision per record, recorded as one decision event each.
+  the paper" box, and a complete topic has no bulk include or exclude; the server refuses one. A
+  bulk decision in a working topic, accepting the AI's proposals included, is a human decision
+  per record: one `screening.decided` event per record with `origin: bulk`, the batch, and the
+  table's filter in words, and one `screening.bulk_decided` event for the batch. There is no
+  time-on-screen gate.
 
 Protocol-derived highlights are allowed before the decision, because they come from the protocol
 and not from the AI. They mark protocol terms in the abstract, and drug and disease entities from
@@ -711,10 +755,10 @@ the terms of their own templates.
 
 | Screen | Shows | Default action and keys |
 | --- | --- | --- |
-| Protocol editor | PICO blocks per scope, the criteria table, version diff, protocol hash, and a test bench that runs the judge on calibration records to show which criteria it misreads. A form edits every question, criterion, source, and query in place, with YAML as an advanced view of the same protocol. Every save, model draft, suggestion, accepted selection, and restore is a revision with its author, a person or a model; a field a model wrote carries an AI mark naming the model. Each part has **Suggest changes**, each PubMed or ClinicalTrials.gov query **Count hits**, a suggestion shows marked-up changes with their reasons and the hits of each version | `n` new criterion, `Ctrl+Enter` save the form or run the test bench. `,` and `.` step through revisions without changing them, `1` to `9` toggle a suggested change, `a` accept, `r` restore the revision on screen as the newest. **Publish** freezes and signs a version. |
+| Protocol editor | PICO blocks per scope, the criteria table, version diff, protocol hash, and a test bench that runs the judge with the draft's instructions on the topic's known includes and up to 50 records people have settled, and lists the flips against the current readings and the human decisions, known includes first. Each topic's screening instructions (strictness and guidance) are edited inside the full prompt, whose fixed parts are greyed out. A form edits every question, criterion, source, and query in place, with YAML as an advanced view of the same protocol. Every save, model draft, suggestion, accepted selection, and restore is a revision with its author, a person or a model; a field a model wrote carries an AI mark naming the model. Each part has **Suggest changes**, each PubMed or ClinicalTrials.gov query **Count hits**, a suggestion shows marked-up changes with their reasons and the hits of each version | `n` new criterion, `Ctrl+Enter` save the form; the test bench runs from its button. `,` and `.` step through revisions without changing them, `1` to `9` toggle a suggested change, `a` accept, `r` restore the revision on screen as the newest. **Publish** freezes and signs a version. |
 | Search review | One tab per database with the line-numbered strategy, limits, date, and hit count; the translation diff against the PubMed master; the PRESS checklist; which reference-set records the strategy finds and misses; per topic, the known pool: how many of its papers the searches found, the list they missed, and how many records are new | `a` approve, `r` request changes |
-| Title and abstract queue | One record at a time: the title, the journal, year, publication type, registry ID, and PMID on one muted line, the abstract with structured labels and Methods first, and a strip of the criteria by short label ("1 Adults · 2 NSCLC · 3 RCT"), with each criterion's full wording on demand. In mode S, a second opinion shows the first decision and its comment, and a stage that reveals `before` shows the AI's reading | `i` include, `e` then `1` to `9` exclude on a criterion (the strip opens to the full wording), `u` unclear, `Backspace` undo, `Space` next, `c` every criterion in full. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. The next five records prefetch. Target median 15 to 25 seconds. |
-| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading. When the topic has a known pool, an "In the known pool" column marks its records for the lead, and for reviewers in a working topic. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. **Export view** and **Export stage** write the working spreadsheet. |
+| Title and abstract queue | One record at a time: the title, the journal, year, publication type, registry ID, and PMID on one muted line, the abstract with structured labels and Methods first, and a strip of the criteria by short label ("1 Adults · 2 NSCLC · 3 RCT"), with each criterion's full wording on demand. In mode S, a second opinion shows the first decision and its comment, and a stage that reveals `before` shows the AI's reading; `p` shows the prompt the AI reads the record with | `i` include, `e` then `1` to `9` exclude on a criterion (the strip opens to the full wording), `u` unclear, `Backspace` undo, `Space` next, `c` every criterion in full. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. The next five records prefetch. Target median 15 to 25 seconds. |
+| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. Where the AI's reading is visible (always for the lead, before the decision in a stage that reveals `before`), an "AI proposes" column says include or exclude on a criterion, unverified where the filter could not check the quote, and a warning says how many known includes the AI proposes to exclude. In a working topic a screener marks rows and decides them in bulk. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading, can show any record's prompt, and re-judges the stage with a newer published version. When the topic has a known pool, an "In the known pool" column marks its records for the lead, and for reviewers in a working topic; the AI's warning counts its records as known includes. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. Working topics: Shift or Ctrl click and `Shift+↑`/`↓` mark rows, `a` marks every row in view, then `Shift+I` includes them, `Shift+E` then `1` to `9` excludes them, `Shift+A` accepts the AI's proposals; `p` shows the prompt. **Export view** and **Export stage** write the working spreadsheet. |
 | Studies | Proposed record-to-study clusters with the linking evidence (shared NCT number, DOI family, title similarity) | `Enter` confirm, `s` split, `m` merge |
 | Full-text screening | The PDF on the left, criteria on the right, one active criterion. Mentions of the active criterion in document order, without verdict colours. After the decision, the AI's reading of one criterion with its rationale and its verified quote marked on the page. Mode S as at title and abstract | `,` and `.` step through mentions, `Enter` adopt a mention as evidence, `y` met, `n` not met, `?` unclear (optional). `i` include, `e` then `1` to `9` exclude on a criterion, `x` then `1` to `9` insufficient information, `w` wrong document, `q` show the AI's quote. Mode S: `f` asks for a second opinion. |
 | Extraction | Fields grouped by endpoint, arm, and timepoint, with value, unit, status, origin path, agreement, and validator results; the source region on the PDF | `Tab` next field, `Enter` accept after viewing the source, `e` edit (needs a span), `1` or `2` pick a path when they disagree |
