@@ -30,7 +30,7 @@ const STRICTNESS: Record<Strictness, { label: string; summary: string }> = {
 const STAGES = { title_abstract: "Title and abstract", full_text: "Full text" } as const;
 
 /** The topic's instructions, with the defaults left out as the server leaves them out. */
-export const judgeOf = (topic: Topic) => ({
+const judgeOf = (topic: Topic) => ({
   strictness: (topic.judge?.strictness as Strictness | undefined) ?? "conservative",
   guidance: topic.judge?.guidance ?? "",
 });
