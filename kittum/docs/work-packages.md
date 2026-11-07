@@ -23,7 +23,7 @@ The two-week spike in [DESIGN.md](../DESIGN.md#two-week-spike) picks from these 
 | 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, re-judging in place, the test bench, AI proposals, bulk decisions and spreadsheet imports in working topics, metrics, routes; open items listed |
 | 10 | `documents` | Parsers, layers, anchors, re-anchoring, viewer routes, and acquisition done; source resolvers for the waterfall open |
 | 11 | `extraction` | Done: schema, both paths, validators, reconciliation, runs as jobs, acceptance, bundle exporter, routes, workbench screen; open items listed |
-| 12 | `appraisal` | Types done; open |
+| 12 | `appraisal` | RoB 2 done: instrument data, published algorithms, appraisals with checked quotes and overrides, routes, report table, workbench screen; ROBINS-I V2 and AI quote assembly open |
 | 13 | `stats` | Done: intervals, stopping, capture-recapture, conformal threshold, agreement |
 | 14 | `report` | Done: PRISMA flow, RIS, search report, AI disclosure, bundle exporters and `seal_bundle`, `gba_amnog` targets, routes; open items listed |
 | 15 | `api`, `app` | Done: composition root, project lifecycle (service, routes, CLI), `serve` with the workbench, `worker`, `demo seed`; authentication open |
@@ -828,6 +828,43 @@ Module `kittum.appraisal`. Needs: `documents`, `extraction`.
 - Instruments as data (RoB 2, ROBINS-I V2, plus profile-registered forms); quote assembly per
   question.
 
+**Done** (branch `kittum/risk-of-bias`):
+
+- RoB 2 as data (`kittum.appraisal.rob2`): five domains, 22 signalling questions in the
+  published wording, their answer options (3.2 has no "no information"), and the conditions that
+  make a question NA. Domain 2 is the variant for the effect of assignment to intervention. The
+  domain algorithms are the cribsheet's flow charts; the overall rule is the guidance's Table 1.
+  Sources: Sterne et al., BMJ 2019;366:l4898, and the RoB 2 guidance and cribsheet of 22 August
+  2019. The wording is CC BY-NC-ND 4.0; commercial use is an open decision
+  ([dependencies](dependencies.md#appraisal-instruments)).
+- Appraisals (`start`, `answer`, `override`, `get`, `appraisals`) per report and result, with
+  rows (`appraisal`, `appraisal_answer`, `appraisal_override`, append-only, each with its event's
+  seq) and `appraisal.started`, `appraisal.answered`, `appraisal.overridden` events carrying the
+  quotes and the algorithm's proposal. A quote is an anchor on the appraised PDF that `find_quote`
+  finds in its layer. A question that does not apply yet, an answer the question does not offer,
+  and a full text detached since are refused. `mentions` offers each question's words found in
+  the report. Profiles register forms with `register_instrument`, with or without algorithms.
+- Routes in `api/routes/appraisal.py`: the reports to appraise (included at full text, with a
+  full text, visible as extraction is), start, the screen (appraisal, layer, mentions), answer,
+  override. The audit trace tells each event in words; the `risk_of_bias` report target renders
+  the table as of a cutoff (Markdown, CSV, JSON).
+- The Risk of bias screen (`g` then `b`) and the table on the Reports screen (`b`).
+- Tests: `tests/appraisal/test_rob2.py` checks every answer combination of every domain against
+  the guidance's mapping tables (Tables 4, 6, 10, 12, 14), transcribed independently of the flow
+  charts, and that every table row is reachable. `tests/app/test_appraisal.py` appraises the
+  Lesotho trial over HTTP from inclusion to the report at two cutoffs.
+  `apps/web/e2e/risk-of-bias.spec.ts` does it in the browser.
+
+Left:
+
+- ROBINS-I V2; RoB 2's variant for the effect of adhering to intervention, and its cluster and
+  crossover variants (the trial in the tests is cluster-randomized, appraised with the
+  individually randomized form).
+- The optional "predicted direction of bias" per domain, and free-text support per answer.
+- Two independent appraisers and their consensus, with blinding as in screening.
+- AI quote assembly per signalling question (never an answer).
+- The bundle check of the `risk_of_bias` files against the ledger, as `extraction` has.
+
 ## WP-13 Statistics
 
 Module `kittum.stats`. Needs: nothing.
@@ -1325,8 +1362,8 @@ Left:
 - The bench has no key of its own, and its result is not kept in the browser after a reload (the
   server keeps it, by ID).
 
-- The other report targets on the Reports screen, and the Risk of bias (WP-12 has no server
-  implementation) and AI-exclusion audit screens; the full-text judge's per-criterion reading in
+- The other report targets on the Reports screen, and the AI-exclusion audit screen; the
+  full-text judge's per-criterion reading in
   adjudication; grounding exceptions.
 - Adjudication shows a full-text column's evidence as counts, not the quotes on the page.
 - Update searches: a second corpus ingest needs the corpus diff, so Search and Studies refuse it.
@@ -1350,7 +1387,7 @@ search topic, without a second product. DESIGN.md, "Documentation levels", has t
 | B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Done |
 | C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, the test bench, AI proposals in working topics, bulk decisions from the table | Done |
 | D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers as a topic's known pool, the "Known pool" panel on the search screen, "In the known pool" in the table), NBIB, Scopus CSV, Web of Science, and a team's CSV or XLSX list as imports | Done |
-| E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open (#78, in review) |
+| E | `kittum/risk-of-bias` | RoB 2 as instrument data (questions in Kittum's own words), its algorithm, quotes from the instrument's words (no model), the screen beside the PDF, the report table | Done (WP-12) |
 | F | `kittum/spreadsheet-decisions` | Decisions from a spreadsheet: editable decision columns and an export ID in a screener's working export, the import's preview and apply on the table, one batch event and one decision per changed row with `origin: spreadsheet`, working topics only | Done |
 
 ## WP-17 Evaluation harness

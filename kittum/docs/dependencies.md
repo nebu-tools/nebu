@@ -132,6 +132,14 @@ Anchors are page numbers and boxes in PDF points, the same frame the parsers pro
 draws them. That keeps anchors independent of the viewer: pdf.js and PDFium split text into runs
 differently, so a browser text layer would tie an anchor to one engine.
 
+### Appraisal instruments
+
+An instrument's wording is third-party content, like a library, and carries its own licence.
+
+| Content | Licence | Notes | Verdict |
+| --- | --- | --- | --- |
+| RoB 2 signalling questions and domain titles (guidance and cribsheet of 22.08.2019, RoB 2 Development Group, riskofbias.info) | CC BY-NC-ND 4.0 | `kittum.appraisal.rob2` quotes the 22 questions and 5 domain titles verbatim, with attribution, and marks them as not AGPL. The answer options, conditions, and algorithms are the tool's method, implemented in Kittum's own code; the short labels and mention words are Kittum's. Non-commercial terms are blocked for code above; verbatim redistribution with attribution is within this licence, but use of the wording in a commercial review service is not. | **Decide** before commercial use: ask the RoB 2 Development Group for permission (commercial review tools carry RoB 2 under agreement), or replace `text` in `rob2.py` with Kittum's own wording and keep the question numbers. |
+
 ## Document tools and models in short
 
 The full comparison is on [Document and model tools](document-tools.md).
@@ -159,6 +167,7 @@ The full comparison is on [Document and model tools](document-tools.md).
 - Run the Object Lock conformance test on the chosen store.
 - Spike pdf.js and EmbedPDF on a 300-page CSR.
 - Confirm the PubTator 3 terms and rate limit, which only third parties report.
+- Settle the RoB 2 wording's licence for commercial use (see "Appraisal instruments").
 
 ## Sources
 
@@ -170,3 +179,5 @@ The full comparison is on [Document and model tools](document-tools.md).
   [Ceph releases](https://docs.ceph.com/en/latest/releases/)
 - [EmbedPDF licensing](https://github.com/embedpdf/embed-pdf-viewer)
 - [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)
+- [RoB 2, current version](https://www.riskofbias.info/welcome/rob-2-0-tool/current-version-of-rob-2)
+  (guidance and cribsheet, 22.08.2019; licence stated on both)
