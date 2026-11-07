@@ -90,7 +90,12 @@ export const view = <R>(
   rows: ReadonlyArray<R>,
   columns: ReadonlyArray<Column<R>>,
   state: ViewState,
-  search: { readonly match: ((h: Haystack) => number) | null; readonly hay: (row: R) => Haystack },
+  search: {
+    readonly match: ((h: Haystack) => number) | null;
+    readonly hay: (row: R) => Haystack;
+    /** Rows that stay in view whatever the filters say: one the reviewer is still deciding. */
+    readonly keep?: (row: R) => boolean;
+  },
 ): R[] => {
   let out = filtered(rows, columns, state.filters);
   let scores: Map<R, number> | null = null;
@@ -102,6 +107,14 @@ export const view = <R>(
       if (score > 0) scores?.set(row, score);
       return score > 0;
     });
+  }
+  const keep = search.keep;
+  if (keep) {
+    const held = rows.filter((row) => keep(row) && !out.includes(row));
+    if (held.length) {
+      const shown = new Set([...out, ...held]);
+      out = rows.filter((row) => shown.has(row));
+    }
   }
   const byId = new Map(columns.map((c) => [c.id, c]));
   const sorts = state.sort.flatMap((s) => {

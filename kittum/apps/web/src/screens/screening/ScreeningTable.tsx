@@ -368,6 +368,11 @@ function StageTable({
   );
   const filters = state?.filters;
   const sort = state?.sort;
+  // A decision the AI's reading interrupted stays on screen until it is kept or changed, even
+  // if the filters no longer match it.
+  const held =
+    table?.rows.find((r) => r.ref === selectedRef && own(r)?.state === "awaiting_final")?.ref ??
+    null;
   const rows = useMemo(
     () =>
       table && filters && sort
@@ -375,10 +380,10 @@ function StageTable({
             table.rows,
             columns,
             { columns: [], widths: {}, filters, sort, query },
-            { match: matcher(query), hay },
+            { match: matcher(query), hay, keep: (r) => r.ref === held },
           )
         : [],
-    [table, columns, filters, sort, query, hay],
+    [table, columns, filters, sort, query, hay, held],
   );
   const selected = useMemo(() => {
     const index = rows.findIndex((r) => r.ref === selectedRef);
@@ -519,18 +524,18 @@ function StageTable({
       setNotice("You decided this record. Change the decision here with i, e, or u.");
       return;
     }
+    if (stage.stage !== "title_abstract") {
+      setNotice("The full-text screen opens your next full text; it cannot open this one yet.");
+      return;
+    }
     const before = table?.rows.find((r) => r.position === (target.position ?? 0) - 1);
-    const to =
-      stage.stage === "title_abstract"
-        ? "/p/$projectId/screening/title-abstract"
-        : "/p/$projectId/screening/full-text";
     void navigate({
-      to,
+      to: "/p/$projectId/screening/title-abstract",
       params: { projectId: caller.projectId },
-      search:
-        before?.assignment_id && stage.stage === "title_abstract"
-          ? { after: before.assignment_id }
-          : {},
+      search: {
+        scope: stage.scope_id,
+        ...(before?.assignment_id ? { after: before.assignment_id } : {}),
+      },
     });
   };
 
@@ -582,6 +587,8 @@ function StageTable({
   useKeys((event) => {
     if (!table || !state) return false;
     const key = event.key;
+    // A held key repeats: it may move the selection, never decide record after record.
+    if (event.repeat && !/^(Arrow|Page)/.test(key)) return true;
     if (shown.current.ref === row?.ref && !shown.current.firstKey && /^[iue1-9 ]$/.test(key))
       shown.current = { ...shown.current, firstKey: new Date().toISOString() };
     if (armed) {
@@ -808,7 +815,7 @@ function StageTable({
         ) : null}
         <div className="flex h-9 items-center gap-4 px-3">
           <KeyHint keys={["ArrowUp", "ArrowDown"]}>Select</KeyHint>
-          {kind === "reviewer" ? <KeyHint keys={["Enter"]}>Open in the queue</KeyHint> : null}
+          {canDecide ? <KeyHint keys={["Enter"]}>Open in the queue</KeyHint> : null}
           {canDecide ? (
             <>
               <KeyHint keys={["i"]}>{OUTCOMES.include.label}</KeyHint>

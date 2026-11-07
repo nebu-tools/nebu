@@ -90,12 +90,15 @@ function compute(state: ProjectState) {
   const scopes = topics.flatMap((t) => t.scopes);
   const me = state.me;
   const has = (role: Role) => me.roles.includes(role);
-  /** The stage of a kind that `me` screens: as a screener, or as its auditor. */
-  const screeningStage = (stage: Stage): StageInfo | null =>
-    state.project.stages.find(
+  /** The stage of a kind that `me` screens: as a screener, or as its auditor. With `scopeId`,
+   * that scope's stage if `me` screens it. */
+  const screeningStage = (stage: Stage, scopeId?: string): StageInfo | null => {
+    const mine = state.project.stages.filter(
       (s) =>
         s.stage === stage && (s.screeners.includes(me.actor_id) || s.auditor_id === me.actor_id),
-    ) ?? null;
+    );
+    return mine.find((s) => s.scope_id === scopeId) ?? mine[0] ?? null;
+  };
   /** The server's rule: a lead who screens, audits, or adjudicates no stage sees what only
    * the lead sees (every record, the stages' figures, the reports). */
   const seesLeadData =

@@ -21,14 +21,14 @@ import type { SessionStats } from "./useQueue.ts";
 export function TitleAbstractQueue() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
   const { project, me, labels, criteriaFor, screeningStage, scopeLabel, has } = useProject();
-  const stage = screeningStage("title_abstract");
+  const { scope, after } = useSearch({ from: "/p/$projectId/screening/title-abstract" });
+  const stage = screeningStage("title_abstract", scope);
   const scopeId = stage?.scope_id ?? null;
   const criteria = useMemo(() => criteriaFor("title_abstract", scopeId), [criteriaFor, scopeId]);
   const caller = useMemo(
     () => ({ projectId: project.id, as: me.actor_id }),
     [project.id, me.actor_id],
   );
-  const { after } = useSearch({ from: "/p/$projectId/screening/title-abstract" });
   const queue = useQueue(
     workbench,
     caller,

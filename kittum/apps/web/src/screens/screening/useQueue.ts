@@ -122,12 +122,21 @@ export function useQueue(
       }),
     )
       .then((items) => {
-        if (items.length === 0 && jumped) {
+        // Records already held count as nothing new: after going round, the cursor reaches
+        // them again.
+        const held = new Set([
+          ...history.map((e) => e.item.assignment_id),
+          ...ahead.map((q) => q.assignment_id),
+          ...forward.map((e) => e.item.assignment_id),
+          ...(current ? [current.item.assignment_id] : []),
+        ]);
+        const fresh = items.some((i) => !held.has(i.assignment_id));
+        if (!fresh && jumped) {
           // Started in the middle: go round to the records before the start once.
           start.current = null;
           fromStart.current = true;
           setLap((n) => n + 1);
-        } else if (items.length === 0) setExhausted(true);
+        } else if (!fresh) setExhausted(true);
         setView((v) => {
           const known = new Set([
             ...history.map((e) => e.item.assignment_id),

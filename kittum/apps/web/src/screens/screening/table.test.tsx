@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, test } from "vite-plus/test";
 import { page, userEvent } from "vite-plus/test/browser";
 
-import { mount, press } from "../../test/app.tsx";
+import { hold, mount, press } from "../../test/app.tsx";
 import { distance, haystack, matcher } from "./table/fuzzy.ts";
 
 const TABLE = "/p/ivosidenib-cca/screening/table";
 
 const count = () => page.getByTestId("row-count");
 const firstRow = () => page.getByRole("row").nth(1);
+const selectedRow = () =>
+  document.querySelector("[role=row][aria-selected=true]")?.textContent ?? "";
 
 let unmount: (() => void) | undefined;
 afterEach(() => {
@@ -95,15 +97,31 @@ describe("screening table", () => {
     expect(app.workbench.decisions.map((d) => [d.assignmentId, d.decision.outcome])).toEqual([
       ["asg-ta-26615328", "exclude"],
     ]);
-    // The next row is BILCAP. Including it shows the AI's disagreement in the pane, and Space
-    // keeps the decision, as in the queue.
+    // The next row is BILCAP. With only undecided records in view, including it shows the AI's
+    // disagreement in the pane; the row stays until Space keeps the decision, as in the queue.
     await expect.element(page.getByTestId("row-detail")).toMatchTextContent("BILCAP");
+    await page.getByTestId("filter-decision").click();
+    const decisions = page.getByTestId("filter-menu-decision");
+    await decisions.getByRole("checkbox", { name: "Exclude" }).click();
+    await press("Escape");
     await press("i");
     await expect.element(page.getByTestId("row-detail")).toMatchTextContent("Not met");
+    await expect.poll(selectedRow).toContain("BILCAP");
     await expect.element(count()).toMatchTextContent("1 decided");
     await press(" ");
     await expect.element(count()).toMatchTextContent("2 decided");
     expect(app.workbench.decisions.at(-1)?.phase).toBe("final");
+    await expect
+      .element(page.getByRole("row").filter({ hasText: "BILCAP" }))
+      .not.toBeInTheDocument();
+    // A held key decides one record, not every record it repeats over.
+    const before = app.workbench.decisions.length;
+    await hold("u", 4);
+    await expect.element(count()).toMatchTextContent("3 decided");
+    expect(app.workbench.decisions.length).toBe(before + 1);
+    await page.getByTestId("filter-decision").click();
+    await decisions.getByRole("button", { name: "Clear filter" }).click();
+    await press("Escape");
 
     // The view stays where the reviewer left it, in this browser.
     app.unmount();
