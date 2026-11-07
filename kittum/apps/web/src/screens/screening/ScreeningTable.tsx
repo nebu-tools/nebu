@@ -435,7 +435,8 @@ function StageTable({
           ref: next.ref,
           at: new Date().toISOString(),
           firstKey: null,
-          reveal: next.reveal ? new Date().toISOString() : null,
+          // When the AI's reading went on screen: a reveal, or the reading a stage shows before.
+          reveal: next.reveal || next.ai ? new Date().toISOString() : null,
         };
     },
     [rows],
@@ -491,7 +492,8 @@ function StageTable({
             shown_at: timing?.at ?? now,
             first_key_at: timing?.firstKey ?? now,
             decided_at: now,
-            reveal_shown_at: phase === "final" ? (timing?.reveal ?? now) : null,
+            reveal_shown_at:
+              phase === "final" || (target.ai && !target.reveal) ? (timing?.reveal ?? now) : null,
           },
         }),
       );

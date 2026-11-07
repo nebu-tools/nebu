@@ -87,6 +87,8 @@ export function useQueue(
   // auditor's extra screen, a record the AI read after the reviewer passed its place).
   const fromStart = useRef(false);
   const start = useRef(startAfter);
+  // The cursor each record was read after, so a later read of the same window holds it again.
+  const readAfter = useRef(new Map<string, string | null>());
   const [lap, setLap] = useState(0);
   const timings = useRef(new Map<string, number>());
   const reveals = useRef({ shown: 0, followed: 0 });
@@ -130,6 +132,7 @@ export function useQueue(
           ...forward.map((e) => e.item.assignment_id),
           ...(current ? [current.item.assignment_id] : []),
         ]);
+        for (const i of items) readAfter.current.set(i.assignment_id, last);
         const fresh = items.some((i) => !held.has(i.assignment_id));
         if (!fresh && jumped) {
           // Started in the middle: go round to the records before the start once.
@@ -168,7 +171,9 @@ export function useQueue(
   useEffect(() => {
     if (unread === null || scopeId === null) return;
     const timer = window.setInterval(() => {
-      run(workbench.queue({ ...caller, scopeId, stage, after: null, limit: AHEAD + 1 }))
+      // From the cursor the record came after: a record opened from the table can sit far down.
+      const after = readAfter.current.get(unread) ?? null;
+      run(workbench.queue({ ...caller, scopeId, stage, after, limit: AHEAD + 1 }))
         .then((items) => {
           const read = new Map(
             items.flatMap((i) => (i.ai ? [[i.assignment_id, i.ai] as const] : [])),
