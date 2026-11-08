@@ -65,6 +65,7 @@ def test_targets_render_download_and_seal_over_http(
         "ris",
         "search_report",
         "ai_disclosure",
+        "risk_of_bias",
         "bundle",
     ]
     assert [t["id"] for t in listed if not t["renderable"]] == ["bundle"]

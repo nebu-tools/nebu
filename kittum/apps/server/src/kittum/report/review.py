@@ -23,6 +23,8 @@ from datetime import datetime
 from itertools import combinations
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from kittum.appraisal import Appraisal
+from kittum.appraisal import appraisals as load_appraisals
 from kittum.core import Id, KittumError, NotFoundError, Record
 from kittum.judge import USER_TEMPLATE, instructions_hash
 from kittum.ledger import PostgresLedger
@@ -390,6 +392,8 @@ class Review(Record):
     """What each AI role sent its model, read from the stored requests; empty without a store."""
     extracted: tuple[ExtractedValue, ...] = ()
     """The accepted extraction values at the cutoff, the latest per semantic key."""
+    appraisals: tuple[Appraisal, ...] = ()
+    """The risk-of-bias appraisals at the cutoff, by study, report, and result."""
 
     @property
     def document(self) -> ReviewProtocol:
@@ -501,6 +505,7 @@ def load_review(
             judge_template=USER_TEMPLATE,
         ),
         extracted=load_extracted(tx, project_id, cutoff),
+        appraisals=tuple(load_appraisals(tx, project_id, cutoff_seq=cutoff)),
     )
 
 

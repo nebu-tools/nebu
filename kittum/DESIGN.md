@@ -396,11 +396,29 @@ visible.
 
 ### Appraisal
 
-The core instruments are RoB 2 for randomized trials and ROBINS-I V2 for non-randomized studies.
-Profiles register further instruments, such as an agency's own assessment form with a low-or-high
-rating at study and endpoint level. Kittum stores the forms as data. The AI assembles quotes for
-each signalling question and never judges. A named human answers, and Kittum renders the answers
-onto every instrument the review needs.
+The core instrument is RoB 2 for randomized trials (Sterne et al., BMJ 2019;366:l4898, with the
+guidance and cribsheet of 22 August 2019), with domain 2 for the effect of assignment to
+intervention. ROBINS-I V2 for non-randomized studies and RoB 2's variant for the effect of
+adhering to intervention are not built yet. Profiles register further instruments, such as an
+agency's own assessment form with a low-or-high rating at study and endpoint level.
+
+Kittum stores the forms as data: domains, signalling questions (in Kittum's own words: RoB 2's
+published wording is CC BY-NC-ND) with their answer options (yes,
+probably yes, probably no, no, no information) and the condition under which each applies ("if
+yes, probably yes, or no information to 2.1 or 2.2"). A question whose condition fails is not
+applicable; Kittum shows it as NA, and nobody types it. An appraisal is of one result of one
+report included at full text, on that report's PDF. A named human answers every question, and
+each answer carries quotes as anchors on the PDF that Kittum checks with `find_quote`. The quotes
+on offer are the instrument's words found in the report, in document order, as full-text
+screening offers protocol terms.
+
+The published algorithm proposes each domain's judgement (low, some concerns, high) once its
+applicable questions are answered, and the overall rule (the worst domain) proposes the result's.
+The reviewer may judge a domain or the result against the algorithm, with a reason; that is also
+how "some concerns in several domains" becomes high, which RoB 2 leaves to judgement. Every answer
+and every override is a ledger event with the quotes and the algorithm's proposal at that moment,
+and the `risk_of_bias` report renders the table as of any event. Later, the AI may assemble
+quotes for each signalling question; it never answers or judges.
 
 The certainty-of-evidence vocabulary comes from the profile. GRADE is not modelled in the PoC.
 
@@ -414,6 +432,7 @@ Kittum renders every report from the ledger. Nobody types counts. The core targe
 | `ris` | RIS files for every search, undeduplicated, and for every reference list |
 | `ai_disclosure` | The AI-use disclosure, with every AI role's prompts and model recipe as sent |
 | `extraction` | The accepted extraction values as CSV and JSON, one row per study and field, with path, source anchor, and acceptance |
+| `risk_of_bias` | The risk-of-bias table: a row per appraised result, a column per domain and the overall judgement, judgements against the algorithm marked, with their reasons in the CSV and JSON |
 | `bundle` | The handover bundle, with a validation pack for client vendor audits |
 
 Profiles register further targets: an agency's dossier sections and annexes, a submission
@@ -470,11 +489,11 @@ hypothetical seam, so Kittum does not add a port for it.
 | `screening` | `next(reviewer, scope)`, `decide(assignment, decision, expected_revision)`, `status(scope)` | Mode rules, blinding, reveal-after-commit, queue order, sentinels, audit sampling, conflicts | None. The workbench is a thin client of this module. |
 | `documents` | `derive(document, recipe) -> Layer`, `resolve(anchor, layer) -> Resolution` | Acquisition, parsing, OCR fallback, coordinate frames, text maps, re-anchoring | `Parser`: PyMuPDF, pypdfium2, Docling, GROBID |
 | `extraction` | `extract(layer, field_specs) -> ProposalSet` | Janus path, LLM path, validators, reconciliation | Janus and the LLM agent |
-| `appraisal` | `draft(study, instrument) -> AppraisalDraft` | Quote assembly per signalling question, forms as data | Instruments: core (RoB 2, ROBINS-I V2) and profile-registered |
+| `appraisal` | `start(report, instrument, result) -> Appraisal`, `answer(appraisal, question, answer, quotes)`, `override(appraisal, domain, judgement, reason)` | Forms as data, which questions apply, the published algorithms, quote checks | Instruments: core (RoB 2) and profile-registered |
 | `stats` | Pure functions: `elusion_estimate`, `stop_test`, `capture_recapture`, `conformal_threshold`, `agreement` | Exact and Bayesian intervals, simulation tests | None |
 | `runs` | `run(spec) -> RunRef`, `resume(run)`, `diff(a, b) -> RunDiff` | Job leases, cache keys, manifests, idempotent publication | None |
 | `ledger` | `append(event)`, `verify()`, `seal(revision, profile) -> Bundle` | Hash chain, checkpoints, signatures, bundle export | Postgres (live), SQLite (handover and tests) |
-| `report` | `render(target, scope) -> Artifact` | PRISMA, RIS, disclosure templates, bundle layout, the target registry | Targets: core (`prisma`, `ris`, `bundle`, `ai_disclosure`) and profile-registered |
+| `report` | `render(target, scope) -> Artifact` | PRISMA, RIS, disclosure templates, bundle layout, the target registry | Targets: core (`prisma`, `ris`, `bundle`, `ai_disclosure`, `extraction`, `risk_of_bias`) and profile-registered |
 
 The `profile` argument of `ledger.seal` is the rights profile that decides which artifacts may
 leave, not a jurisdiction profile.
@@ -787,7 +806,7 @@ the terms of their own templates.
 | Extraction | Fields grouped by endpoint, arm, and timepoint, with value, unit, status, origin path, agreement, and validator results; the source region on the PDF | `Tab` next field, `Enter` accept after viewing the source, `e` edit (needs a span), `1` or `2` pick a path when they disagree |
 | Adjudication | Reviewers A and B side by side, pseudonymized, each with outcome, criterion, span, and comment. At full text, the PDF with the mentions of the active criterion, for the adjudicator's own evidence. The AI column opens after the adjudicator commits: each criterion's verdict, rationale, and quote, the verified one marked in the record or on the page. | `1` adopt A, `2` adopt B, `i`, `e`, `u` own decision. At full text, `↑` and `↓` choose a criterion, `,` and `.` step through its mentions, `Enter` adopts one. After the decision, `,` and `.` step through the AI's criteria |
 | AI-exclusion audit | Strata, sample sizes, misses found, estimated missed relevant records with a 95% upper bound, pass or fail against the protocol's threshold | A found miss creates a queue of the 20 nearest AI-excluded records for human rescreening. |
-| Risk of bias | Signalling questions on the left with assembled quotes, the PDF on the right; the rendering on each instrument the review needs (RoB 2, ROBINS-I V2, or a profile's form) | `1` to `5` for yes, probably yes, probably no, no, no information. `o` override with a reason. |
+| Risk of bias | The reports included at full text, each appraised result as one line of domain judgements. An appraisal: the PDF on the left; on the right one domain's signalling questions at a time, the active one in full with the instrument's words found in the report, and each domain's judgement as the algorithm proposes it after every answer or as the reviewer judged it | `1` to `5` for yes, probably yes, probably no, no, no information. `,` and `.` step through the words, `Enter` adopts a quote. `o` judges the domain against the algorithm with a reason, `O` the result. |
 | Progress | The live PRISMA flow per scope with the update-search delta, throughput, kappa and PABAK for human pairs and human-AI pairs, conflict rate, the audit gauge, and the disclosure summary | Read only |
 | Audit | For the methods lead: the chain on one strip; a PRISMA count opened to its records and a record to every ledger event that touched it, each event in words first, then its hashes opened to the content they cover and rechecked, and an AI step's exact model requests and responses; a full integrity check naming each failing event and check; the flow and the AI disclosure as of any event | `1` trace, `2` integrity, `3` as of an event, `,` and `.` previous and next count, `v` verify again, `c` sign a checkpoint, `p` keep the reports at the event |
 

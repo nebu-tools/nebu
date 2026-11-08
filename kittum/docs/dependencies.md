@@ -132,6 +132,14 @@ Anchors are page numbers and boxes in PDF points, the same frame the parsers pro
 draws them. That keeps anchors independent of the viewer: pdf.js and PDFium split text into runs
 differently, so a browser text layer would tie an anchor to one engine.
 
+### Appraisal instruments
+
+An instrument's wording is third-party content, like a library, and carries its own licence.
+
+| Content | Licence | Notes | Verdict |
+| --- | --- | --- | --- |
+| RoB 2 signalling questions (guidance and cribsheet of 22.08.2019, RoB 2 Development Group, riskofbias.info) | CC BY-NC-ND 4.0 | The published wording is not used: non-commercial terms rule it out for commercial review work. `kittum.appraisal.rob2` asks each question in Kittum's own words, under the tool's question numbers. The answer options, conditions, and flow-chart algorithms are the tool's method, implemented in Kittum's own code; domain titles are generic names. Reviewers read the guidance for the official wording. | Kittum's own wording; ask the RoB 2 Development Group if the official wording is ever wanted |
+
 ## Document tools and models in short
 
 The full comparison is on [Document and model tools](document-tools.md).
@@ -170,3 +178,5 @@ The full comparison is on [Document and model tools](document-tools.md).
   [Ceph releases](https://docs.ceph.com/en/latest/releases/)
 - [EmbedPDF licensing](https://github.com/embedpdf/embed-pdf-viewer)
 - [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html)
+- [RoB 2, current version](https://www.riskofbias.info/welcome/rob-2-0-tool/current-version-of-rob-2)
+  (guidance and cribsheet, 22.08.2019; licence stated on both)

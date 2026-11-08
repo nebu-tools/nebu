@@ -680,6 +680,301 @@
         "title": "AnchorRequest",
         "type": "object"
       },
+      "Answer": {
+        "enum": [
+          "yes",
+          "probably_yes",
+          "probably_no",
+          "no",
+          "no_information"
+        ],
+        "type": "string"
+      },
+      "AnswerBody": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor_ids": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Id"
+            },
+            "title": "Anchor Ids",
+            "type": "array"
+          },
+          "answer": {
+            "$ref": "#/components/schemas/Answer"
+          },
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "question_id",
+          "answer"
+        ],
+        "title": "AnswerBody",
+        "type": "object"
+      },
+      "Applies": {
+        "enum": [
+          "yes",
+          "no",
+          "pending"
+        ],
+        "type": "string"
+      },
+      "AppraisableReport": {
+        "additionalProperties": false,
+        "properties": {
+          "appraisals": {
+            "items": {
+              "$ref": "#/components/schemas/AppraisalSummary"
+            },
+            "title": "Appraisals",
+            "type": "array"
+          },
+          "journal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Journal"
+          },
+          "report_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "study_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "study_label": {
+            "title": "Study Label",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          }
+        },
+        "required": [
+          "report_id",
+          "study_id",
+          "study_label",
+          "title",
+          "year",
+          "journal",
+          "appraisals"
+        ],
+        "title": "AppraisableReport",
+        "type": "object"
+      },
+      "Appraisal": {
+        "additionalProperties": false,
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "document_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/DomainView"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "instrument": {
+            "title": "Instrument",
+            "type": "string"
+          },
+          "instrument_title": {
+            "title": "Instrument Title",
+            "type": "string"
+          },
+          "judgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Override"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "proposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "report_title": {
+            "title": "Report Title",
+            "type": "string"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          },
+          "study_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "study_label": {
+            "title": "Study Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "report_id",
+          "study_id",
+          "document_id",
+          "study_label",
+          "report_title",
+          "instrument",
+          "instrument_title",
+          "result",
+          "created_by",
+          "created_at",
+          "domains",
+          "proposed",
+          "override",
+          "judgement"
+        ],
+        "title": "Appraisal",
+        "type": "object"
+      },
+      "AppraisalScreen": {
+        "additionalProperties": false,
+        "description": "An appraisal with its report's full text and the instrument's words found in it.",
+        "properties": {
+          "appraisal": {
+            "$ref": "#/components/schemas/Appraisal"
+          },
+          "layer": {
+            "$ref": "#/components/schemas/ReviewLayer"
+          },
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionMentions"
+            },
+            "title": "Mentions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "appraisal",
+          "layer",
+          "mentions"
+        ],
+        "title": "AppraisalScreen",
+        "type": "object"
+      },
+      "AppraisalSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "answered": {
+            "title": "Answered",
+            "type": "integer"
+          },
+          "domains": {
+            "items": {
+              "$ref": "#/components/schemas/DomainJudgement"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "instrument": {
+            "title": "Instrument",
+            "type": "string"
+          },
+          "judgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "open": {
+            "title": "Open",
+            "type": "integer"
+          },
+          "overridden": {
+            "title": "Overridden",
+            "type": "boolean"
+          },
+          "result": {
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "instrument",
+          "result",
+          "judgement",
+          "overridden",
+          "domains",
+          "answered",
+          "open"
+        ],
+        "title": "AppraisalSummary",
+        "type": "object"
+      },
       "Arm": {
         "additionalProperties": false,
         "properties": {
@@ -2085,6 +2380,41 @@
         "title": "Comparison",
         "type": "object"
       },
+      "Condition": {
+        "additionalProperties": false,
+        "description": "`any`: at least one of `questions` has one of `answers`; `all`: every one has. A question\nthat does not apply has none of them.",
+        "properties": {
+          "answers": {
+            "items": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "title": "Answers",
+            "type": "array"
+          },
+          "mode": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Questions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "questions",
+          "answers"
+        ],
+        "title": "Condition",
+        "type": "object"
+      },
       "ConfidencePercent": {
         "pattern": "^[0-9]{1,3}(\\.[0-9]+)?$",
         "type": "string"
@@ -3035,6 +3365,101 @@
           "working"
         ],
         "type": "string"
+      },
+      "DomainJudgement": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "judgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "overridden": {
+            "title": "Overridden",
+            "type": "boolean"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "judgement",
+          "overridden"
+        ],
+        "title": "DomainJudgement",
+        "type": "object"
+      },
+      "DomainView": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "judgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "override": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Override"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposed": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/QuestionView"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "questions",
+          "proposed",
+          "override",
+          "judgement"
+        ],
+        "title": "DomainView",
+        "type": "object"
       },
       "DraftRequest": {
         "additionalProperties": false,
@@ -4380,6 +4805,30 @@
         "title": "IngestRequest",
         "type": "object"
       },
+      "InstrumentInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "source"
+        ],
+        "title": "InstrumentInfo",
+        "type": "object"
+      },
       "Interval": {
         "additionalProperties": false,
         "description": "A point estimate with an interval.",
@@ -4475,6 +4924,14 @@
         "enum": [
           "conservative",
           "decisive"
+        ],
+        "type": "string"
+      },
+      "Judgement": {
+        "enum": [
+          "low",
+          "some_concerns",
+          "high"
         ],
         "type": "string"
       },
@@ -5564,6 +6021,75 @@
           "insufficient_information"
         ],
         "type": "string"
+      },
+      "Override": {
+        "additionalProperties": false,
+        "properties": {
+          "actor_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "judgement": {
+            "$ref": "#/components/schemas/Judgement"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "judgement",
+          "reason",
+          "actor_id",
+          "recorded_at"
+        ],
+        "title": "Override",
+        "type": "object"
+      },
+      "OverrideBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "judgement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Judgement"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "target",
+          "judgement"
+        ],
+        "title": "OverrideBody",
+        "type": "object"
       },
       "PageSize": {
         "additionalProperties": false,
@@ -7045,6 +7571,126 @@
           "ctgov"
         ],
         "type": "string"
+      },
+      "QuestionMentions": {
+        "additionalProperties": false,
+        "properties": {
+          "mentions": {
+            "items": {
+              "$ref": "#/components/schemas/Anchor"
+            },
+            "title": "Mentions",
+            "type": "array"
+          },
+          "question_id": {
+            "title": "Question Id",
+            "type": "string"
+          },
+          "terms": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Terms",
+            "type": "array"
+          }
+        },
+        "required": [
+          "question_id",
+          "terms",
+          "mentions"
+        ],
+        "title": "QuestionMentions",
+        "type": "object"
+      },
+      "QuestionView": {
+        "additionalProperties": false,
+        "properties": {
+          "answer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Answer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "answered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answered At"
+          },
+          "answered_by": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "applies": {
+            "$ref": "#/components/schemas/Applies"
+          },
+          "condition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Condition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/Anchor"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/Answer"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "text",
+          "options",
+          "condition",
+          "applies",
+          "answer",
+          "evidence",
+          "answered_by",
+          "answered_at"
+        ],
+        "title": "QuestionView",
+        "type": "object"
       },
       "QueueItem": {
         "additionalProperties": false,
@@ -10206,6 +10852,35 @@
         "title": "StageProgress",
         "type": "object"
       },
+      "StartBody": {
+        "additionalProperties": false,
+        "properties": {
+          "command_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "instrument": {
+            "default": "rob2",
+            "title": "Instrument",
+            "type": "string"
+          },
+          "report_id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "result": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Result",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command_id",
+          "report_id",
+          "result"
+        ],
+        "title": "StartBody",
+        "type": "object"
+      },
       "StartRequest": {
         "additionalProperties": false,
         "properties": {
@@ -10928,6 +11603,7 @@
           "adjudication",
           "full_text",
           "extraction",
+          "appraisal",
           "report",
           "ledger",
           "project"
@@ -12205,6 +12881,387 @@
         "summary": "Get Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/appraisals": {
+      "post": {
+        "description": "A new appraisal of one result of an included report, on its full text. 409 if the report\nalready has one of that result with that instrument. Retrying with the same `command_id`\nreturns the same appraisal.",
+        "operationId": "startAppraisal",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Route",
+        "tags": [
+          "appraisal"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/appraisals/{appraisal_id}/answers": {
+      "post": {
+        "description": "Answer one signalling question with its quotes; the domain's proposed judgement comes back\nwith the appraisal. 409 with the reason if the question does not apply yet, the answer is not\none of its options, or a quote is not in the appraised full text.",
+        "operationId": "answerAppraisalQuestion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "appraisal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Appraisal Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Answer Route",
+        "tags": [
+          "appraisal"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/appraisals/{appraisal_id}/overrides": {
+      "post": {
+        "description": "Set a domain's or the overall judgement against the algorithm's, with a reason, or take\nan override back (`judgement` null).",
+        "operationId": "overrideAppraisalJudgement",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "appraisal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Appraisal Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverrideBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Appraisal"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Override Route",
+        "tags": [
+          "appraisal"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/appraisals/{appraisal_id}/screen": {
+      "get": {
+        "description": "The appraisal with its report's full text, and each question's words in it in document\norder (from the instrument, never from a model) for adopting quotes.",
+        "operationId": "getAppraisalScreen",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "appraisal_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Appraisal Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppraisalScreen"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Screen Route",
+        "tags": [
+          "appraisal"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/instruments": {
+      "get": {
+        "operationId": "listAppraisalInstruments",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InstrumentInfo"
+                  },
+                  "title": "Response Listappraisalinstruments",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Instruments Route",
+        "tags": [
+          "appraisal"
+        ]
+      }
+    },
+    "/api/projects/{project_id}/appraisal/reports": {
+      "get": {
+        "description": "The reports included at full text with a full text that the viewer may see, in search\norder, each with its appraisals.",
+        "operationId": "listAppraisableReports",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The caller's actor ID. A stand-in until the API has authentication.",
+            "in": "header",
+            "name": "X-Kittum-Reviewer",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Id",
+              "description": "The caller's actor ID. A stand-in until the API has authentication."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AppraisableReport"
+                  },
+                  "title": "Response Listappraisablereports",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Reports Route",
+        "tags": [
+          "appraisal"
         ]
       }
     },

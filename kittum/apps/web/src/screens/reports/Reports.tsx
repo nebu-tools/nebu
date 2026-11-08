@@ -1,6 +1,7 @@
 // Reports (DESIGN.md, "Reports"): rendered from the ledger, never typed. The methods lead renders
 // the PRISMA 2020 flow, reads the AI-use disclosure with every prompt the AI roles sent, downloads
-// the accepted extraction values, and seals the handover bundle; the server refuses anyone else.
+// the accepted extraction values and the risk-of-bias table, and seals the handover bundle; the
+// server refuses anyone else.
 import { Dialog } from "@base-ui/react/dialog";
 import { useRouteContext } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -107,6 +108,21 @@ interface Extracted {
   }>;
 }
 
+/** The risk-of-bias rows, as the `risk_of_bias` target writes them: one per result and domain. */
+interface RiskOfBias {
+  readonly cutoff_seq: number;
+  readonly rows: ReadonlyArray<{
+    readonly appraisal_id: string;
+    readonly study: string;
+    readonly result: string;
+    readonly domain: string;
+    readonly judgement: "low" | "some_concerns" | "high" | null;
+    readonly override_reason: string | null;
+  }>;
+}
+
+const JUDGEMENT_WORDS = { low: "Low", some_concerns: "Some concerns", high: "High" } as const;
+
 const STAGES = { title_abstract: "Title and abstract", full_text: "Full text" } as const;
 const ROLES = { judge: "AI judge", assistant: "Protocol assistant", extraction: "Extraction" };
 const PRODUCED_BY = { janus: "Janus", llm: "LLM", manual_edit: "Edited by hand" } as const;
@@ -134,6 +150,10 @@ export function ReportsScreen() {
     record: Extracted;
     files: ReadonlyArray<Download>;
   } | null>(null);
+  const [rob, setRob] = useState<{
+    record: RiskOfBias;
+    files: ReadonlyArray<Download>;
+  } | null>(null);
   const [bundle, setBundle] = useState<SealedBundle | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -158,6 +178,12 @@ export function ReportsScreen() {
       for (const f of extracted?.files ?? []) URL.revokeObjectURL(f.url);
     },
     [extracted],
+  );
+  useEffect(
+    () => () => {
+      for (const f of rob?.files ?? []) URL.revokeObjectURL(f.url);
+    },
+    [rob],
   );
 
   const act = async <A,>(what: string, failed: string, task: () => Promise<A>) => {
@@ -240,6 +266,21 @@ export function ReportsScreen() {
       },
     );
 
+  const renderRob = () =>
+    act(
+      "Rendering the risk-of-bias table",
+      "Kittum could not render the risk-of-bias table.",
+      async () => {
+        const files = await renderTarget("risk_of_bias");
+        const record = files.find((f) => f.path.endsWith(".json"));
+        if (record)
+          setRob({
+            record: json<RiskOfBias>(record.bytes),
+            files: files.map((f) => f.download),
+          });
+      },
+    );
+
   const seal = () =>
     act("Sealing the bundle", "Kittum could not seal the bundle.", async () =>
       setBundle(await run(workbench.sealBundle(caller))),
@@ -251,6 +292,7 @@ export function ReportsScreen() {
       p: renderPrisma,
       a: renderDisclosure,
       e: renderExtracted,
+      b: renderRob,
       s: seal,
     }[event.key];
     if (!action) return false;
@@ -268,6 +310,7 @@ export function ReportsScreen() {
               <KeyHint keys={["p"]}>Render the PRISMA flow</KeyHint>
               <KeyHint keys={["a"]}>Show the AI-use disclosure</KeyHint>
               <KeyHint keys={["e"]}>Download the extracted values</KeyHint>
+              <KeyHint keys={["b"]}>Risk of bias</KeyHint>
               <KeyHint keys={["s"]}>Seal the handover bundle</KeyHint>
             </span>
           ) : null}
@@ -302,6 +345,7 @@ export function ReportsScreen() {
           <DisclosureSection record={disclosure.record} files={disclosure.files} />
         ) : null}
         {extracted ? <ExtractedSection record={extracted.record} files={extracted.files} /> : null}
+        {rob ? <RiskOfBiasSection record={rob.record} files={rob.files} /> : null}
         {bundle ? (
           <section className="mt-8 border-t border-rule pt-4" data-testid="bundle">
             <h2 className="text-md font-semibold">Handover bundle sealed</h2>
@@ -693,6 +737,70 @@ function ExtractedSection({
           </tbody>
         </table>
       ) : null}
+    </section>
+  );
+}
+
+function RiskOfBiasSection({
+  record,
+  files,
+}: {
+  record: RiskOfBias;
+  files: ReadonlyArray<Download>;
+}) {
+  const domains = [...new Set(record.rows.map((r) => r.domain))].filter((d) => d !== "overall");
+  const results = [...new Set(record.rows.map((r) => r.appraisal_id))].map((id) =>
+    record.rows.filter((r) => r.appraisal_id === id),
+  );
+  return (
+    <section className="mt-8 border-t border-rule pt-4" data-testid="risk-of-bias">
+      <div className="flex items-baseline gap-4">
+        <h2 className="text-md font-semibold">Risk of bias</h2>
+        <span className="text-xs text-ink-3">at ledger event {record.cutoff_seq}</span>
+        <span className="ml-auto flex gap-4 text-sm">
+          {files.map((f) => (
+            <DownloadLink key={f.name} file={f} />
+          ))}
+        </span>
+      </div>
+      {results.length === 0 ? (
+        <p className="mt-2 text-sm text-ink-2">Nobody has appraised a result yet.</p>
+      ) : (
+        <table className="mt-3 w-full text-sm" data-testid="risk-of-bias-table">
+          <thead className="text-left text-xs text-ink-3">
+            <tr className="border-b border-rule">
+              <th className="py-1 font-normal">Study</th>
+              <th className="py-1 font-normal">Result</th>
+              {domains.map((d) => (
+                <th key={d} className="py-1 font-normal">
+                  {d}
+                </th>
+              ))}
+              <th className="py-1 font-normal">Overall</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map((rows) => (
+              <tr key={rows[0]?.appraisal_id} className="border-b border-rule align-baseline">
+                <td className="py-1.5 pr-3">{rows[0]?.study}</td>
+                <td className="pr-3">{rows[0]?.result}</td>
+                {[...domains, "overall"].map((d) => {
+                  const row = rows.find((r) => r.domain === d);
+                  return (
+                    <td key={d} className="pr-3" title={row?.override_reason ?? undefined}>
+                      {row?.judgement ? JUDGEMENT_WORDS[row.judgement] : "Not yet"}
+                      {row?.override_reason ? " †" : ""}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <p className="mt-2 text-xs text-ink-3">
+        † Judged against the algorithm; the reason is in the CSV and on hover.
+      </p>
     </section>
   );
 }

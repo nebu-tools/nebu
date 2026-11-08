@@ -2,7 +2,7 @@
 // word beside it wherever there is room. Colour never carries the meaning alone.
 import type { ReactNode } from "react";
 
-import type { CriterionStatus, Outcome, ProposalStatus } from "../data/schema.ts";
+import type { CriterionStatus, Judgement, Outcome, ProposalStatus } from "../data/schema.ts";
 
 type Tone = "include" | "exclude" | "unclear" | "insufficient" | "neutral" | "petrol";
 
@@ -46,6 +46,13 @@ export const VERDICTS: Record<CriterionStatus, Term> = {
   met: { glyph: "y", label: "Met", tone: "include" },
   not_met: { glyph: "n", label: "Not met", tone: "exclude" },
   unclear: { glyph: "?", label: "Unclear", tone: "unclear" },
+};
+
+/** Risk-of-bias judgements, with the glyphs of the usual RoB 2 traffic-light plots. */
+export const JUDGEMENTS: Record<Judgement, Term> = {
+  low: { glyph: "+", label: "Low", tone: "include" },
+  some_concerns: { glyph: "−", label: "Some concerns", tone: "unclear" },
+  high: { glyph: "×", label: "High", tone: "exclude" },
 };
 
 export const PROPOSAL_STATUS: Record<ProposalStatus, Term> = {

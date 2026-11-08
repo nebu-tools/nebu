@@ -1,7 +1,8 @@
 // Evidence on a full text, as the full-text screen and the adjudicator gather it: one active
 // criterion, its protocol-term mentions in document order (`,` and `.`), and the spans adopted
 // as evidence for each criterion (Enter on a mention or a selection). Each adopted span is saved
-// as an anchor on the layer, and a decision cites it by ID.
+// as an anchor on the layer, and a decision cites it by ID. The risk-of-bias screen gathers
+// quotes per signalling question the same way, starting from the quotes already saved.
 import { useCallback, useMemo, useState } from "react";
 
 import type { Anchor, Box, Criterion, CriterionStatus } from "../../data/schema.ts";
@@ -28,21 +29,24 @@ export interface CriterionState {
 
 const EMPTY: CriterionState = { verdict: null, evidence: [], cursor: -1 };
 
-export function useEvidence({
+export function useEvidence<C extends { readonly id: string } = Criterion>({
   workbench,
   layerId,
   criteria,
   mentions,
   nameOf,
+  initial = {},
 }: {
   workbench: Workbench;
   layerId: string;
-  criteria: ReadonlyArray<Criterion>;
+  criteria: ReadonlyArray<C>;
   mentions: ReadonlyMap<string, ReadonlyArray<Anchor>>;
-  nameOf: (criterion: Criterion) => string;
+  nameOf: (criterion: C) => string;
+  /** Evidence already saved, by criterion ID. */
+  initial?: Readonly<Record<string, CriterionState>>;
 }) {
   const [active, setActive] = useState(0);
-  const [states, setStates] = useState<Record<string, CriterionState>>({});
+  const [states, setStates] = useState<Record<string, CriterionState>>(() => ({ ...initial }));
   const [selection, setSelection] = useState<TextSelection | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

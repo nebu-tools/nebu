@@ -862,6 +862,52 @@ export const makeApiWorkbench = (): Workbench => ({
 
   assertions: ({ projectId, as }) =>
     call((api) => api.listExtractionAssertions(projectId, { params: reviewer(as) })),
+
+  appraisableReports: ({ projectId, as }) =>
+    call((api) => api.listAppraisableReports(projectId, { params: reviewer(as) })),
+
+  startAppraisal: ({ projectId, as, reportId, result }) =>
+    call((api) =>
+      api.startAppraisal(projectId, {
+        params: reviewer(as),
+        payload: { command_id: commandId(), report_id: reportId, instrument: "rob2", result },
+      }),
+    ),
+
+  appraisal: ({ projectId, as, appraisalId }) =>
+    call((api) => api.getAppraisalScreen(projectId, appraisalId, { params: reviewer(as) })).pipe(
+      Effect.map((screen) => ({
+        appraisal: screen.appraisal,
+        layer: {
+          id: screen.layer.id,
+          document_id: screen.layer.document_id,
+          text: screen.layer.text,
+          pages: screen.layer.pages,
+        },
+        mentions: screen.mentions.map((m) => [m.question_id, m.mentions.map(anchorView)] as const),
+      })),
+    ),
+
+  answerQuestion: ({ projectId, as, appraisalId, questionId, answer, anchorIds }) =>
+    call((api) =>
+      api.answerAppraisalQuestion(projectId, appraisalId, {
+        params: reviewer(as),
+        payload: {
+          command_id: commandId(),
+          question_id: questionId,
+          answer,
+          anchor_ids: anchorIds,
+        },
+      }),
+    ),
+
+  overrideJudgement: ({ projectId, as, appraisalId, target, judgement, reason }) =>
+    call((api) =>
+      api.overrideAppraisalJudgement(projectId, appraisalId, {
+        params: reviewer(as),
+        payload: { command_id: commandId(), target, judgement, reason },
+      }),
+    ),
 });
 
 /** The server's health, for the start page. */

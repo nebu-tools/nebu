@@ -775,5 +775,12 @@ export const makeMockWorkbench = (
         });
       }),
     assertions: () => call("other", "assertions", null, () => []),
+
+    // The mock has no included report to appraise: the screen says so.
+    appraisableReports: () => call("other", "appraisableReports", null, () => []),
+    startAppraisal: unavailable,
+    appraisal: unavailable,
+    answerQuestion: unavailable,
+    overrideJudgement: unavailable,
   };
 };
