@@ -8,10 +8,10 @@ randomised trials", BMJ 2019;366:l4898. Domain 2 is the variant for the effect o
 intervention (the intention-to-treat effect); the variant for the effect of adhering to
 intervention is not built.
 
-The wording of the signalling questions and domain titles is the RoB 2 Development Group's, under
-CC BY-NC-ND 4.0 (creativecommons.org/licenses/by-nc-nd/4.0), not under Kittum's AGPL: quoted
-verbatim, with attribution, unchanged. The short labels and the mention words are Kittum's.
-docs/dependencies.md has the open question about commercial use.
+The published wording of the signalling questions is licensed CC BY-NC-ND 4.0, which rules out
+commercial use, so the questions here are Kittum's own words for what each published question
+asks. Their numbers, conditions, answer options, and the flow charts are the tool's; read the
+guidance for the official wording and its elaboration before appraising.
 
 Each algorithm is the cribsheet's flow chart for its domain. The overall rule is the guidance's
 Table 1: low if every domain is low, high if any domain is high, otherwise some concerns. "Some
@@ -112,7 +112,6 @@ def _if(*questions: str, answers: tuple[Answer, ...], mode: str = "any") -> Cond
     return Condition.model_validate({"questions": questions, "answers": answers, "mode": mode})
 
 
-_SELECTED = "Is the numerical result being assessed likely to have been selected, on the basis of the results, from"
 
 ROB2 = InstrumentDefinition(
     id="rob2",
@@ -128,19 +127,19 @@ ROB2 = InstrumentDefinition(
             id="D1",
             title="Randomization process",
             questions=(
-                _q("1.1", "Sequence random?", "Was the allocation sequence random?", _RANDOM),
+                _q("1.1", "Sequence random?", "Did chance alone decide which group each participant joined?", _RANDOM),
                 _q(
                     "1.2",
                     "Allocation concealed?",
-                    "Was the allocation sequence concealed until participants were enrolled and"
-                    " assigned to interventions?",
+                    "Could the people enrolling participants not foresee the next assignment until"
+                    " each participant was enrolled and assigned?",
                     _CONCEALED,
                 ),
                 _q(
                     "1.3",
                     "Baseline imbalance suggests a problem?",
-                    "Did baseline differences between intervention groups suggest a problem with"
-                    " the randomization process?",
+                    "Do the groups differ at baseline in a way that points to a flaw in how they"
+                    " were formed?",
                     _BASELINE,
                 ),
             ),
@@ -152,50 +151,50 @@ ROB2 = InstrumentDefinition(
                 _q(
                     "2.1",
                     "Participants aware?",
-                    "Were participants aware of their assigned intervention during the trial?",
+                    "Did participants know during the trial which intervention they had been assigned?",
                     _AWARE,
                 ),
                 _q(
                     "2.2",
                     "Carers and deliverers aware?",
-                    "Were carers and people delivering the interventions aware of participants'"
-                    " assigned intervention during the trial?",
+                    "Did the people caring for participants or giving the interventions know during"
+                    " the trial which intervention each participant had been assigned?",
                     _AWARE,
                 ),
                 _q(
                     "2.3",
                     "Deviations because of the trial context?",
-                    "Were there deviations from the intended intervention that arose because of"
-                    " the trial context?",
+                    "Did participants receive something other than their assigned intervention"
+                    " because they were in a trial (beyond what usual practice would bring)?",
                     _DEVIATIONS,
                     _if("2.1", "2.2", answers=(*Y, NI)),
                 ),
                 _q(
                     "2.4",
                     "Deviations affected the outcome?",
-                    "Were these deviations likely to have affected the outcome?",
+                    "Would those departures from the assigned intervention plausibly change the outcome?",
                     _DEVIATIONS,
                     _if("2.3", answers=Y),
                 ),
                 _q(
                     "2.5",
                     "Deviations balanced?",
-                    "Were these deviations from intended intervention balanced between groups?",
+                    "Did those departures occur to a similar extent in each group?",
                     _DEVIATIONS,
                     _if("2.4", answers=(*Y, NI)),
                 ),
                 _q(
                     "2.6",
                     "Appropriate analysis?",
-                    "Was an appropriate analysis used to estimate the effect of assignment to"
-                    " intervention?",
+                    "Does the analysis estimate the effect of being assigned to the intervention,"
+                    " with participants counted in the groups they were randomized to?",
                     _ANALYSIS,
                 ),
                 _q(
                     "2.7",
                     "Substantial impact of the analysis?",
-                    "Was there potential for a substantial impact (on the result) of the failure"
-                    " to analyse participants in the group to which they were randomized?",
+                    "Could counting participants outside their randomized group have changed the"
+                    " result substantially?",
                     _ANALYSIS,
                     _if("2.6", answers=(*N, NI)),
                 ),
@@ -208,14 +207,14 @@ ROB2 = InstrumentDefinition(
                 _q(
                     "3.1",
                     "Data for (nearly) all participants?",
-                    "Were data for this outcome available for all, or nearly all, participants"
-                    " randomized?",
+                    "Does the result include this outcome for every randomized participant, or"
+                    " almost every one?",
                     _MISSING,
                 ),
                 _q(
                     "3.2",
                     "Evidence the result is not biased?",
-                    "Is there evidence that the result was not biased by missing outcome data?",
+                    "Do the authors show (for example by sensitivity analyses) that the missing outcome data did not bias the result?",
                     _MISSING,
                     _if("3.1", answers=(*N, NI)),
                     # The tool offers no "no information" here.
@@ -224,14 +223,14 @@ ROB2 = InstrumentDefinition(
                 _q(
                     "3.3",
                     "Missingness could depend on the true value?",
-                    "Could missingness in the outcome depend on its true value?",
+                    "Could whether the outcome is missing be related to what its value would have been?",
                     _MISSING,
                     _if("3.2", answers=N),
                 ),
                 _q(
                     "3.4",
                     "Missingness likely depended on the true value?",
-                    "Is it likely that missingness in the outcome depended on its true value?",
+                    "Is it likely that whether the outcome is missing was related to what its value would have been?",
                     _MISSING,
                     _if("3.3", answers=(*Y, NI)),
                 ),
@@ -244,37 +243,36 @@ ROB2 = InstrumentDefinition(
                 _q(
                     "4.1",
                     "Measurement inappropriate?",
-                    "Was the method of measuring the outcome inappropriate?",
+                    "Was the outcome measured in a way unsuited to it?",
                     _MEASURE,
                 ),
                 _q(
                     "4.2",
                     "Measurement differed between groups?",
-                    "Could measurement or ascertainment of the outcome have differed between"
-                    " intervention groups?",
+                    "Could the outcome have been measured or detected differently in the two"
+                    " groups?",
                     _MEASURE,
                 ),
                 _q(
                     "4.3",
                     "Assessors aware?",
-                    "Were outcome assessors aware of the intervention received by study"
-                    " participants?",
+                    "Did the people assessing the outcome know which intervention each participant"
+                    " received?",
                     _ASSESSORS,
                     _if("4.1", "4.2", answers=(*N, NI), mode="all"),
                 ),
                 _q(
                     "4.4",
                     "Assessment could have been influenced?",
-                    "Could assessment of the outcome have been influenced by knowledge of"
-                    " intervention received?",
+                    "Could knowing the intervention have swayed how the outcome was assessed?",
                     _ASSESSORS,
                     _if("4.3", answers=(*Y, NI)),
                 ),
                 _q(
                     "4.5",
                     "Assessment likely influenced?",
-                    "Is it likely that assessment of the outcome was influenced by knowledge of"
-                    " intervention received?",
+                    "Is it likely that knowing the intervention did sway how the outcome was"
+                    " assessed?",
                     _ASSESSORS,
                     _if("4.4", answers=(*Y, NI)),
                 ),
@@ -287,22 +285,22 @@ ROB2 = InstrumentDefinition(
                 _q(
                     "5.1",
                     "Analysed as pre-specified?",
-                    "Were the data that produced this result analysed in accordance with a"
-                    " pre-specified analysis plan that was finalized before unblinded outcome"
-                    " data were available for analysis?",
+                    "Was this result analysed as an analysis plan said, one fixed before anyone"
+                    " saw unblinded outcome data?",
                     _PLAN,
                 ),
                 _q(
                     "5.2",
                     "Selected from several outcome measurements?",
-                    f"{_SELECTED} multiple eligible outcome measurements (e.g. scales,"
-                    " definitions, time points) within the outcome domain?",
+                    "Might this result have been picked, because of how it came out, from several"
+                    " ways of measuring the outcome (scales, definitions, time points)?",
                     _PLAN,
                 ),
                 _q(
                     "5.3",
                     "Selected from several analyses?",
-                    f"{_SELECTED} multiple eligible analyses of the data?",
+                    "Might this result have been picked, because of how it came out, from several"
+                    " analyses of the same data?",
                     _PLAN,
                 ),
             ),

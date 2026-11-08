@@ -402,7 +402,8 @@ intervention. ROBINS-I V2 for non-randomized studies and RoB 2's variant for the
 adhering to intervention are not built yet. Profiles register further instruments, such as an
 agency's own assessment form with a low-or-high rating at study and endpoint level.
 
-Kittum stores the forms as data: domains, signalling questions with their answer options (yes,
+Kittum stores the forms as data: domains, signalling questions (in Kittum's own words: RoB 2's
+published wording is CC BY-NC-ND) with their answer options (yes,
 probably yes, probably no, no, no information) and the condition under which each applies ("if
 yes, probably yes, or no information to 2.1 or 2.2"). A question whose condition fails is not
 applicable; Kittum shows it as NA, and nobody types it. An appraisal is of one result of one

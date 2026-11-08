@@ -138,7 +138,7 @@ An instrument's wording is third-party content, like a library, and carries its 
 
 | Content | Licence | Notes | Verdict |
 | --- | --- | --- | --- |
-| RoB 2 signalling questions and domain titles (guidance and cribsheet of 22.08.2019, RoB 2 Development Group, riskofbias.info) | CC BY-NC-ND 4.0 | `kittum.appraisal.rob2` quotes the 22 questions and 5 domain titles verbatim, with attribution, and marks them as not AGPL. The answer options, conditions, and algorithms are the tool's method, implemented in Kittum's own code; the short labels and mention words are Kittum's. Non-commercial terms are blocked for code above; verbatim redistribution with attribution is within this licence, but use of the wording in a commercial review service is not. | **Decide** before commercial use: ask the RoB 2 Development Group for permission (commercial review tools carry RoB 2 under agreement), or replace `text` in `rob2.py` with Kittum's own wording and keep the question numbers. |
+| RoB 2 signalling questions (guidance and cribsheet of 22.08.2019, RoB 2 Development Group, riskofbias.info) | CC BY-NC-ND 4.0 | The published wording is not used: non-commercial terms rule it out for commercial review work. `kittum.appraisal.rob2` asks each question in Kittum's own words, under the tool's question numbers. The answer options, conditions, and flow-chart algorithms are the tool's method, implemented in Kittum's own code; domain titles are generic names. Reviewers read the guidance for the official wording. | Kittum's own wording; ask the RoB 2 Development Group if the official wording is ever wanted |
 
 ## Document tools and models in short
 
@@ -167,7 +167,6 @@ The full comparison is on [Document and model tools](document-tools.md).
 - Run the Object Lock conformance test on the chosen store.
 - Spike pdf.js and EmbedPDF on a 300-page CSR.
 - Confirm the PubTator 3 terms and rate limit, which only third parties report.
-- Settle the RoB 2 wording's licence for commercial use (see "Appraisal instruments").
 
 ## Sources
 

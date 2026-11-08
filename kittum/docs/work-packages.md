@@ -830,12 +830,12 @@ Module `kittum.appraisal`. Needs: `documents`, `extraction`.
 
 **Done** (branch `kittum/risk-of-bias`):
 
-- RoB 2 as data (`kittum.appraisal.rob2`): five domains, 22 signalling questions in the
-  published wording, their answer options (3.2 has no "no information"), and the conditions that
+- RoB 2 as data (`kittum.appraisal.rob2`): five domains, 22 signalling questions in
+  Kittum's own words under the tool's numbers, their answer options (3.2 has no "no information"), and the conditions that
   make a question NA. Domain 2 is the variant for the effect of assignment to intervention. The
   domain algorithms are the cribsheet's flow charts; the overall rule is the guidance's Table 1.
   Sources: Sterne et al., BMJ 2019;366:l4898, and the RoB 2 guidance and cribsheet of 22 August
-  2019. The wording is CC BY-NC-ND 4.0; commercial use is an open decision
+  2019. The published wording is CC BY-NC-ND 4.0 and is not used
   ([dependencies](dependencies.md#appraisal-instruments)).
 - Appraisals (`start`, `answer`, `override`, `get`, `appraisals`) per report and result, with
   rows (`appraisal`, `appraisal_answer`, `appraisal_override`, append-only, each with its event's
