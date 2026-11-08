@@ -201,6 +201,8 @@ test("the lead appraises a result of an included trial with RoB 2", async ({ bro
   await test.step("the reports show the table from the ledger", async () => {
     await lead.keyboard.press("g");
     await lead.keyboard.press("r");
+    // The report keys are the lead's: wait until the screen knows who is looking.
+    await expect(lead.getByText("Render the PRISMA flow")).toBeVisible();
     await lead.keyboard.press("b");
     const row = lead.getByTestId("risk-of-bias-table").locator("tbody tr");
     await expect(row).toHaveCount(1);
