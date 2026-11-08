@@ -33,7 +33,9 @@ import type {
   ExampleProtocol,
   ExtractionReview,
   ExtractionRun,
+  DecisionImportPreview,
   ExportView,
+  ImportResult,
   ExtractionSchema,
   FullText,
   FullTextAssignment,
@@ -312,6 +314,26 @@ export interface Workbench {
   readonly workingExport: (
     request: StageRef & { readonly view: ExportView | null },
   ) => Call<Uint8Array>;
+  /** What importing a working export the caller edited in a spreadsheet would decide: the rows
+   * that change, the unchanged ones, and the refused ones with their reasons. Records nothing.
+   * Only a screener's export of a title and abstract stage in a working topic. */
+  readonly previewDecisionImport: (
+    request: Caller & {
+      readonly stageId: string;
+      readonly data: Uint8Array;
+      readonly fileName: string;
+    },
+  ) => Call<DecisionImportPreview>;
+  /** Imports the file as its preview (`previewHash`) showed it: the server stores the file, and
+   * records one batch and one decision per changed row. If anything changed since, it refuses. */
+  readonly importDecisions: (
+    request: Caller & {
+      readonly stageId: string;
+      readonly data: Uint8Array;
+      readonly fileName: string;
+      readonly previewHash: string;
+    },
+  ) => Call<ImportResult>;
 
   /** The reviewer's next full text in the scope, or null when none is waiting. */
   readonly fullText: (

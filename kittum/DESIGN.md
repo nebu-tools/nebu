@@ -110,7 +110,7 @@ ledger records every decision, second opinion, and reveal in both.
 | Queue | Waits until the AI has read a record | Does not wait; the reading appears when it arrives |
 | AI proposals | Only a verified exclusion | Also the model's own `not_met` with a quote, marked unverified |
 | Bulk decisions | Refused | Allowed from the table, one decision per record |
-| Spreadsheet import of decisions | Refused | Allowed (planned, see the work packages) |
+| Spreadsheet import of decisions | Refused | Allowed: a screener's own working export, edited and imported, one decision per changed row |
 
 Two presets in the protocol editor fill in a topic's settings: "Documented SLR" (M1, complete) and
 "Targeted search" (S, working). The methods text, the AI disclosure, and every export label come
@@ -426,7 +426,28 @@ audit bundle." It obeys the table's blinding, so a reviewer exports only their o
 readings their own decisions revealed, while the methods lead exports every decision and outcome.
 Rows carry stable references (the reviewer's assignment ID, or the corpus report ID for the lead)
 and reasons as protocol criterion IDs, which a Criteria sheet spells out. Each export is stored by
-hash and recorded with a `report.working_exported` event.
+hash and recorded with a `report.working_exported` event, and its cover sheet names it by its
+export ID.
+
+In a working topic the export is also a way back. A screener's export of a title and abstract
+stage has editable "Your decision", "Reason", and "Comment" columns, with drop-down lists of the
+stage's outcomes and of the criterion IDs (a criterion's number from the Criteria sheet works
+too), and Kittum keeps what each row showed beside the export. The screener decides rows in
+Excel and imports the file on the table. Kittum reads only those three columns and the Ref, so
+the file can never change bibliographic data, and there is no live sync. The import is a preview
+first: the rows that would be decided, the unchanged ones (blank, as exported, or decided so in
+Kittum already), and the refused ones with a reason: a Ref that is not a row of the export or of
+the stage, another reviewer's record, a Ref twice, an outcome or criterion Kittum does not know,
+a decision the stage does not allow, a record decided differently in Kittum after the export
+(stale), a record decided already (a change goes through an undo in Kittum), and a second
+opinion asked of the screener, which is decided in Kittum beside the first decision. Applying
+records exactly the previewed changes or nothing: one `screening.spreadsheet_imported` event
+with the file's SHA-256 (the file goes to the artifact store), the uploader, the export it came
+from, and the counts, then one decision per row through the bulk decisions' path, with `origin:
+spreadsheet` and the batch, so reveals, second opinions, outcomes, and PRISMA follow the same
+rules. Kittum cannot know who decided a row in the file or when, only who imported it, so these
+decisions have no timing, and the audit trail and the methods text say so. A complete topic
+refuses an import, and its exports have no decision columns.
 
 The AI-use disclosure is data first. The PRISMA executive does not endorse PRISMA-trAIce, and RAISE
 is still changing, so Kittum renders the same disclosure record into whichever template a client
@@ -721,7 +742,8 @@ is for the PDF.
 The first two rules and the last apply to topics with complete documentation. A topic with working
 documentation (mode S) may show the AI's reading before the decision (reveal `before`), and
 allows bulk decisions from the table; each decision records whether the reading was on screen
-and where it came from (`origin`: `keyboard` or `bulk`). Blinding by the
+and where it came from (`origin`: `keyboard`, `bulk`, or `spreadsheet` for a row of an imported
+working export). Blinding by the
 backend, invisible audits where there are any, and no scores apply everywhere.
 
 - **The human goes first.** A reviewer commits a provisional decision before seeing any AI output.
@@ -742,7 +764,8 @@ backend, invisible audits where there are any, and no scores apply everywhere.
   bulk decision in a working topic, accepting the AI's proposals included, is a human decision
   per record: one `screening.decided` event per record with `origin: bulk`, the batch, and the
   table's filter in words, and one `screening.bulk_decided` event for the batch. There is no
-  time-on-screen gate.
+  time-on-screen gate. A decision imported from a spreadsheet is recorded the same way, with
+  `origin: spreadsheet` and one `screening.spreadsheet_imported` event for the file.
 
 Protocol-derived highlights are allowed before the decision, because they come from the protocol
 and not from the AI. They mark protocol terms in the abstract, and drug and disease entities from
@@ -758,7 +781,7 @@ the terms of their own templates.
 | Protocol editor | PICO blocks per scope, the criteria table, version diff, protocol hash, and a test bench that runs the judge with the draft's instructions on the topic's known includes and up to 50 records people have settled, and lists the flips against the current readings and the human decisions, known includes first. Each topic's screening instructions (strictness and guidance) are edited inside the full prompt, whose fixed parts are greyed out. A form edits every question, criterion, source, and query in place, with YAML as an advanced view of the same protocol. Every save, model draft, suggestion, accepted selection, and restore is a revision with its author, a person or a model; a field a model wrote carries an AI mark naming the model. Each part has **Suggest changes**, each PubMed or ClinicalTrials.gov query **Count hits**, a suggestion shows marked-up changes with their reasons and the hits of each version | `n` new criterion, `Ctrl+Enter` save the form; the test bench runs from its button. `,` and `.` step through revisions without changing them, `1` to `9` toggle a suggested change, `a` accept, `r` restore the revision on screen as the newest. **Publish** freezes and signs a version. |
 | Search review | One tab per database with the line-numbered strategy, limits, date, and hit count; the translation diff against the PubMed master; the PRESS checklist; which reference-set records the strategy finds and misses; per topic, the known pool: how many of its papers the searches found, the list they missed, and how many records are new | `a` approve, `r` request changes |
 | Title and abstract queue | One record at a time: the title, the journal, year, publication type, registry ID, and PMID on one muted line, the abstract with structured labels and Methods first, and a strip of the criteria by short label ("1 Adults · 2 NSCLC · 3 RCT"), with each criterion's full wording on demand. In mode S, a second opinion shows the first decision and its comment, and a stage that reveals `before` shows the AI's reading; `p` shows the prompt the AI reads the record with | `i` include, `e` then `1` to `9` exclude on a criterion (the strip opens to the full wording), `u` unclear, `Backspace` undo, `Space` next, `c` every criterion in full. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. The next five records prefetch. Target median 15 to 25 seconds. |
-| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. Where the AI's reading is visible (always for the lead, before the decision in a stage that reveals `before`), an "AI proposes" column says include or exclude on a criterion, unverified where the filter could not check the quote, and a warning says how many known includes the AI proposes to exclude. In a working topic a screener marks rows and decides them in bulk. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading, can show any record's prompt, and re-judges the stage with a newer published version. When the topic has a known pool, an "In the known pool" column marks its records for the lead, and for reviewers in a working topic; the AI's warning counts its records as known includes. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. Working topics: Shift or Ctrl click and `Shift+↑`/`↓` mark rows, `a` marks every row in view, then `Shift+I` includes them, `Shift+E` then `1` to `9` excludes them, `Shift+A` accepts the AI's proposals; `p` shows the prompt. **Export view** and **Export stage** write the working spreadsheet. |
+| Screening table | A stage as a spreadsheet: 24px rows, hairline rules, a sticky header, a pane with the selected record's abstract. Each column header has a ▾ menu (sort, "text contains", a checklist of its values with a search), and the table has multi-column sort (shift-click), a column chooser, resizable columns, a quick search over title, authors, journal, and abstract that forgives typos, and views saved per reviewer and stage. A reviewer sees only their own records and an AI reading only where their own decision revealed it, as the queue does; the server enforces both. In mode S it lists what the S queue lists: records the judge has not read yet, the AI's reading where the stage reveals `before`, and a second opinion with the decision it is asked on. Where the AI's reading is visible (always for the lead, before the decision in a stage that reveals `before`), an "AI proposes" column says include or exclude on a criterion, unverified where the filter could not check the quote, and a warning says how many known includes the AI proposes to exclude. In a working topic a screener marks rows and decides them in bulk. The methods lead sees the whole stage with every decision, the outcome, and the AI's reading, can show any record's prompt, and re-judges the stage with a newer published version. When the topic has a known pool, an "In the known pool" column marks its records for the lead, and for reviewers in a working topic; the AI's warning counts its records as known includes. Sorting and filtering never change the queue's order. | `↑` and `↓` select, `/` search, `Enter` opens the record in the queue, `i`, `e` then `1` to `9`, and `u` decide the selected record with the queue's rules, `Space` keeps a decision after a reveal, `Backspace` takes a decision back. Mode S: `f`, a comment, `Enter`, then the decision asks for a second opinion. Working topics: Shift or Ctrl click and `Shift+↑`/`↓` mark rows, `a` marks every row in view, then `Shift+I` includes them, `Shift+E` then `1` to `9` excludes them, `Shift+A` accepts the AI's proposals; `p` shows the prompt. **Export view** and **Export stage** write the working spreadsheet; in a working topic **Import decisions** brings a screener's edited export back, with a preview before **Apply**. |
 | Studies | Proposed record-to-study clusters with the linking evidence (shared NCT number, DOI family, title similarity) | `Enter` confirm, `s` split, `m` merge |
 | Full-text screening | The PDF on the left, criteria on the right, one active criterion. Mentions of the active criterion in document order, without verdict colours. After the decision, the AI's reading of one criterion with its rationale and its verified quote marked on the page. Mode S as at title and abstract | `,` and `.` step through mentions, `Enter` adopt a mention as evidence, `y` met, `n` not met, `?` unclear (optional). `i` include, `e` then `1` to `9` exclude on a criterion, `x` then `1` to `9` insufficient information, `w` wrong document, `q` show the AI's quote. Mode S: `f` asks for a second opinion. |
 | Extraction | Fields grouped by endpoint, arm, and timepoint, with value, unit, status, origin path, agreement, and validator results; the source region on the PDF | `Tab` next field, `Enter` accept after viewing the source, `e` edit (needs a span), `1` or `2` pick a path when they disagree |

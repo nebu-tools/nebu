@@ -20,7 +20,7 @@ The two-week spike in [DESIGN.md](../DESIGN.md#two-week-spike) picks from these 
 | 06 | `enrich` | Clients, stored enrichment, full-text waterfall, and jobs in the app done; local tagging open |
 | 07 | `corpus` | Dedupe, link proposals, immutable identity revisions, PRISMA counts, known pool done |
 | 08 | `judge` and `models` | Done, with editable screening instructions (strictness and guidance); ledger store and job wiring wait for WP-01 and WP-02 |
-| 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, re-judging in place, the test bench, AI proposals, bulk decisions in working topics, metrics, routes; open items listed |
+| 09 | `screening` | Done: M1 to M3 and S (targeted searches), blinding, reveal (with `before` in working topics), sentinels, audits, adjudication, second opinions, judge jobs, re-judging in place, the test bench, AI proposals, bulk decisions and spreadsheet imports in working topics, metrics, routes; open items listed |
 | 10 | `documents` | Parsers, layers, anchors, re-anchoring, viewer routes, and acquisition done; source resolvers for the waterfall open |
 | 11 | `extraction` | Done: schema, both paths, validators, reconciliation, runs as jobs, acceptance, bundle exporter, routes, workbench screen; open items listed |
 | 12 | `appraisal` | Types done; open |
@@ -654,7 +654,20 @@ Module `kittum.screening`. Needs: `protocol`, `corpus`, `judge`, `ledger`, `runs
     decision per record under `decide`'s rules with `origin: bulk`, the batch, the filter, and the
     accepted proposal. The batch is all or nothing; a complete topic, a full-text stage, a stale
     etag, a decided record, or a second opinion refuses it. `screening_decision.origin` is a text
-    check (`keyboard`, `bulk`) for a later `spreadsheet`.
+    check (`keyboard`, `bulk`, `spreadsheet`).
+  - Decisions from a spreadsheet (targeted searches, PR F; migration
+    `20261108000000_screening_spreadsheet_decisions.sql`): `preview_import` sorts the rows of a
+    screener's edited working export (`SheetRow`, read by `kittum.report`, with what each row
+    showed at export) into changes, unchanged rows, and refusals (`ImportRefusal`: unknown Ref,
+    another reviewer's record, a Ref twice, unreadable, no decision, not allowed by the stage,
+    stale, decided already, a second opinion asked of the screener, withdrawn).
+    `import_decisions` records the previewed changes or nothing (`preview_hash`): one
+    `screening.spreadsheet_imported` event and `screening_batch` row (action `spreadsheet`, the
+    file's hash, the export, the counts), then one decision per row through the bulk path
+    (`_batch_decision`) with `origin: spreadsheet`, the comment, and no timing; the timing
+    columns are nullable for these rows only. Working topics and title and abstract only.
+    `tests/screening/test_spreadsheet.py` covers the preview's refusals, the import, a retry, a
+    stale preview, a reveal, the audit trail, the disclosure, a complete topic, and the routes.
   - `record_prompt`: the prompt the AI reads a record with, for the lead and for a working topic's
     screener.
   `tests/screening/test_instructions.py` covers the prompt, a re-judge in S and in M1, the bench
@@ -696,6 +709,9 @@ Left open:
 - `screening_reviewer_table` repeats the row rules of `screening_reviewer_queue` (S records the
   judge has not read, active second opinions first, the `before` reading). A change to one must
   go to the other; `test_an_s_stage_table_lists_what_its_queue_lists` compares them.
+- A spreadsheet import neither asks for a second opinion nor settles one, changes no decision
+  taken in Kittum (that needs an undo there), and takes no full-text decisions, which need
+  evidence. Exports made before the import existed cannot bring decisions back.
 - The judge's filter confirms few exclusions on the example protocols (wordings with "without", or
   intervention keywords without a negation, fail the polarity check), so the verified reading
   mostly includes.
@@ -931,6 +947,19 @@ decides. Migration `20261029020000_report_artifacts.sql`.
   `working_export` with a `report.working_exported` event, so the lead can download any export
   again and the audit trail names it. Tests: `tests/screening/test_table.py` (the reviewer's and
   the lead's exports, a view, refusals, the event) and `tests/report/test_working_export.py`.
+- Decisions back from the working export (targeted searches, PR F): a screener's export of a
+  title and abstract stage in a working topic has editable "Your decision", "Reason", and
+  "Comment" columns (pale yellow, with drop-down lists of the outcomes and the criterion IDs),
+  an "Export ID" on its cover sheet, and what each row showed kept beside it by hash
+  (`decisions_hash` in the event). `preview_decision_import` and `apply_decision_import`
+  (`POST .../reports/working-export/import-preview` and `.../import`, the file in base64) read an
+  edited copy with openpyxl, find its export and stage, resolve a reason given as a criterion ID
+  or its number, and hand the rows to `Screening.preview_import` and `import_decisions`; applying
+  stores the file by hash first. A lead's export, an export of another stage, an older export
+  without the kept rows, and a file that is no workbook are refused (400); a complete topic is
+  refused by the screening service (422). The audit trail names the import and its file, and
+  says who imported a decision but not who decided it; the AI disclosure counts the decisions,
+  the files, and the uploaders.
 - Tests (`tests/report/`, `tests/profiles/test_gba_amnog_reports.py`) build the nicotine
   replacement review and the capivasertib dossier through search, corpus, judge, and screening
   against Postgres, and check the PRISMA sums by hand and from data, earlier cutoffs, the RIS
@@ -1280,11 +1309,17 @@ Done (branch `kittum/wp-16-workbench-design`, then `kittum/wp-15-integration`):
   accepts the AI's proposals; the filter in words goes to the ledger. `p` shows the prompt of a
   record (`Prompt.tsx`) in the table pane and, in working topics, on the title and abstract
   screen. `apps/web/e2e/instructions.spec.ts` drives it all on the real stack.
+- Decisions from a spreadsheet (branch `kittum/spreadsheet-decisions`): in a working topic a
+  screener's table has **Import decisions** (`table/ImportDecisions.tsx`): pick the edited
+  export, see the counts and every changed or refused row with its reason, then **Apply**, which
+  imports exactly what the preview showed (a change in Kittum since asks for a new preview).
+  `import-decisions.test.tsx` drives the panel; `apps/web/e2e/spreadsheet.spec.ts` exports,
+  edits the file with openpyxl, previews, applies, and reads the disclosure on the real stack.
 - Browser unit tests in Vitest browser mode on the mock, and screenshots in `apps/web/screenshots/`.
 
 Left:
 
-- The table: the decision import (PR D), deciding at full text from the table, and saving views
+- The table: deciding at full text from the table, and saving views
   on the server (they live in the browser's storage now). Rows load whole; at Embase scale the
   abstracts are most of the payload.
 - The bench has no key of its own, and its result is not kept in the browser after a reload (the
@@ -1315,8 +1350,8 @@ search topic, without a second product. DESIGN.md, "Documentation levels", has t
 | B | `kittum/screening-table` | The dense screening table, less on the title and abstract screen, the XLSX working export | Done |
 | C | `kittum/screening-instructions` | Judge strictness and guidance in the protocol, the rendered prompt per record, re-judging in place, the test bench, AI proposals in working topics, bulk decisions from the table | Done |
 | D | `kittum/imports-and-pool` | "Complete the pool" (the customer's known papers as a topic's known pool, the "Known pool" panel on the search screen, "In the known pool" in the table), NBIB, Scopus CSV, Web of Science, and a team's CSV or XLSX list as imports | Done |
-| E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open |
-| F | | The spreadsheet decision import (decision columns of a working export, working topics only) | Open |
+| E | `kittum/risk-of-bias` | RoB 2 as instrument data, its algorithm, quote assembly, and a screen beside the PDF | Open (#78, in review) |
+| F | `kittum/spreadsheet-decisions` | Decisions from a spreadsheet: editable decision columns and an export ID in a screener's working export, the import's preview and apply on the table, one batch event and one decision per changed row with `origin: spreadsheet`, working topics only | Done |
 
 ## WP-17 Evaluation harness
 

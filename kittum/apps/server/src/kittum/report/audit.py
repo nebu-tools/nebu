@@ -506,8 +506,13 @@ def _describe(
         timing = p.get("timing") or {}
         before = bool(p.get("ai_shown_before"))
         consult = role == "second_opinion"
+        sheet = p.get("origin") == "spreadsheet"
         if before:
-            summary = f"{who} {_outcome(p)} with the AI's reading on screen"
+            summary = (
+                f"{who} {_outcome(p)} with the AI's reading in the file"
+                if sheet
+                else f"{who} {_outcome(p)} with the AI's reading on screen"
+            )
         elif phase == "provisional" and not consult:
             summary = f"{who} {_outcome(p)}, blind"
         else:
@@ -519,6 +524,17 @@ def _describe(
         if p.get("second_opinion"):
             summary += " and asked for a second opinion"
         accepted = p.get("ai_proposal")
+        if sheet:
+            summary += ", imported from a spreadsheet"
+            facts += [
+                ("Batch", p.get("batch_id")),
+                ("Row in the file", p.get("sheet_row")),
+                ("Working export", p.get("export_id")),
+                (
+                    "Who decided",
+                    f"Unknown: {who} imported the file. Kittum cannot know who filled in the row.",
+                ),
+            ]
         if p.get("origin") == "bulk":
             summary += (
                 ", in bulk from the table, taking over the AI's proposal"
@@ -553,7 +569,11 @@ def _describe(
             ("Criterion", names.criterion(p.get("reason_criterion_id"))),
             (
                 "Decision",
-                "With the AI's reading on screen"
+                "In a spreadsheet outside Kittum, with the AI's reading in the file"
+                if before and sheet
+                else "In a spreadsheet outside Kittum"
+                if sheet
+                else "With the AI's reading on screen"
                 if before
                 else "After the first decision, before any AI output"
                 if consult and phase == "provisional"
@@ -575,11 +595,15 @@ def _describe(
                         STATUS_WORDS.get(status, status),
                     )
                 )
-        facts += [
-            ("Record shown at", timing.get("shown_at")),
-            ("Decided at", timing.get("decided_at")),
-            ("Time to decide", _seconds(timing.get("shown_at"), timing.get("decided_at"))),
-        ]
+        facts += (
+            [("Timing", "None: Kittum cannot know when a row of a spreadsheet was decided")]
+            if sheet
+            else [
+                ("Record shown at", timing.get("shown_at")),
+                ("Decided at", timing.get("decided_at")),
+                ("Time to decide", _seconds(timing.get("shown_at"), timing.get("decided_at"))),
+            ]
+        )
         reveal = p.get("reveal")
         if reveal:
             status = STATUS_WORDS.get(reveal.get("status"), reveal.get("status"))
@@ -613,6 +637,21 @@ def _describe(
         }.get(str(p.get("action")), str(p.get("action")))
         summary = f"{who} {what} {n} {'record' if n == 1 else 'records'} at once from the table"
         facts += [("Filter when selected", p.get("filter") or "None"), ("Batch", p.get("batch_id"))]
+    elif t == "screening.spreadsheet_imported":
+        kind = "decision"
+        n = p.get("decisions")
+        summary = (
+            f"{who} imported a working export edited in a spreadsheet: {n} "
+            f"{'decision' if n == 1 else 'decisions'}, one per changed row"
+        )
+        facts += [
+            ("File name", p.get("file_name")),
+            ("Working export", p.get("export_id")),
+            ("Rows unchanged", p.get("unchanged")),
+            ("Rows refused", p.get("refused")),
+            ("Batch", p.get("batch_id")),
+        ]
+        artifacts.append(names.artifact(p.get("file_sha256"), "Imported spreadsheet"))
     elif t == "screening.rejudged":
         kind = "ai"
         summary = (

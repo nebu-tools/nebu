@@ -488,6 +488,28 @@ export const makeApiWorkbench = (): Workbench => ({
       }),
     ),
 
+  previewDecisionImport: ({ projectId, as, stageId, data, fileName }) =>
+    call((api) =>
+      api.previewDecisionImport(projectId, {
+        params: reviewer(as),
+        payload: { stage_id: stageId, data: upload(data).data, file_name: fileName },
+      }),
+    ),
+
+  importDecisions: ({ projectId, as, stageId, data, fileName, previewHash }) =>
+    call((api) =>
+      api.importDecisions(projectId, {
+        params: reviewer(as),
+        payload: {
+          stage_id: stageId,
+          data: upload(data).data,
+          file_name: fileName,
+          command_id: commandId(),
+          preview_hash: previewHash,
+        },
+      }),
+    ),
+
   status: ({ projectId, as, scopeId, stage }) =>
     call((api) =>
       api.getScreeningStatus(projectId, {
