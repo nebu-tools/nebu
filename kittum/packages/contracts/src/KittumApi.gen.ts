@@ -25,6 +25,8 @@ export type PageTriage = { readonly "kind": "text" | "ocr" | "broken_encoding", 
 export const PageTriage = Schema.Struct({ "kind": Schema.Literals(["text", "ocr", "broken_encoding"]).annotate({ "title": "Kind" }), "page": Schema.Number.annotate({ "title": "Page" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "reasons": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Reasons", "default": [] })) }).annotate({ "title": "PageTriage", "description": "Whether a page's text layer can be trusted (pdf-inspector plus a PyMuPDF check).", "identifier": "PageTriage" })
 export type Health = { readonly "status": string, readonly "version": string }
 export const Health = Schema.Struct({ "status": Schema.String.annotate({ "title": "Status" }), "version": Schema.String.annotate({ "title": "Version" }) }).annotate({ "title": "Health", "identifier": "Health" })
+export type PromptTemplate = { readonly "guidance_frame": string, readonly "instructions_version": string, readonly "prompt_version": string, readonly "stage_rules": { readonly [x: string]: { readonly [x: string]: string } }, readonly "system_after": string, readonly "system_before": string, readonly "user_template": string }
+export const PromptTemplate = Schema.Struct({ "guidance_frame": Schema.String.annotate({ "title": "Guidance Frame" }), "instructions_version": Schema.String.annotate({ "title": "Instructions Version" }), "prompt_version": Schema.String.annotate({ "title": "Prompt Version" }), "stage_rules": Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)).annotate({ "title": "Stage Rules" }), "system_after": Schema.String.annotate({ "title": "System After" }), "system_before": Schema.String.annotate({ "title": "System Before" }), "user_template": Schema.String.annotate({ "title": "User Template" }) }).annotate({ "title": "PromptTemplate", "description": "The judge's prompt as the protocol editor shows it: the fixed parts around the parts a\ntopic's instructions fill in.", "identifier": "PromptTemplate" })
 export type AnchorRequest = { readonly "occurrence"?: number | null, readonly "quote": string, readonly "start"?: number | null }
 export const AnchorRequest = Schema.Struct({ "occurrence": Schema.optionalKey(Schema.Union([Schema.Int.check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "title": "Occurrence" })), "quote": Schema.String.annotate({ "title": "Quote" }), "start": Schema.optionalKey(Schema.Union([Schema.Int.check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })), Schema.Null]).annotate({ "title": "Start" })) }).annotate({ "title": "AnchorRequest", "identifier": "AnchorRequest" })
 export type WordBox = { readonly "end": number, readonly "start": number, readonly "text": string, readonly "x0": number, readonly "x1": number, readonly "y0": number, readonly "y1": number }
@@ -93,6 +95,10 @@ export type PicoSlot = "population" | "intervention" | "comparator" | "outcome" 
 export const PicoSlot = Schema.Literals(["population", "intervention", "comparator", "outcome", "study_type", "other"]).annotate({ "identifier": "PicoSlot" })
 export type FreshnessPolicy = { readonly "deadline"?: string | null, readonly "max_age_months": number }
 export const FreshnessPolicy = Schema.Struct({ "deadline": Schema.optionalKey(Schema.Union([Schema.String.annotate({ "format": "date" }), Schema.Null]).annotate({ "title": "Deadline" })), "max_age_months": Schema.Number.annotate({ "title": "Max Age Months" }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(1).annotate({ "expected": "a value greater than or equal to 1" })) }).annotate({ "title": "FreshnessPolicy", "identifier": "FreshnessPolicy" })
+export type Guidance = string
+export const Guidance = Schema.String.check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })).check(Schema.isMaxCodePoints(4000).annotate({ "expected": "a string with at most 4000 code points", "identifier": "Guidance" }))
+export type JudgeStrictness = "conservative" | "decisive"
+export const JudgeStrictness = Schema.Literals(["conservative", "decisive"]).annotate({ "identifier": "JudgeStrictness" })
 export type IdentifierKind = "doi" | "pmid" | "nct" | "isrctn" | "eudract" | "euct"
 export const IdentifierKind = Schema.Literals(["doi", "pmid", "nct", "isrctn", "eudract", "euct"]).annotate({ "identifier": "IdentifierKind" })
 export type ScopeKind = "question" | "search_topic"
@@ -131,6 +137,10 @@ export type Relation = "same_record" | "same_report" | "same_study"
 export const Relation = Schema.Literals(["same_record", "same_report", "same_study"]).annotate({ "identifier": "Relation" })
 export type Kittum__corpus__models__ProposalStatus = "pending" | "confirmed" | "rejected"
 export const Kittum__corpus__models__ProposalStatus = Schema.Literals(["pending", "confirmed", "rejected"]).annotate({ "identifier": "kittum__corpus__models__ProposalStatus" })
+export type PoolBasis = "reports" | "records"
+export const PoolBasis = Schema.Literals(["reports", "records"]).annotate({ "identifier": "PoolBasis" })
+export type UploadEncoding = "text" | "base64"
+export const UploadEncoding = Schema.Literals(["text", "base64"]).annotate({ "identifier": "UploadEncoding" })
 export type ProposalStatus_Input = "pending" | "confirmed" | "rejected"
 export const ProposalStatus_Input = Schema.Literals(["pending", "confirmed", "rejected"]).annotate({ "identifier": "ProposalStatus-Input" })
 export type LinkedBy = "confirmed" | "merged_by_hand"
@@ -209,6 +219,10 @@ export type Target = string
 export const Target = Schema.String.annotate({ "identifier": "Target" })
 export type ExportView = { readonly "columns": ReadonlyArray<string>, readonly "description"?: string | null, readonly "refs": ReadonlyArray<string> }
 export const ExportView = Schema.Struct({ "columns": Schema.Array(Schema.String).annotate({ "title": "Columns" }), "description": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Description" })), "refs": Schema.Array(Schema.String).annotate({ "title": "Refs" }) }).annotate({ "title": "ExportView", "description": "The reviewer's table view: the rows and columns on screen, in their order.", "identifier": "ExportView" })
+export type Kittum__screening__types__Outcome = "include" | "exclude" | "unclear" | "insufficient_information"
+export const Kittum__screening__types__Outcome = Schema.Literals(["include", "exclude", "unclear", "insufficient_information"]).annotate({ "identifier": "kittum__screening__types__Outcome" })
+export type ImportRefusal = "unknown_ref" | "not_yours" | "duplicate" | "unreadable" | "no_decision" | "invalid" | "stale" | "decided" | "second_opinion" | "withdrawn"
+export const ImportRefusal = Schema.Literals(["unknown_ref", "not_yours", "duplicate", "unreadable", "no_decision", "invalid", "stale", "decided", "second_opinion", "withdrawn"]).annotate({ "identifier": "ImportRefusal" })
 export type AttemptView = { readonly "check"?: string | null, readonly "error"?: string | null, readonly "found"?: number | null, readonly "host": string, readonly "kind"?: "fetch" | "lookup", readonly "licence": string | null, readonly "message"?: string | null, readonly "outcome": string, readonly "source": string, readonly "status": number | null, readonly "url": string }
 export const AttemptView = Schema.Struct({ "check": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Check" })), "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Error" })), "found": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Found" })), "host": Schema.String.annotate({ "title": "Host" }), "kind": Schema.optionalKey(Schema.Literals(["fetch", "lookup"]).annotate({ "title": "Kind", "default": "fetch" })), "licence": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Licence" }), "message": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Message" })), "outcome": Schema.String.annotate({ "title": "Outcome" }), "source": Schema.String.annotate({ "title": "Source" }), "status": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Status" }), "url": Schema.String.annotate({ "title": "Url" }) }).annotate({ "title": "AttemptView", "description": "One step of the waterfall for one report: a lookup that asked a source about the report,\nor a fetch of one file location.", "identifier": "AttemptView" })
 export type ReportOutcome = "acquired" | "not_acquired" | "no_location" | "had_full_text"
@@ -221,8 +235,6 @@ export type FailedSource = { readonly "message"?: string | null, readonly "reaso
 export const FailedSource = Schema.Struct({ "message": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Message" })), "reason": Schema.String.annotate({ "title": "Reason" }), "records": Schema.Number.annotate({ "title": "Records" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "reports": Schema.Number.annotate({ "title": "Reports" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "source": Schema.String.annotate({ "title": "Source" }), "status": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Status" })) }).annotate({ "title": "FailedSource", "description": "A source that failed where asking again can help, with the last failure it gave.", "identifier": "FailedSource" })
 export type CriterionStatus = "met" | "not_met" | "unclear"
 export const CriterionStatus = Schema.Literals(["met", "not_met", "unclear"]).annotate({ "identifier": "CriterionStatus" })
-export type Kittum__screening__types__Outcome = "include" | "exclude" | "unclear" | "insufficient_information"
-export const Kittum__screening__types__Outcome = Schema.Literals(["include", "exclude", "unclear", "insufficient_information"]).annotate({ "identifier": "kittum__screening__types__Outcome" })
 export type Highlight = readonly [number, number, string]
 export const Highlight = Schema.Tuple([Schema.Int, Schema.Int, Schema.String]).annotate({ "identifier": "Highlight" })
 export type Outcome_Input = "include" | "exclude" | "unclear" | "insufficient_information"
@@ -239,10 +251,18 @@ export type UndoResult = { readonly "etag": string, readonly "recorded_at": stri
 export const UndoResult = Schema.Struct({ "etag": Schema.String.annotate({ "title": "Etag" }), "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }) }).annotate({ "title": "UndoResult", "identifier": "UndoResult" })
 export type WrongDocument = { readonly "recorded_at": string }
 export const WrongDocument = Schema.Struct({ "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }) }).annotate({ "title": "WrongDocument", "identifier": "WrongDocument" })
+export type AiProposal = { readonly "outcome": "include" | "exclude", readonly "quote"?: string | null, readonly "rationale"?: string | null, readonly "reason_criterion_id"?: string | null, readonly "verified"?: boolean }
+export const AiProposal = Schema.Struct({ "outcome": Schema.Literals(["include", "exclude"]).annotate({ "title": "Outcome" }), "quote": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Quote" })), "rationale": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Rationale" })), "reason_criterion_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Reason Criterion Id" })), "verified": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Verified", "default": true })) }).annotate({ "title": "AiProposal", "description": "What the AI proposes for a record: include, or exclude on one criterion.\n\nIn a topic with complete documentation only a verified exclusion is a proposal to exclude\n(`Verdict.excludes`). In a working topic the model's own `not_met` with a quote is one too,\neven if the quote filter could not verify it; it is then marked `verified = False`, never\nquietly turned into an inclusion. A record whose text tried to instruct the model, or whose\nanswer was invalid, has no proposal.", "identifier": "AiProposal" })
 export type SentinelFile = { readonly "text": string }
 export const SentinelFile = Schema.Struct({ "text": Schema.String.annotate({ "title": "Text" }) }).annotate({ "title": "SentinelFile", "identifier": "SentinelFile" })
 export type RecordFacts = { readonly "authors"?: ReadonlyArray<string>, readonly "doi"?: string | null, readonly "journal"?: string | null, readonly "pmid"?: string | null, readonly "publication_types"?: ReadonlyArray<string>, readonly "registry_ids"?: ReadonlyArray<string>, readonly "year"?: number | null }
 export const RecordFacts = Schema.Struct({ "authors": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Authors", "default": [] })), "doi": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Doi" })), "journal": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Journal" })), "pmid": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Pmid" })), "publication_types": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Publication Types", "default": [] })), "registry_ids": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Registry Ids", "default": [] })), "year": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Year" })) }).annotate({ "title": "RecordFacts", "description": "Bibliographic facts shown above the abstract.", "identifier": "RecordFacts" })
+export type BulkAction = "include" | "exclude" | "accept_ai"
+export const BulkAction = Schema.Literals(["include", "exclude", "accept_ai"]).annotate({ "identifier": "BulkAction" })
+export type RecordPrompt = { readonly "guidance": string | null, readonly "instructions_hash": string, readonly "json_schema": { readonly [x: string]: Schema.Json }, readonly "protocol_hash": string, readonly "strictness": string, readonly "system": string, readonly "user": string }
+export const RecordPrompt = Schema.Struct({ "guidance": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Guidance" }), "instructions_hash": Schema.String.annotate({ "title": "Instructions Hash" }), "json_schema": Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" })).annotate({ "title": "Json Schema" }), "protocol_hash": Schema.String.annotate({ "title": "Protocol Hash" }), "strictness": Schema.String.annotate({ "title": "Strictness" }), "system": Schema.String.annotate({ "title": "System" }), "user": Schema.String.annotate({ "title": "User" }) }).annotate({ "title": "RecordPrompt", "description": "The prompt the AI judge reads one record with under the stage's protocol version: the\ninstructions the topic sets, and the messages and schema exactly as `kittum.judge` renders\nthem. The Audit screen shows the requests that were sent.", "identifier": "RecordPrompt" })
+export type KnownIncludes = { readonly "known": number, readonly "proposed_exclude": number, readonly "read": number }
+export const KnownIncludes = Schema.Struct({ "known": Schema.Number.annotate({ "title": "Known" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "proposed_exclude": Schema.Number.annotate({ "title": "Proposed Exclude" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "read": Schema.Number.annotate({ "title": "Read" }).check(Schema.isInt().annotate({ "expected": "an integer" })) }).annotate({ "title": "KnownIncludes", "description": "How many of the topic's known includes (its reference set) the rows hold, and how many\nof them the AI proposes to exclude. A warning, never a block.", "identifier": "KnownIncludes" })
 export type AssignmentState = "pending" | "awaiting_final" | "decided"
 export const AssignmentState = Schema.Literals(["pending", "awaiting_final", "decided"]).annotate({ "identifier": "AssignmentState" })
 export type ItemFlag = "sentinel" | "audit" | "rescreen"
@@ -281,6 +301,10 @@ export type IngestRequest = { readonly "actor_id": Id }
 export const IngestRequest = Schema.Struct({ "actor_id": Id }).annotate({ "title": "IngestRequest", "identifier": "IngestRequest" })
 export type Occurrence = { readonly "id": Id, readonly "provider_record_id": string, readonly "search_id": Id, readonly "source"?: string }
 export const Occurrence = Schema.Struct({ "id": Id, "provider_record_id": Schema.String.annotate({ "title": "Provider Record Id" }), "search_id": Id, "source": Schema.optionalKey(Schema.String.annotate({ "title": "Source", "default": "" })) }).annotate({ "title": "Occurrence", "identifier": "Occurrence" })
+export type KnownPoolFile = { readonly "entries": number, readonly "file_hash": string, readonly "file_name"?: string | null, readonly "format": string, readonly "id": Id, readonly "imported_at": string, readonly "imported_by": Id, readonly "topic_id": string, readonly "withdrawn_at"?: string | null }
+export const KnownPoolFile = Schema.Struct({ "entries": Schema.Number.annotate({ "title": "Entries" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "file_hash": Schema.String.annotate({ "title": "File Hash" }), "file_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "File Name" })), "format": Schema.String.annotate({ "title": "Format" }), "id": Id, "imported_at": Schema.String.annotate({ "title": "Imported At", "format": "date-time" }), "imported_by": Id, "topic_id": Schema.String.annotate({ "title": "Topic Id" }), "withdrawn_at": Schema.optionalKey(Schema.Union([Schema.String.annotate({ "format": "date-time" }), Schema.Null]).annotate({ "title": "Withdrawn At" })) }).annotate({ "title": "KnownPoolFile", "description": "One imported pool file. A withdrawn file stays listed but no longer counts.", "identifier": "KnownPoolFile" })
+export type KnownPoolWithdrawRequest = { readonly "actor_id": Id }
+export const KnownPoolWithdrawRequest = Schema.Struct({ "actor_id": Id }).annotate({ "title": "KnownPoolWithdrawRequest", "identifier": "KnownPoolWithdrawRequest" })
 export type CorpusSearch = { readonly "id": Id, readonly "kind": "live_api" | "file_import", readonly "platform": string, readonly "retrieved_count": number, readonly "source": string, readonly "started_at": string }
 export const CorpusSearch = Schema.Struct({ "id": Id, "kind": Schema.Literals(["live_api", "file_import"]).annotate({ "title": "Kind" }), "platform": Schema.String.annotate({ "title": "Platform" }), "retrieved_count": Schema.Number.annotate({ "title": "Retrieved Count" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "source": Schema.String.annotate({ "title": "Source" }), "started_at": Schema.String.annotate({ "title": "Started At", "format": "date-time" }) }).annotate({ "title": "CorpusSearch", "description": "A search whose records are in the corpus, as the corpus view names it.", "identifier": "CorpusSearch" })
 export type RecordFlag = { readonly "occurrence_id": Id, readonly "open_access": boolean, readonly "retracted": boolean, readonly "sources": ReadonlyArray<string>, readonly "updates": ReadonlyArray<string> }
@@ -303,6 +327,12 @@ export type SealRequest = { readonly "actor_id": Id, readonly "cutoff_seq"?: num
 export const SealRequest = Schema.Struct({ "actor_id": Id, "cutoff_seq": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Cutoff Seq" })), "withhold_sources": Schema.optionalKey(Schema.Record(Schema.String, Schema.String).annotate({ "title": "Withhold Sources" })) }).annotate({ "title": "SealRequest", "identifier": "SealRequest" })
 export type RenderRequest = { readonly "actor_id": Id, readonly "cutoff_seq"?: number | null, readonly "identity_revision_id"?: Id | null, readonly "scope_id"?: string | null }
 export const RenderRequest = Schema.Struct({ "actor_id": Id, "cutoff_seq": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Cutoff Seq" })), "identity_revision_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "scope_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Scope Id" })) }).annotate({ "title": "RenderRequest", "identifier": "RenderRequest" })
+export type DecisionImportApply = { readonly "command_id": Id, readonly "data": string, readonly "file_name"?: string | null, readonly "preview_hash": string, readonly "stage_id": Id }
+export const DecisionImportApply = Schema.Struct({ "command_id": Id, "data": Schema.String.annotate({ "title": "Data" }).check(Schema.isMaxCodePoints(50000000).annotate({ "expected": "a string with at most 50000000 code points" })), "file_name": Schema.optionalKey(Schema.Union([Schema.String.check(Schema.isMaxCodePoints(255).annotate({ "expected": "a string with at most 255 code points" })), Schema.Null]).annotate({ "title": "File Name" })), "preview_hash": Schema.String.annotate({ "title": "Preview Hash" }), "stage_id": Id }).annotate({ "title": "DecisionImportApply", "identifier": "DecisionImportApply" })
+export type ImportResult = { readonly "awaiting_final": number, readonly "batch_id": Id, readonly "decided": number, readonly "recorded_at": string, readonly "refused": number, readonly "unchanged": number }
+export const ImportResult = Schema.Struct({ "awaiting_final": Schema.Number.annotate({ "title": "Awaiting Final" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "batch_id": Id, "decided": Schema.Number.annotate({ "title": "Decided" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }), "refused": Schema.Number.annotate({ "title": "Refused" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "unchanged": Schema.Number.annotate({ "title": "Unchanged" }).check(Schema.isInt().annotate({ "expected": "an integer" })) }).annotate({ "title": "ImportResult", "identifier": "ImportResult" })
+export type DecisionImportRequest = { readonly "data": string, readonly "file_name"?: string | null, readonly "stage_id": Id }
+export const DecisionImportRequest = Schema.Struct({ "data": Schema.String.annotate({ "title": "Data" }).check(Schema.isMaxCodePoints(50000000).annotate({ "expected": "a string with at most 50000000 code points" })), "file_name": Schema.optionalKey(Schema.Union([Schema.String.check(Schema.isMaxCodePoints(255).annotate({ "expected": "a string with at most 255 code points" })), Schema.Null]).annotate({ "title": "File Name" })), "stage_id": Id }).annotate({ "title": "DecisionImportRequest", "identifier": "DecisionImportRequest" })
 export type RetryPlan = { readonly "enrichment_run_id"?: Id | null, readonly "occurrences": number, readonly "reports": number, readonly "retrieval_run_id"?: Id | null, readonly "sources": ReadonlyArray<string> }
 export const RetryPlan = Schema.Struct({ "enrichment_run_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "occurrences": Schema.Number.annotate({ "title": "Occurrences" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "reports": Schema.Number.annotate({ "title": "Reports" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "retrieval_run_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "sources": Schema.Array(Schema.String).annotate({ "title": "Sources" }) }).annotate({ "title": "RetryPlan", "description": "What `request_retry` queued: the records enriched again, and the reports retrieved again\n(after that enrichment, when there is one).", "identifier": "RetryPlan" })
 export type UploadCandidate = { readonly "doi": string | null, readonly "pmid": string | null, readonly "report_id": Id, readonly "title": string }
@@ -313,6 +343,12 @@ export type UndoRequest = { readonly "command_id": Id, readonly "expected_etag":
 export const UndoRequest = Schema.Struct({ "command_id": Id, "expected_etag": Schema.String.annotate({ "title": "Expected Etag" }) }).annotate({ "title": "UndoRequest", "identifier": "UndoRequest" })
 export type WrongDocumentRequest = { readonly "command_id": Id, readonly "document_id": Id, readonly "expected_etag": string, readonly "note"?: string | null }
 export const WrongDocumentRequest = Schema.Struct({ "command_id": Id, "document_id": Id, "expected_etag": Schema.String.annotate({ "title": "Expected Etag" }), "note": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Note" })) }).annotate({ "title": "WrongDocumentRequest", "identifier": "WrongDocumentRequest" })
+export type BenchRequest = { readonly "actor_id": Id, readonly "command_id": Id, readonly "limit"?: number, readonly "source": { readonly [x: string]: Schema.Json } }
+export const BenchRequest = Schema.Struct({ "actor_id": Id, "command_id": Id, "limit": Schema.optionalKey(Schema.Number.annotate({ "title": "Limit", "default": 50 }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(0).annotate({ "expected": "a value greater than or equal to 0" })).check(Schema.isLessThanOrEqualTo(200).annotate({ "expected": "a value less than or equal to 200" }))), "source": Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" })).annotate({ "title": "Source" }) }).annotate({ "title": "BenchRequest", "identifier": "BenchRequest" })
+export type BulkResult = { readonly "awaiting_final": number, readonly "batch_id": Id, readonly "decided": number, readonly "recorded_at": string }
+export const BulkResult = Schema.Struct({ "awaiting_final": Schema.Number.annotate({ "title": "Awaiting Final" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "batch_id": Id, "decided": Schema.Number.annotate({ "title": "Decided" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }) }).annotate({ "title": "BulkResult", "identifier": "BulkResult" })
+export type RejudgeRequest = { readonly "actor_id": Id, readonly "command_id": Id, readonly "protocol_version_id"?: Id | null }
+export const RejudgeRequest = Schema.Struct({ "actor_id": Id, "command_id": Id, "protocol_version_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])) }).annotate({ "title": "RejudgeRequest", "identifier": "RejudgeRequest" })
 export type Anchor = { readonly "boxes": ReadonlyArray<Box>, readonly "cells"?: ReadonlyArray<CellRef>, readonly "document_id": Id, readonly "end": number, readonly "id": Id, readonly "layer_id": Id, readonly "quote": TextQuote, readonly "start": number, readonly "text_hash": Sha256 }
 export const Anchor = Schema.Struct({ "boxes": Schema.Array(Box).annotate({ "title": "Boxes" }), "cells": Schema.optionalKey(Schema.Array(CellRef).annotate({ "title": "Cells", "default": [] })), "document_id": Id, "end": Schema.Number.annotate({ "title": "End" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "id": Id, "layer_id": Id, "quote": TextQuote, "start": Schema.Number.annotate({ "title": "Start" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "text_hash": Sha256 }).annotate({ "title": "Anchor", "identifier": "Anchor" })
 export type Document = { readonly "artifact_hash": Sha256, readonly "id": Id, readonly "media_type": string, readonly "page_count"?: number | null }
@@ -369,6 +405,8 @@ export type PressReview = { readonly "reviewed_on"?: string | null, readonly "re
 export const PressReview = Schema.Struct({ "reviewed_on": Schema.optionalKey(Schema.Union([Schema.String.annotate({ "format": "date" }), Schema.Null]).annotate({ "title": "Reviewed On" })), "reviewer": Schema.optionalKey(Schema.Union([Text, Schema.Null])), "status": Schema.Literals(["planned", "done"]).annotate({ "title": "Status" }) }).annotate({ "title": "PressReview", "identifier": "PressReview" })
 export type AuditPlan = { readonly "census_of_disagreements"?: boolean, readonly "random_audit_percent"?: Percent, readonly "sentinel_percent"?: Percent }
 export const AuditPlan = Schema.Struct({ "census_of_disagreements": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Census Of Disagreements", "default": true })), "random_audit_percent": Schema.optionalKey(Schema.suspend((): Schema.Codec<Percent> => Percent).annotate({ "default": "0" })), "sentinel_percent": Schema.optionalKey(Schema.suspend((): Schema.Codec<Percent> => Percent).annotate({ "default": "0" })) }).annotate({ "title": "AuditPlan", "identifier": "AuditPlan" })
+export type JudgeInstructions = { readonly "guidance"?: Guidance | null, readonly "strictness"?: JudgeStrictness }
+export const JudgeInstructions = Schema.Struct({ "guidance": Schema.optionalKey(Schema.Union([Guidance, Schema.Null])), "strictness": Schema.optionalKey(Schema.suspend((): Schema.Codec<JudgeStrictness> => JudgeStrictness).annotate({ "default": "conservative" })) }).annotate({ "title": "JudgeInstructions", "description": "The editable part of the AI judge's prompt for one search topic.\n\nEverything else in the prompt is fixed: the status definitions, the quote rules, the text\nthat tells the model the record is data, the record's hashed tag, and the answer schema. A\ntopic that sets neither field leaves them out of the protocol, so its content hash stays as\nit was before topics had instructions.", "identifier": "JudgeInstructions" })
 export type KnownInclude = { readonly "kind": IdentifierKind, readonly "note"?: Text | null, readonly "value": Text }
 export const KnownInclude = Schema.Struct({ "kind": IdentifierKind, "note": Schema.optionalKey(Schema.Union([Text, Schema.Null])), "value": Text }).annotate({ "title": "KnownInclude", "identifier": "KnownInclude" })
 export type Scope = { readonly "id": string, readonly "kind"?: ScopeKind, readonly "label": string }
@@ -389,6 +427,8 @@ export type MergeRequest = { readonly "actor_id": Id, readonly "occurrence_ids":
 export const MergeRequest = Schema.Struct({ "actor_id": Id, "occurrence_ids": Schema.Array(Id).annotate({ "title": "Occurrence Ids" }), "reason": Schema.optionalKey(Schema.String.annotate({ "title": "Reason", "default": "" })), "relation": Relation, "revision_id": Id }).annotate({ "title": "MergeRequest", "identifier": "MergeRequest" })
 export type LinkProposal = { readonly "evidence": ReadonlyArray<string>, readonly "exact"?: boolean, readonly "id"?: Id, readonly "occurrence_ids": ReadonlyArray<Id>, readonly "relation": Relation, readonly "status"?: Kittum__corpus__models__ProposalStatus }
 export const LinkProposal = Schema.Struct({ "evidence": Schema.Array(Schema.String).annotate({ "title": "Evidence" }), "exact": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Exact", "default": false })), "id": Schema.optionalKey(Id), "occurrence_ids": Schema.Array(Id).annotate({ "title": "Occurrence Ids" }), "relation": Relation, "status": Schema.optionalKey(Schema.suspend((): Schema.Codec<Kittum__corpus__models__ProposalStatus> => Kittum__corpus__models__ProposalStatus).annotate({ "default": "pending" })) }).annotate({ "title": "LinkProposal", "identifier": "LinkProposal" })
+export type KnownPoolImportRequest = { readonly "actor_id": Id, readonly "data": string, readonly "encoding"?: UploadEncoding, readonly "file_name"?: string | null, readonly "format": string, readonly "topic_id": string }
+export const KnownPoolImportRequest = Schema.Struct({ "actor_id": Id, "data": Schema.String.annotate({ "title": "Data" }), "encoding": Schema.optionalKey(Schema.suspend((): Schema.Codec<UploadEncoding> => UploadEncoding).annotate({ "default": "text" })), "file_name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "File Name" })), "format": Schema.String.annotate({ "title": "Format" }), "topic_id": Schema.String.annotate({ "title": "Topic Id" }) }).annotate({ "title": "KnownPoolImportRequest", "identifier": "KnownPoolImportRequest" })
 export type CorpusLink = { readonly "evidence": ReadonlyArray<string>, readonly "linked_by": LinkedBy, readonly "occurrence_ids": ReadonlyArray<Id>, readonly "relation": Relation, readonly "revision_id": Id }
 export const CorpusLink = Schema.Struct({ "evidence": Schema.Array(Schema.String).annotate({ "title": "Evidence" }), "linked_by": LinkedBy, "occurrence_ids": Schema.Array(Id).annotate({ "title": "Occurrence Ids" }), "relation": Relation, "revision_id": Id }).annotate({ "title": "CorpusLink", "description": "Why records of an identity revision share a report or a study: a proposal the lead\nconfirmed, with its evidence, or the lead's own merge, with the reason they gave.\n`occurrence_ids` are the link's records that are still together in the revision.", "identifier": "CorpusLink" })
 export type SplitRequest = { readonly "actor_id": Id, readonly "level": SplitLevel, readonly "occurrence_ids": ReadonlyArray<Id>, readonly "reason"?: string, readonly "revision_id": Id }
@@ -411,6 +451,8 @@ export type AuditGauge = { readonly "audit_decided": number, readonly "audit_rel
 export const AuditGauge = Schema.Struct({ "audit_decided": Schema.Number.annotate({ "title": "Audit Decided" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "audit_relevant_found": Schema.Number.annotate({ "title": "Audit Relevant Found" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "audit_samples": Schema.Number.annotate({ "title": "Audit Samples" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "elusion": Schema.Union([Interval, Schema.Null]), "excluded_population": Schema.Number.annotate({ "title": "Excluded Population" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "sentinels": Schema.Number.annotate({ "title": "Sentinels" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "sentinels_correct": Schema.Number.annotate({ "title": "Sentinels Correct" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "sentinels_decided": Schema.Number.annotate({ "title": "Sentinels Decided" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "strata": Schema.Array(AuditStratum).annotate({ "title": "Strata" }) }).annotate({ "title": "AuditGauge", "identifier": "AuditGauge" })
 export type WorkingExportRequest = { readonly "scope_id": string, readonly "stage": Stage, readonly "topic_id"?: string | null, readonly "view"?: ExportView | null }
 export const WorkingExportRequest = Schema.Struct({ "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Stage, "topic_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Topic Id" })), "view": Schema.optionalKey(Schema.Union([ExportView, Schema.Null])) }).annotate({ "title": "WorkingExportRequest", "identifier": "WorkingExportRequest" })
+export type SheetDecision = { readonly "comment"?: string | null, readonly "outcome"?: Kittum__screening__types__Outcome | null, readonly "reason_criterion_id"?: string | null }
+export const SheetDecision = Schema.Struct({ "comment": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Comment" })), "outcome": Schema.optionalKey(Schema.Union([Kittum__screening__types__Outcome, Schema.Null])), "reason_criterion_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Reason Criterion Id" })) }).annotate({ "title": "SheetDecision", "description": "What the editable columns of a working export's row say: the decision, the criterion it\nexcludes on, and a comment. Empty cells are `None`.", "identifier": "SheetDecision" })
 export type MissingReport = { readonly "attempts": ReadonlyArray<AttemptView>, readonly "authors": ReadonlyArray<string>, readonly "doi": string | null, readonly "file_name": string, readonly "journal": string | null, readonly "pmid": string | null, readonly "report_id": Id, readonly "title": string, readonly "wrong_document"?: WrongDocumentNote | null, readonly "year": number | null }
 export const MissingReport = Schema.Struct({ "attempts": Schema.Array(AttemptView).annotate({ "title": "Attempts" }), "authors": Schema.Array(Schema.String).annotate({ "title": "Authors" }), "doi": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Doi" }), "file_name": Schema.String.annotate({ "title": "File Name" }), "journal": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Journal" }), "pmid": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Pmid" }), "report_id": Id, "title": Schema.String.annotate({ "title": "Title" }), "wrong_document": Schema.optionalKey(Schema.Union([WrongDocumentNote, Schema.Null])), "year": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Year" }) }).annotate({ "title": "MissingReport", "description": "A report sought for retrieval without a usable full text, for the exports.", "identifier": "MissingReport" })
 export type ReportRetrieval = { readonly "attempts": ReadonlyArray<AttemptView>, readonly "carried"?: ReadonlyArray<AttemptView>, readonly "document_id"?: Id | null, readonly "licence"?: string | null, readonly "outcome": ReportOutcome | null, readonly "page_count"?: number | null, readonly "report_id": Id, readonly "source"?: string | null, readonly "title": string }
@@ -425,12 +467,16 @@ export type CriterionVerdict = { readonly "criterion_id": string, readonly "down
 export const CriterionVerdict = Schema.Struct({ "criterion_id": Schema.String.annotate({ "title": "Criterion Id" }), "downgraded_from": Schema.optionalKey(Schema.Union([CriterionStatus, Schema.Null])), "failed_check": Schema.optionalKey(Schema.Union([FailedCheck, Schema.Null])), "quote": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Quote" }), "quote_verified": Schema.Boolean.annotate({ "title": "Quote Verified" }), "rationale": Schema.String.annotate({ "title": "Rationale" }), "status": CriterionStatus }).annotate({ "title": "CriterionVerdict", "identifier": "CriterionVerdict" })
 export type Reveal = { readonly "criterion_id": string, readonly "downgraded_from"?: CriterionStatus | null, readonly "quote": string, readonly "quote_span"?: QuoteSpan | null, readonly "quote_verified"?: boolean, readonly "rationale": string, readonly "status": CriterionStatus }
 export const Reveal = Schema.Struct({ "criterion_id": Schema.String.annotate({ "title": "Criterion Id" }), "downgraded_from": Schema.optionalKey(Schema.Union([CriterionStatus, Schema.Null])), "quote": Schema.String.annotate({ "title": "Quote" }), "quote_span": Schema.optionalKey(Schema.Union([QuoteSpan, Schema.Null])), "quote_verified": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Quote Verified", "default": false })), "rationale": Schema.String.annotate({ "title": "Rationale" }), "status": CriterionStatus }).annotate({ "title": "Reveal", "description": "Shown after a provisional decision when the AI disagrees (or always, if set so).", "identifier": "Reveal" })
+export type BenchRow = { readonly "against_human": boolean, readonly "current": AiProposal | null, readonly "draft": AiProposal | null, readonly "flip": boolean, readonly "human": Kittum__screening__types__Outcome | null, readonly "item_ref": string, readonly "known_include": boolean, readonly "title": string }
+export const BenchRow = Schema.Struct({ "against_human": Schema.Boolean.annotate({ "title": "Against Human" }), "current": Schema.Union([AiProposal, Schema.Null]), "draft": Schema.Union([AiProposal, Schema.Null]), "flip": Schema.Boolean.annotate({ "title": "Flip" }), "human": Schema.Union([Kittum__screening__types__Outcome, Schema.Null]), "item_ref": Schema.String.annotate({ "title": "Item Ref" }), "known_include": Schema.Boolean.annotate({ "title": "Known Include" }), "title": Schema.String.annotate({ "title": "Title" }) }).annotate({ "title": "BenchRow", "identifier": "BenchRow" })
+export type BulkRow = { readonly "assignment_id": Id, readonly "expected_etag": string, readonly "proposal"?: AiProposal | null }
+export const BulkRow = Schema.Struct({ "assignment_id": Id, "expected_etag": Schema.String.annotate({ "title": "Expected Etag" }), "proposal": Schema.optionalKey(Schema.Union([AiProposal, Schema.Null])) }).annotate({ "title": "BulkRow", "identifier": "BulkRow" })
 export type ScreeningRecord = { readonly "facts"?: RecordFacts, readonly "item_ref": string, readonly "text": string, readonly "title": string }
 export const ScreeningRecord = Schema.Struct({ "facts": Schema.optionalKey(Schema.suspend((): Schema.Codec<RecordFacts> => RecordFacts).annotate({ "default": { "authors": [], "publication_types": [], "registry_ids": [] } })), "item_ref": Schema.String.annotate({ "title": "Item Ref" }), "text": Schema.String.annotate({ "title": "Text" }), "title": Schema.String.annotate({ "title": "Title" }) }).annotate({ "title": "ScreeningRecord", "description": "One item to screen: a report at title and abstract, or its parsed full text.\n\n`item_ref` names the record across modules (the corpus report ID); the judge's verdicts are\nkeyed by it.", "identifier": "ScreeningRecord" })
 export type TableDecision = { readonly "comment"?: string | null, readonly "decided_at"?: string | null, readonly "name"?: string | null, readonly "outcome"?: Kittum__screening__types__Outcome | null, readonly "reason_criterion_id"?: string | null, readonly "reviewer_id"?: Id | null, readonly "role"?: "screener" | "auditor" | "second_opinion" | null, readonly "second_opinion"?: boolean, readonly "state": AssignmentState }
 export const TableDecision = Schema.Struct({ "comment": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Comment" })), "decided_at": Schema.optionalKey(Schema.Union([Schema.String.annotate({ "format": "date-time" }), Schema.Null]).annotate({ "title": "Decided At" })), "name": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Name" })), "outcome": Schema.optionalKey(Schema.Union([Kittum__screening__types__Outcome, Schema.Null])), "reason_criterion_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Reason Criterion Id" })), "reviewer_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "role": Schema.optionalKey(Schema.Union([Schema.Literals(["screener", "auditor", "second_opinion"]), Schema.Null]).annotate({ "title": "Role" })), "second_opinion": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Second Opinion", "default": false })), "state": AssignmentState }).annotate({ "title": "TableDecision", "description": "One human's decision on a row: the reviewer's own, or, for the lead, each screener's, the\nauditor's, and a second opinion's. `state` says whether it is final yet.", "identifier": "TableDecision" })
-export type ImportSearchRequest = { readonly "actor_id": Id, readonly "data": string, readonly "format": string, readonly "plan": SearchPlan }
-export const ImportSearchRequest = Schema.Struct({ "actor_id": Id, "data": Schema.String.annotate({ "title": "Data" }), "format": Schema.String.annotate({ "title": "Format" }), "plan": SearchPlan }).annotate({ "title": "ImportSearchRequest", "identifier": "ImportSearchRequest" })
+export type ImportSearchRequest = { readonly "actor_id": Id, readonly "data": string, readonly "encoding"?: UploadEncoding, readonly "format": string, readonly "plan": SearchPlan }
+export const ImportSearchRequest = Schema.Struct({ "actor_id": Id, "data": Schema.String.annotate({ "title": "Data" }), "encoding": Schema.optionalKey(Schema.suspend((): Schema.Codec<UploadEncoding> => UploadEncoding).annotate({ "default": "text" })), "format": Schema.String.annotate({ "title": "Format" }), "plan": SearchPlan }).annotate({ "title": "ImportSearchRequest", "identifier": "ImportSearchRequest" })
 export type RunSearchRequest = { readonly "actor_id": Id, readonly "plan": SearchPlan }
 export const RunSearchRequest = Schema.Struct({ "actor_id": Id, "plan": SearchPlan }).annotate({ "title": "RunSearchRequest", "identifier": "RunSearchRequest" })
 export type ParsedSource = { readonly "issues"?: ReadonlyArray<ProtocolIssue>, readonly "source": ProtocolSource | null }
@@ -455,6 +501,8 @@ export type UploadedDocument = { readonly "document": Document, readonly "layer_
 export const UploadedDocument = Schema.Struct({ "document": Document, "layer_id": Id }).annotate({ "title": "UploadedDocument", "identifier": "UploadedDocument" })
 export type ModelCall = { readonly "finish_reason"?: string | null, readonly "model_identity"?: string | null, readonly "number": number, readonly "problem"?: string | null, readonly "request": CallPart | null, readonly "response": CallPart | null }
 export const ModelCall = Schema.Struct({ "finish_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Finish Reason" })), "model_identity": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Model Identity" })), "number": Schema.Number.annotate({ "title": "Number" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "problem": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Problem" })), "request": Schema.Union([CallPart, Schema.Null]), "response": Schema.Union([CallPart, Schema.Null]) }).annotate({ "title": "ModelCall", "description": "One request to a model and its response.", "identifier": "ModelCall" })
+export type PoolEntry = { readonly "file_id": Id, readonly "id": Id, readonly "record": SourceRecord }
+export const PoolEntry = Schema.Struct({ "file_id": Id, "id": Id, "record": SourceRecord }).annotate({ "title": "PoolEntry", "identifier": "PoolEntry" })
 export type CorpusReport = { readonly "records": ReadonlyArray<SourceRecord>, readonly "relation": LinkRelation, readonly "report_id": Id, readonly "search_ids"?: ReadonlyArray<Id>, readonly "study_id": Id }
 export const CorpusReport = Schema.Struct({ "records": Schema.Array(SourceRecord).annotate({ "title": "Records" }), "relation": LinkRelation, "report_id": Id, "search_ids": Schema.optionalKey(Schema.Array(Id).annotate({ "title": "Search Ids", "default": [] })), "study_id": Id }).annotate({ "title": "CorpusReport", "description": "One report of an identity revision with the source records that make it up.\n\n`records` are in source order; a report found by several searches has one record per\noccurrence. `search_ids` names the search each record came from, in the same order.\n`relation` is the strongest link label among them.", "identifier": "CorpusReport" })
 export type SearchExecution = { readonly "ended_at": string, readonly "id": Id, readonly "kind": "live_api" | "file_import", readonly "plan": SearchPlan, readonly "query_translation": string | null, readonly "raw_artifact_hashes": ReadonlyArray<Sha256>, readonly "records": ReadonlyArray<SourceRecord>, readonly "reported_count": number, readonly "retrieved_count": number, readonly "skipped_record_ids"?: ReadonlyArray<string>, readonly "started_at": string }
@@ -503,6 +551,8 @@ export type Timepoint = { readonly "id": string, readonly "label": string, reado
 export const Timepoint = Schema.Struct({ "id": Schema.String.annotate({ "title": "Id" }).check(Schema.isPattern(new RegExp("^[a-z0-9][a-z0-9_]*$", "u")).annotate({ "expected": "a string matching the RegExp ^[a-z0-9][a-z0-9_]*$" })), "label": Schema.String.annotate({ "title": "Label" }), "locate": Schema.optionalKey(Schema.Union([Locate, Schema.Null])) }).annotate({ "title": "Timepoint", "identifier": "Timepoint" })
 export type StageMetrics = { readonly "agreement": ReadonlyArray<PairAgreement>, readonly "ai_shown_before"?: number, readonly "audit": AuditGauge, readonly "conflicts_resolved": number, readonly "documentation": DocumentationLevel, readonly "mode": ScreeningMode, readonly "rescreens": RescreenGauge, readonly "reveal": RevealSetting, readonly "reveals_shown": number, readonly "revised_after_reveal": number, readonly "second_opinions"?: SecondOpinionGauge | null, readonly "stop_test": StopStatus | null }
 export const StageMetrics = Schema.Struct({ "agreement": Schema.Array(PairAgreement).annotate({ "title": "Agreement" }), "ai_shown_before": Schema.optionalKey(Schema.Number.annotate({ "title": "Ai Shown Before", "default": 0 }).check(Schema.isInt().annotate({ "expected": "an integer" }))), "audit": AuditGauge, "conflicts_resolved": Schema.Number.annotate({ "title": "Conflicts Resolved" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "documentation": DocumentationLevel, "mode": ScreeningMode, "rescreens": RescreenGauge, "reveal": RevealSetting, "reveals_shown": Schema.Number.annotate({ "title": "Reveals Shown" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "revised_after_reveal": Schema.Number.annotate({ "title": "Revised After Reveal" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "second_opinions": Schema.optionalKey(Schema.Union([SecondOpinionGauge, Schema.Null])), "stop_test": Schema.Union([StopStatus, Schema.Null]) }).annotate({ "title": "StageMetrics", "identifier": "StageMetrics" })
+export type ImportRow = { readonly "decision": SheetDecision, readonly "message"?: string | null, readonly "ref": string, readonly "refusal"?: ImportRefusal | null, readonly "row": number, readonly "title"?: string | null }
+export const ImportRow = Schema.Struct({ "decision": SheetDecision, "message": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Message" })), "ref": Schema.String.annotate({ "title": "Ref" }), "refusal": Schema.optionalKey(Schema.Union([ImportRefusal, Schema.Null])), "row": Schema.Number.annotate({ "title": "Row" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "title": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Title" })) }).annotate({ "title": "ImportRow", "identifier": "ImportRow" })
 export type OpenAccessRun = { readonly "earlier"?: ReadonlyArray<ReportRetrieval>, readonly "error"?: string | null, readonly "finished_at": string | null, readonly "id": Id, readonly "reports": ReadonlyArray<ReportRetrieval>, readonly "requested_at": string, readonly "requested_by": Id, readonly "skipped"?: ReadonlyArray<SkippedSource>, readonly "status": "queued" | "running" | "done" | "failed", readonly "trigger"?: RunTrigger }
 export const OpenAccessRun = Schema.Struct({ "earlier": Schema.optionalKey(Schema.Array(ReportRetrieval).annotate({ "title": "Earlier", "default": [] })), "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Error" })), "finished_at": Schema.Union([Schema.String.annotate({ "format": "date-time" }), Schema.Null]).annotate({ "title": "Finished At" }), "id": Id, "reports": Schema.Array(ReportRetrieval).annotate({ "title": "Reports" }), "requested_at": Schema.String.annotate({ "title": "Requested At", "format": "date-time" }), "requested_by": Id, "skipped": Schema.optionalKey(Schema.Array(SkippedSource).annotate({ "title": "Skipped", "default": [] })), "status": Schema.Literals(["queued", "running", "done", "failed"]).annotate({ "title": "Status" }), "trigger": Schema.optionalKey(Schema.suspend((): Schema.Codec<RunTrigger> => RunTrigger).annotate({ "default": "requested" })) }).annotate({ "title": "OpenAccessRun", "identifier": "OpenAccessRun" })
 export type ReviewerColumn = { readonly "comment": string | null, readonly "criteria": ReadonlyArray<CriterionDecision>, readonly "evidence_anchor_ids": ReadonlyArray<Id>, readonly "label": string, readonly "outcome": Kittum__screening__types__Outcome, readonly "reason_criterion_id": string | null }
@@ -515,6 +565,10 @@ export type AiColumn = { readonly "criteria": ReadonlyArray<CriterionVerdict>, r
 export const AiColumn = Schema.Struct({ "criteria": Schema.Array(CriterionVerdict).annotate({ "title": "Criteria" }), "excludes": Schema.Boolean.annotate({ "title": "Excludes" }), "quote_spans": Schema.Record(Schema.String, QuoteSpan).annotate({ "title": "Quote Spans" }) }).annotate({ "title": "AiColumn", "identifier": "AiColumn" })
 export type DecideResult = { readonly "etag": string, readonly "phase": Phase, readonly "recorded_at": string, readonly "reveal": Reveal | null }
 export const DecideResult = Schema.Struct({ "etag": Schema.String.annotate({ "title": "Etag" }), "phase": Phase, "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }), "reveal": Schema.Union([Reveal, Schema.Null]) }).annotate({ "title": "DecideResult", "identifier": "DecideResult" })
+export type BenchResult = { readonly "against_human": number, readonly "bench_id": Id, readonly "error"?: string | null, readonly "finished_at"?: string | null, readonly "flips": number, readonly "known": number, readonly "known_proposed_exclude": number, readonly "protocol_hash": string, readonly "records": number, readonly "requested_at": string, readonly "rows": ReadonlyArray<BenchRow>, readonly "stage_id": Id, readonly "state": "running" | "done" | "failed" }
+export const BenchResult = Schema.Struct({ "against_human": Schema.Number.annotate({ "title": "Against Human" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "bench_id": Id, "error": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Error" })), "finished_at": Schema.optionalKey(Schema.Union([Schema.String.annotate({ "format": "date-time" }), Schema.Null]).annotate({ "title": "Finished At" })), "flips": Schema.Number.annotate({ "title": "Flips" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "known": Schema.Number.annotate({ "title": "Known" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "known_proposed_exclude": Schema.Number.annotate({ "title": "Known Proposed Exclude" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "protocol_hash": Schema.String.annotate({ "title": "Protocol Hash" }), "records": Schema.Number.annotate({ "title": "Records" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "requested_at": Schema.String.annotate({ "title": "Requested At", "format": "date-time" }), "rows": Schema.Array(BenchRow).annotate({ "title": "Rows" }), "stage_id": Id, "state": Schema.Literals(["running", "done", "failed"]).annotate({ "title": "State" }) }).annotate({ "title": "BenchResult", "description": "A test bench run: the draft's readings against the current ones and the human\ndecisions, known includes first, then flips.", "identifier": "BenchResult" })
+export type BulkDecideRequest = { readonly "action": BulkAction, readonly "command_id": Id, readonly "filter"?: string | null, readonly "reason_criterion_id"?: string | null, readonly "rows": ReadonlyArray<BulkRow>, readonly "timing": DecisionTiming }
+export const BulkDecideRequest = Schema.Struct({ "action": BulkAction, "command_id": Id, "filter": Schema.optionalKey(Schema.Union([Schema.String.check(Schema.isMaxCodePoints(2000).annotate({ "expected": "a string with at most 2000 code points" })), Schema.Null]).annotate({ "title": "Filter" })), "reason_criterion_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Reason Criterion Id" })), "rows": Schema.Array(BulkRow).annotate({ "title": "Rows" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })).check(Schema.isMaxLength(5000).annotate({ "expected": "a value with a length of at most 5000" })), "timing": DecisionTiming }).annotate({ "title": "BulkDecideRequest", "identifier": "BulkDecideRequest" })
 export type Sentinel = { readonly "expected_outcome"?: "include" | "exclude", readonly "record": ScreeningRecord }
 export const Sentinel = Schema.Struct({ "expected_outcome": Schema.optionalKey(Schema.Literals(["include", "exclude"]).annotate({ "title": "Expected Outcome", "default": "include" })), "record": ScreeningRecord }).annotate({ "title": "Sentinel", "description": "A record with a known label, seeded invisibly into every screener's queue.", "identifier": "Sentinel" })
 export type ReviewField = { readonly "acceptance": Acceptance | null, readonly "accepted": Path | null, readonly "agreement": Agreement, readonly "gate": Gate, readonly "id": Id, readonly "key": SemanticKey, readonly "labels": FieldLabels, readonly "proposals": ReadonlyArray<Proposal>, readonly "recheck": boolean, readonly "second_extractor": boolean, readonly "spec": FieldSpec }
@@ -525,6 +579,8 @@ export type AssignmentFullText = { readonly "ai_quote"?: Anchor | null, readonly
 export const AssignmentFullText = Schema.Struct({ "ai_quote": Schema.optionalKey(Schema.Union([Anchor, Schema.Null])), "document_id": Id, "layer_id": Id, "licence": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Licence" }), "mentions": Schema.Array(CriterionMentions).annotate({ "title": "Mentions" }), "page_count": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Page Count" }) }).annotate({ "title": "AssignmentFullText", "description": "The full text behind a reviewer's full-text assignment.", "identifier": "AssignmentFullText" })
 export type TracedEvent = { readonly "actor": string, readonly "actor_id": Id, readonly "actor_kind": string, readonly "artifacts": ReadonlyArray<ArtifactRef>, readonly "event_hash": Sha256, readonly "event_hash_matches": boolean, readonly "event_id": Id, readonly "facts": ReadonlyArray<Fact>, readonly "hashed_fields": { readonly [x: string]: Schema.Json }, readonly "kind": TraceKind, readonly "model_calls"?: ReadonlyArray<ModelCall>, readonly "payload": { readonly [x: string]: Schema.Json }, readonly "payload_hash": Sha256, readonly "payload_hash_matches": boolean, readonly "prev_hash": Sha256, readonly "recorded_at": string, readonly "schema_version": number, readonly "seq": number, readonly "stage": string | null, readonly "summary": string, readonly "type": string }
 export const TracedEvent = Schema.Struct({ "actor": Schema.String.annotate({ "title": "Actor" }), "actor_id": Id, "actor_kind": Schema.String.annotate({ "title": "Actor Kind" }), "artifacts": Schema.Array(ArtifactRef).annotate({ "title": "Artifacts" }), "event_hash": Sha256, "event_hash_matches": Schema.Boolean.annotate({ "title": "Event Hash Matches" }), "event_id": Id, "facts": Schema.Array(Fact).annotate({ "title": "Facts" }), "hashed_fields": Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" })).annotate({ "title": "Hashed Fields" }), "kind": TraceKind, "model_calls": Schema.optionalKey(Schema.Array(ModelCall).annotate({ "title": "Model Calls", "default": [] })), "payload": Schema.Record(Schema.String, Schema.Json.annotate({ "expected": "JSON value" })).annotate({ "title": "Payload" }), "payload_hash": Sha256, "payload_hash_matches": Schema.Boolean.annotate({ "title": "Payload Hash Matches" }), "prev_hash": Sha256, "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }), "schema_version": Schema.Number.annotate({ "title": "Schema Version" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "seq": Schema.Number.annotate({ "title": "Seq" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "stage": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Stage" }), "summary": Schema.String.annotate({ "title": "Summary" }), "type": Schema.String.annotate({ "title": "Type" }) }).annotate({ "title": "TracedEvent", "description": "A ledger event with who recorded it, what it means, and its place in the chain.", "identifier": "TracedEvent" })
+export type PoolMatch = { readonly "entry": PoolEntry, readonly "evidence": string, readonly "refs": ReadonlyArray<string> }
+export const PoolMatch = Schema.Struct({ "entry": PoolEntry, "evidence": Schema.String.annotate({ "title": "Evidence" }), "refs": Schema.Array(Schema.String).annotate({ "title": "Refs" }) }).annotate({ "title": "PoolMatch", "description": "A pool paper the topic's searches found: the search results it is (`refs`), and why.", "identifier": "PoolMatch" })
 export type CorpusView = { readonly "links"?: ReadonlyArray<CorpusLink>, readonly "reports": ReadonlyArray<CorpusReport>, readonly "revision": IdentityRevision, readonly "searches"?: ReadonlyArray<CorpusSearch> }
 export const CorpusView = Schema.Struct({ "links": Schema.optionalKey(Schema.Array(CorpusLink).annotate({ "title": "Links", "default": [] })), "reports": Schema.Array(CorpusReport).annotate({ "title": "Reports" }), "revision": IdentityRevision, "searches": Schema.optionalKey(Schema.Array(CorpusSearch).annotate({ "title": "Searches", "default": [] })) }).annotate({ "title": "CorpusView", "description": "The newest identity revision: every report with its records and study, the searches the\nrecords came from, and why linked records are together.", "identifier": "CorpusView" })
 export type RenderedArtifact = { readonly "artifact": Artifact, readonly "sha256": string }
@@ -547,6 +603,8 @@ export type Endpoint = { readonly "id": string, readonly "label": string, readon
 export const Endpoint = Schema.Struct({ "id": Schema.String.annotate({ "title": "Id" }).check(Schema.isPattern(new RegExp("^[a-z][a-z0-9_]*$", "u")).annotate({ "expected": "a string matching the RegExp ^[a-z][a-z0-9_]*$" })), "label": Schema.String.annotate({ "title": "Label" }), "locate": Schema.optionalKey(Schema.Union([Locate, Schema.Null])), "quantities": Schema.Array(QuantitySpec).annotate({ "title": "Quantities" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "role": Schema.optionalKey(Schema.suspend((): Schema.Codec<Role> => Role).annotate({ "default": "outcome" })), "timepoints": Schema.Array(Timepoint).annotate({ "title": "Timepoints" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "unit": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Unit" })) }).annotate({ "title": "Endpoint", "identifier": "Endpoint" })
 export type ScopeStatus = { readonly "conflicts": number | null, readonly "metrics": StageMetrics | null, readonly "remaining": number, readonly "scope_id": string, readonly "screened": number, readonly "stage": Stage, readonly "view": "reviewer" | "adjudicator" | "lead" }
 export const ScopeStatus = Schema.Struct({ "conflicts": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Conflicts" }), "metrics": Schema.Union([StageMetrics, Schema.Null]), "remaining": Schema.Number.annotate({ "title": "Remaining" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "screened": Schema.Number.annotate({ "title": "Screened" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "stage": Stage, "view": Schema.Literals(["reviewer", "adjudicator", "lead"]).annotate({ "title": "View" }) }).annotate({ "title": "ScopeStatus", "description": "Progress of a scope and stage.\n\nA reviewer who screens or audits the stage sees only their own counts (`view == \"reviewer\"`,\nhidden items included, no conflicts, no metrics). An adjudicator of the stage sees the\nscreening progress and, as `conflicts`, the adjudications pending for them, without\nmetrics. Anyone else (the methods lead) sees the whole stage.", "identifier": "ScopeStatus" })
+export type ImportPreview = { readonly "changes": ReadonlyArray<ImportRow>, readonly "preview_hash": string, readonly "refused": ReadonlyArray<ImportRow>, readonly "unchanged": number }
+export const ImportPreview = Schema.Struct({ "changes": Schema.Array(ImportRow).annotate({ "title": "Changes" }), "preview_hash": Schema.String.annotate({ "title": "Preview Hash" }), "refused": Schema.Array(ImportRow).annotate({ "title": "Refused" }), "unchanged": Schema.Number.annotate({ "title": "Unchanged" }).check(Schema.isInt().annotate({ "expected": "an integer" })) }).annotate({ "title": "ImportPreview", "description": "What importing a spreadsheet would do: nothing is recorded yet.", "identifier": "ImportPreview" })
 export type AdjudicationItem = { readonly "columns": ReadonlyArray<ReviewerColumn>, readonly "conflict_id": Id, readonly "etag": string, readonly "record": QueueRecord, readonly "scope_id": string, readonly "stage": Stage, readonly "text": string, readonly "title": string }
 export const AdjudicationItem = Schema.Struct({ "columns": Schema.Array(ReviewerColumn).annotate({ "title": "Columns" }), "conflict_id": Id, "etag": Schema.String.annotate({ "title": "Etag" }), "record": QueueRecord, "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Stage, "text": Schema.String.annotate({ "title": "Text" }), "title": Schema.String.annotate({ "title": "Title" }) }).annotate({ "title": "AdjudicationItem", "description": "A conflict for the adjudicator. The AI column is not here; it opens after the commit.", "identifier": "AdjudicationItem" })
 export type AdjudicateRequest = { readonly "adopted"?: string | null, readonly "command_id": Id, readonly "decision"?: Decision | null, readonly "expected_etag": string, readonly "timing"?: DecisionTiming | null }
@@ -557,8 +615,8 @@ export type AdjudicationResult = { readonly "ai": AiColumn, readonly "outcome": 
 export const AdjudicationResult = Schema.Struct({ "ai": AiColumn, "outcome": Kittum__screening__types__Outcome, "reason_criterion_id": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Reason Criterion Id" }), "recorded_at": Schema.String.annotate({ "title": "Recorded At", "format": "date-time" }) }).annotate({ "title": "AdjudicationResult", "identifier": "AdjudicationResult" })
 export type QueueItem = { readonly "ai"?: AiColumn | null, readonly "assignment_id": Id, readonly "etag": string, readonly "highlights": ReadonlyArray<Highlight>, readonly "phase": Phase, readonly "record": QueueRecord, readonly "reveal": Reveal | null, readonly "scope_id": string, readonly "second_opinion"?: SecondOpinionContext | null, readonly "stage": Stage, readonly "text": string, readonly "title": string }
 export const QueueItem = Schema.Struct({ "ai": Schema.optionalKey(Schema.Union([AiColumn, Schema.Null])), "assignment_id": Id, "etag": Schema.String.annotate({ "title": "Etag" }), "highlights": Schema.Array(Highlight).annotate({ "title": "Highlights" }), "phase": Phase, "record": QueueRecord, "reveal": Schema.Union([Reveal, Schema.Null]), "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "second_opinion": Schema.optionalKey(Schema.Union([SecondOpinionContext, Schema.Null])), "stage": Stage, "text": Schema.String.annotate({ "title": "Text" }), "title": Schema.String.annotate({ "title": "Title" }) }).annotate({ "title": "QueueItem", "description": "What a reviewer sees. Never contains AI output before their own provisional decision\n(unless the stage reveals `before`), sentinel or audit flags, or anything of another\nreviewer (except the decision a second opinion is asked on).", "identifier": "QueueItem" })
-export type TableRow = { readonly "abstract": string, readonly "ai"?: AiColumn | null, readonly "ai_excludes"?: boolean | null, readonly "ai_not_met"?: ReadonlyArray<string>, readonly "assignment_id"?: Id | null, readonly "authors": ReadonlyArray<string>, readonly "decisions": ReadonlyArray<TableDecision>, readonly "doi": string | null, readonly "etag"?: string | null, readonly "flags"?: ReadonlyArray<ItemFlag>, readonly "journal": string | null, readonly "outcome"?: RecordOutcome, readonly "outcome_reason"?: string | null, readonly "pmid": string | null, readonly "position"?: number | null, readonly "publication_types": ReadonlyArray<string>, readonly "ref": string, readonly "registry_ids": ReadonlyArray<string>, readonly "reveal"?: Reveal | null, readonly "second_opinion"?: SecondOpinionContext | null, readonly "title": string, readonly "year": number | null }
-export const TableRow = Schema.Struct({ "abstract": Schema.String.annotate({ "title": "Abstract" }), "ai": Schema.optionalKey(Schema.Union([AiColumn, Schema.Null])), "ai_excludes": Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null]).annotate({ "title": "Ai Excludes" })), "ai_not_met": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Ai Not Met", "default": [] })), "assignment_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "authors": Schema.Array(Schema.String).annotate({ "title": "Authors" }), "decisions": Schema.Array(TableDecision).annotate({ "title": "Decisions" }), "doi": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Doi" }), "etag": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Etag" })), "flags": Schema.optionalKey(Schema.Array(ItemFlag).annotate({ "title": "Flags", "default": [] })), "journal": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Journal" }), "outcome": Schema.optionalKey(RecordOutcome), "outcome_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Outcome Reason" })), "pmid": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Pmid" }), "position": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Position" })), "publication_types": Schema.Array(Schema.String).annotate({ "title": "Publication Types" }), "ref": Schema.String.annotate({ "title": "Ref" }), "registry_ids": Schema.Array(Schema.String).annotate({ "title": "Registry Ids" }), "reveal": Schema.optionalKey(Schema.Union([Reveal, Schema.Null])), "second_opinion": Schema.optionalKey(Schema.Union([SecondOpinionContext, Schema.Null])), "title": Schema.String.annotate({ "title": "Title" }), "year": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Year" }) }).annotate({ "title": "TableRow", "identifier": "TableRow" })
+export type TableRow = { readonly "abstract": string, readonly "ai"?: AiColumn | null, readonly "ai_excludes"?: boolean | null, readonly "ai_not_met"?: ReadonlyArray<string>, readonly "ai_proposal"?: AiProposal | null, readonly "ai_protocol_hash"?: string | null, readonly "assignment_id"?: Id | null, readonly "authors": ReadonlyArray<string>, readonly "decisions": ReadonlyArray<TableDecision>, readonly "doi": string | null, readonly "etag"?: string | null, readonly "flags"?: ReadonlyArray<ItemFlag>, readonly "in_known_pool"?: boolean | null, readonly "journal": string | null, readonly "known_include"?: boolean, readonly "outcome"?: RecordOutcome, readonly "outcome_reason"?: string | null, readonly "pmid": string | null, readonly "position"?: number | null, readonly "publication_types": ReadonlyArray<string>, readonly "ref": string, readonly "registry_ids": ReadonlyArray<string>, readonly "reveal"?: Reveal | null, readonly "second_opinion"?: SecondOpinionContext | null, readonly "title": string, readonly "year": number | null }
+export const TableRow = Schema.Struct({ "abstract": Schema.String.annotate({ "title": "Abstract" }), "ai": Schema.optionalKey(Schema.Union([AiColumn, Schema.Null])), "ai_excludes": Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null]).annotate({ "title": "Ai Excludes" })), "ai_not_met": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Ai Not Met", "default": [] })), "ai_proposal": Schema.optionalKey(Schema.Union([AiProposal, Schema.Null])), "ai_protocol_hash": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Ai Protocol Hash" })), "assignment_id": Schema.optionalKey(Schema.Union([Id, Schema.Null])), "authors": Schema.Array(Schema.String).annotate({ "title": "Authors" }), "decisions": Schema.Array(TableDecision).annotate({ "title": "Decisions" }), "doi": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Doi" }), "etag": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Etag" })), "flags": Schema.optionalKey(Schema.Array(ItemFlag).annotate({ "title": "Flags", "default": [] })), "in_known_pool": Schema.optionalKey(Schema.Union([Schema.Boolean, Schema.Null]).annotate({ "title": "In Known Pool" })), "journal": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Journal" }), "known_include": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Known Include", "default": false })), "outcome": Schema.optionalKey(RecordOutcome), "outcome_reason": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Outcome Reason" })), "pmid": Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Pmid" }), "position": Schema.optionalKey(Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Position" })), "publication_types": Schema.Array(Schema.String).annotate({ "title": "Publication Types" }), "ref": Schema.String.annotate({ "title": "Ref" }), "registry_ids": Schema.Array(Schema.String).annotate({ "title": "Registry Ids" }), "reveal": Schema.optionalKey(Schema.Union([Reveal, Schema.Null])), "second_opinion": Schema.optionalKey(Schema.Union([SecondOpinionContext, Schema.Null])), "title": Schema.String.annotate({ "title": "Title" }), "year": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Year" }) }).annotate({ "title": "TableRow", "identifier": "TableRow" })
 export type OpenStageRequest = { readonly "actor_id": Id, readonly "reveal"?: RevealSetting, readonly "scope_id": string, readonly "screeners"?: ReadonlyArray<Id> | null, readonly "sentinels"?: ReadonlyArray<Sentinel>, readonly "stage": Stage, readonly "topic_id"?: string | null }
 export const OpenStageRequest = Schema.Struct({ "actor_id": Id, "reveal": Schema.optionalKey(Schema.suspend((): Schema.Codec<RevealSetting> => RevealSetting).annotate({ "default": "on_disagreement" })), "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "screeners": Schema.optionalKey(Schema.Union([Schema.Array(Id), Schema.Null]).annotate({ "title": "Screeners" })), "sentinels": Schema.optionalKey(Schema.Array(Sentinel).annotate({ "title": "Sentinels", "default": [] })), "stage": Stage, "topic_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Topic Id" })) }).annotate({ "title": "OpenStageRequest", "identifier": "OpenStageRequest" })
 export type ExtractionReview = { readonly "anchors": ReadonlyArray<Anchor>, readonly "document": Document, readonly "fields": ReadonlyArray<ReviewField>, readonly "layer": ReviewLayer, readonly "report": ReportSummary, readonly "run": ExtractionRun }
@@ -567,18 +625,22 @@ export type EventPage = { readonly "events": ReadonlyArray<TracedEvent>, readonl
 export const EventPage = Schema.Struct({ "events": Schema.Array(TracedEvent).annotate({ "title": "Events" }), "head_seq": Schema.Number.annotate({ "title": "Head Seq" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "next_after_seq": Schema.Union([Schema.Int, Schema.Null]).annotate({ "title": "Next After Seq" }) }).annotate({ "title": "EventPage", "identifier": "EventPage" })
 export type RecordTrace = { readonly "events": ReadonlyArray<TracedEvent>, readonly "head_seq": number, readonly "identity_revision_id": Id | null, readonly "occurrences": ReadonlyArray<TracedOccurrence>, readonly "ref": string, readonly "report_id": Id | null, readonly "reveals": ReadonlyArray<RevealTiming>, readonly "study_id": Id | null, readonly "title": string }
 export const RecordTrace = Schema.Struct({ "events": Schema.Array(TracedEvent).annotate({ "title": "Events" }), "head_seq": Schema.Number.annotate({ "title": "Head Seq" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "identity_revision_id": Schema.Union([Id, Schema.Null]), "occurrences": Schema.Array(TracedOccurrence).annotate({ "title": "Occurrences" }), "ref": Schema.String.annotate({ "title": "Ref" }), "report_id": Schema.Union([Id, Schema.Null]), "reveals": Schema.Array(RevealTiming).annotate({ "title": "Reveals" }), "study_id": Schema.Union([Id, Schema.Null]), "title": Schema.String.annotate({ "title": "Title" }) }).annotate({ "title": "RecordTrace", "identifier": "RecordTrace" })
+export type PoolComparison = { readonly "basis": PoolBasis, readonly "files": ReadonlyArray<KnownPoolFile>, readonly "found": ReadonlyArray<PoolMatch>, readonly "in_pool": number, readonly "new": number, readonly "not_found": ReadonlyArray<PoolEntry>, readonly "pool_size": number, readonly "searched": number, readonly "topic_id": string }
+export const PoolComparison = Schema.Struct({ "basis": PoolBasis, "files": Schema.Array(KnownPoolFile).annotate({ "title": "Files" }), "found": Schema.Array(PoolMatch).annotate({ "title": "Found" }), "in_pool": Schema.Number.annotate({ "title": "In Pool" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "new": Schema.Number.annotate({ "title": "New" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "not_found": Schema.Array(PoolEntry).annotate({ "title": "Not Found" }), "pool_size": Schema.Number.annotate({ "title": "Pool Size" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "searched": Schema.Number.annotate({ "title": "Searched" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "topic_id": Schema.String.annotate({ "title": "Topic Id" }) }).annotate({ "title": "PoolComparison", "description": "The topic's pool beside its searches.\n\n`basis` is `reports` once the corpus is built: `refs` are report IDs (the screening item\nreferences) and `searched` and `new` count deduplicated reports. Before that it is `records`:\n`refs` are occurrence IDs and the counts are search records before deduplication.", "identifier": "PoolComparison" })
 export type Appraisal = { readonly "created_at": string, readonly "created_by": Id, readonly "document_id": Id, readonly "domains": ReadonlyArray<DomainView>, readonly "id": Id, readonly "instrument": string, readonly "instrument_title": string, readonly "judgement": Judgement | null, readonly "override": Override | null, readonly "project_id": Id, readonly "proposed": Judgement | null, readonly "report_id": Id, readonly "report_title": string, readonly "result": string, readonly "study_id": Id, readonly "study_label": string }
 export const Appraisal = Schema.Struct({ "created_at": Schema.String.annotate({ "title": "Created At", "format": "date-time" }), "created_by": Id, "document_id": Id, "domains": Schema.Array(DomainView).annotate({ "title": "Domains" }), "id": Id, "instrument": Schema.String.annotate({ "title": "Instrument" }), "instrument_title": Schema.String.annotate({ "title": "Instrument Title" }), "judgement": Schema.Union([Judgement, Schema.Null]), "override": Schema.Union([Override, Schema.Null]), "project_id": Id, "proposed": Schema.Union([Judgement, Schema.Null]), "report_id": Id, "report_title": Schema.String.annotate({ "title": "Report Title" }), "result": Schema.String.annotate({ "title": "Result" }), "study_id": Id, "study_label": Schema.String.annotate({ "title": "Study Label" }) }).annotate({ "title": "Appraisal", "identifier": "Appraisal" })
 export type AssistOutcome = { readonly "attempts": number, readonly "event_id": Id, readonly "issues"?: ReadonlyArray<ProtocolIssue>, readonly "raw_answer"?: string | null, readonly "revision": ProtocolRevision | null, readonly "unchanged"?: boolean }
 export const AssistOutcome = Schema.Struct({ "attempts": Schema.Number.annotate({ "title": "Attempts" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "event_id": Id, "issues": Schema.optionalKey(Schema.Array(ProtocolIssue).annotate({ "title": "Issues", "default": [] })), "raw_answer": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Raw Answer" })), "revision": Schema.Union([ProtocolRevision, Schema.Null]), "unchanged": Schema.optionalKey(Schema.Boolean.annotate({ "title": "Unchanged", "default": false })) }).annotate({ "title": "AssistOutcome", "description": "The result of asking the assistant. Without a revision, `issues` says why: the answer\nstill did not compile after the repair rounds (with the last raw answer), or it changed\nnothing.", "identifier": "AssistOutcome" })
-export type SearchTopic = { readonly "audit"?: AuditPlan, readonly "criteria": ReadonlyArray<Criterion>, readonly "extensions"?: Extensions, readonly "freshness": FreshnessPolicy, readonly "id": Identifier, readonly "kind": Identifier, readonly "label": LocalizedText, readonly "mode": ScreeningMode, readonly "mode_rationale"?: LocalizedText | null, readonly "reference_set"?: ReferenceSet, readonly "scopes": ReadonlyArray<Scope>, readonly "source_plan": SourcePlan, readonly "stopping"?: StoppingPlan | null, readonly "validation_pack"?: Text | null }
-export const SearchTopic = Schema.Struct({ "audit": Schema.optionalKey(Schema.suspend((): Schema.Codec<AuditPlan> => AuditPlan).annotate({ "default": { "census_of_disagreements": true, "random_audit_percent": "0", "sentinel_percent": "0" } })), "criteria": Schema.Array(Criterion).annotate({ "title": "Criteria" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "extensions": Schema.optionalKey(Extensions), "freshness": FreshnessPolicy, "id": Identifier, "kind": Identifier, "label": LocalizedText, "mode": ScreeningMode, "mode_rationale": Schema.optionalKey(Schema.Union([LocalizedText, Schema.Null])), "reference_set": Schema.optionalKey(Schema.suspend((): Schema.Codec<ReferenceSet> => ReferenceSet).annotate({ "default": { "development": [], "validation": [] } })), "scopes": Schema.Array(Scope).annotate({ "title": "Scopes" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "source_plan": SourcePlan, "stopping": Schema.optionalKey(Schema.Union([StoppingPlan, Schema.Null])), "validation_pack": Schema.optionalKey(Schema.Union([Text, Schema.Null])) }).annotate({ "title": "SearchTopic", "identifier": "SearchTopic" })
+export type SearchTopic = { readonly "audit"?: AuditPlan, readonly "criteria": ReadonlyArray<Criterion>, readonly "extensions"?: Extensions, readonly "freshness": FreshnessPolicy, readonly "id": Identifier, readonly "judge"?: JudgeInstructions, readonly "kind": Identifier, readonly "label": LocalizedText, readonly "mode": ScreeningMode, readonly "mode_rationale"?: LocalizedText | null, readonly "reference_set"?: ReferenceSet, readonly "scopes": ReadonlyArray<Scope>, readonly "source_plan": SourcePlan, readonly "stopping"?: StoppingPlan | null, readonly "validation_pack"?: Text | null }
+export const SearchTopic = Schema.Struct({ "audit": Schema.optionalKey(Schema.suspend((): Schema.Codec<AuditPlan> => AuditPlan).annotate({ "default": { "census_of_disagreements": true, "random_audit_percent": "0", "sentinel_percent": "0" } })), "criteria": Schema.Array(Criterion).annotate({ "title": "Criteria" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "extensions": Schema.optionalKey(Extensions), "freshness": FreshnessPolicy, "id": Identifier, "judge": Schema.optionalKey(JudgeInstructions), "kind": Identifier, "label": LocalizedText, "mode": ScreeningMode, "mode_rationale": Schema.optionalKey(Schema.Union([LocalizedText, Schema.Null])), "reference_set": Schema.optionalKey(Schema.suspend((): Schema.Codec<ReferenceSet> => ReferenceSet).annotate({ "default": { "development": [], "validation": [] } })), "scopes": Schema.Array(Scope).annotate({ "title": "Scopes" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "source_plan": SourcePlan, "stopping": Schema.optionalKey(Schema.Union([StoppingPlan, Schema.Null])), "validation_pack": Schema.optionalKey(Schema.Union([Text, Schema.Null])) }).annotate({ "title": "SearchTopic", "identifier": "SearchTopic" })
 export type ExtractionSchema = { readonly "analysis_set"?: string, readonly "arms": ReadonlyArray<Arm>, readonly "comparisons"?: ReadonlyArray<Comparison>, readonly "data_cut"?: string, readonly "endpoints": ReadonlyArray<Endpoint>, readonly "name": string, readonly "schema_version"?: 1, readonly "subpopulation"?: string, readonly "total_columns"?: ReadonlyArray<string> }
 export const ExtractionSchema = Schema.Struct({ "analysis_set": Schema.optionalKey(Schema.String.annotate({ "title": "Analysis Set", "default": "itt" })), "arms": Schema.Array(Arm).annotate({ "title": "Arms" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "comparisons": Schema.optionalKey(Schema.Array(Comparison).annotate({ "title": "Comparisons", "default": [] })), "data_cut": Schema.optionalKey(Schema.String.annotate({ "title": "Data Cut", "default": "primary" })), "endpoints": Schema.Array(Endpoint).annotate({ "title": "Endpoints" }).check(Schema.isMinLength(1).annotate({ "expected": "a value with a length of at least 1" })), "name": Schema.String.annotate({ "title": "Name" }), "schema_version": Schema.optionalKey(Schema.Literal(1).annotate({ "title": "Schema Version", "default": 1 })), "subpopulation": Schema.optionalKey(Schema.String.annotate({ "title": "Subpopulation", "default": "all" })), "total_columns": Schema.optionalKey(Schema.Array(Schema.String).annotate({ "title": "Total Columns", "default": ["Total"] })) }).annotate({ "title": "ExtractionSchema", "identifier": "ExtractionSchema" })
 export type StageProgress = { readonly "outcomes": { readonly [x: string]: number } | null, readonly "stage": StageInfo, readonly "status": ScopeStatus }
 export const StageProgress = Schema.Struct({ "outcomes": Schema.Union([Schema.Record(Schema.String, Schema.Int), Schema.Null]).annotate({ "title": "Outcomes" }), "stage": StageInfo, "status": ScopeStatus }).annotate({ "title": "StageProgress", "description": "One stage as the viewer may see it. `outcomes` counts records by their current outcome\n(`include`, `exclude`, `conflict`, `pending`) and is only filled in for the methods lead.", "identifier": "StageProgress" })
-export type ScreeningTable = { readonly "rows": ReadonlyArray<TableRow>, readonly "scope_id": string, readonly "stage": Stage, readonly "stage_id": Id, readonly "view": "reviewer" | "lead" }
-export const ScreeningTable = Schema.Struct({ "rows": Schema.Array(TableRow).annotate({ "title": "Rows" }), "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Stage, "stage_id": Id, "view": Schema.Literals(["reviewer", "lead"]).annotate({ "title": "View" }) }).annotate({ "title": "ScreeningTable", "identifier": "ScreeningTable" })
+export type DecisionImportPreview = { readonly "export_id": Id, readonly "exported_at": string, readonly "exported_by": string, readonly "preview": ImportPreview, readonly "rows": number, readonly "sha256": Sha256 }
+export const DecisionImportPreview = Schema.Struct({ "export_id": Id, "exported_at": Schema.String.annotate({ "title": "Exported At", "format": "date-time" }), "exported_by": Schema.String.annotate({ "title": "Exported By" }), "preview": ImportPreview, "rows": Schema.Number.annotate({ "title": "Rows" }).check(Schema.isInt().annotate({ "expected": "an integer" })), "sha256": Sha256 }).annotate({ "title": "DecisionImportPreview", "description": "What importing an edited working export would do, and the export it came from.", "identifier": "DecisionImportPreview" })
+export type ScreeningTable = { readonly "documentation": DocumentationLevel, readonly "known_includes"?: KnownIncludes | null, readonly "protocol_hash": string, readonly "reveal": string, readonly "rows": ReadonlyArray<TableRow>, readonly "scope_id": string, readonly "stage": Stage, readonly "stage_id": Id, readonly "view": "reviewer" | "lead" }
+export const ScreeningTable = Schema.Struct({ "documentation": DocumentationLevel, "known_includes": Schema.optionalKey(Schema.Union([KnownIncludes, Schema.Null])), "protocol_hash": Schema.String.annotate({ "title": "Protocol Hash" }), "reveal": Schema.String.annotate({ "title": "Reveal" }), "rows": Schema.Array(TableRow).annotate({ "title": "Rows" }), "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Stage, "stage_id": Id, "view": Schema.Literals(["reviewer", "lead"]).annotate({ "title": "View" }) }).annotate({ "title": "ScreeningTable", "identifier": "ScreeningTable" })
 export type AppraisalScreen = { readonly "appraisal": Appraisal, readonly "layer": ReviewLayer, readonly "mentions": ReadonlyArray<QuestionMentions> }
 export const AppraisalScreen = Schema.Struct({ "appraisal": Appraisal, "layer": ReviewLayer, "mentions": Schema.Array(QuestionMentions).annotate({ "title": "Mentions" }) }).annotate({ "title": "AppraisalScreen", "description": "An appraisal with its report's full text and the instrument's words found in it.", "identifier": "AppraisalScreen" })
 export type ReviewProtocol = { readonly "default_language": LanguageCode, readonly "effect_modifiers"?: ReadonlyArray<EffectModifier>, readonly "extensions"?: Extensions, readonly "outcomes": ReadonlyArray<Kittum__protocol__model__Outcome>, readonly "profile"?: Identifier | null, readonly "questions": ReadonlyArray<ReviewQuestion>, readonly "schema_version"?: 1, readonly "search_topics": ReadonlyArray<SearchTopic>, readonly "title": LocalizedText, readonly "version_label": Text }
@@ -610,6 +672,8 @@ export type RenderPage422 = HTTPValidationError
 export const RenderPage422 = HTTPValidationError
 export type GetHealth200 = Health
 export const GetHealth200 = Health
+export type GetJudgePromptTemplate200 = PromptTemplate
+export const GetJudgePromptTemplate200 = PromptTemplate
 export type CreateAnchorRequestJson = AnchorRequest
 export const CreateAnchorRequestJson = AnchorRequest
 export type CreateAnchor201 = Anchor
@@ -814,6 +878,24 @@ export type IngestCorpus201 = CorpusRevision
 export const IngestCorpus201 = CorpusRevision
 export type IngestCorpus422 = HTTPValidationError
 export const IngestCorpus422 = HTTPValidationError
+export type GetKnownPoolParams = { readonly "topic_id": string, readonly "X-Kittum-Reviewer": Id }
+export const GetKnownPoolParams = Schema.Struct({ "topic_id": Schema.String.annotate({ "title": "Topic Id" }), "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type GetKnownPool200 = PoolComparison
+export const GetKnownPool200 = PoolComparison
+export type GetKnownPool422 = HTTPValidationError
+export const GetKnownPool422 = HTTPValidationError
+export type ImportKnownPoolRequestJson = KnownPoolImportRequest
+export const ImportKnownPoolRequestJson = KnownPoolImportRequest
+export type ImportKnownPool201 = KnownPoolFile
+export const ImportKnownPool201 = KnownPoolFile
+export type ImportKnownPool422 = HTTPValidationError
+export const ImportKnownPool422 = HTTPValidationError
+export type WithdrawKnownPoolFileRequestJson = KnownPoolWithdrawRequest
+export const WithdrawKnownPoolFileRequestJson = KnownPoolWithdrawRequest
+export type WithdrawKnownPoolFile200 = KnownPoolFile
+export const WithdrawKnownPoolFile200 = KnownPoolFile
+export type WithdrawKnownPoolFile422 = HTTPValidationError
+export const WithdrawKnownPoolFile422 = HTTPValidationError
 export type MergeCorpusOccurrencesRequestJson = MergeRequest
 export const MergeCorpusOccurrencesRequestJson = MergeRequest
 export type MergeCorpusOccurrences200 = IdentityRevision
@@ -1026,6 +1108,22 @@ export type ExportWorkingSpreadsheetRequestJson = WorkingExportRequest
 export const ExportWorkingSpreadsheetRequestJson = WorkingExportRequest
 export type ExportWorkingSpreadsheet422 = HTTPValidationError
 export const ExportWorkingSpreadsheet422 = HTTPValidationError
+export type ImportDecisionsParams = { readonly "X-Kittum-Reviewer": Id }
+export const ImportDecisionsParams = Schema.Struct({ "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type ImportDecisionsRequestJson = DecisionImportApply
+export const ImportDecisionsRequestJson = DecisionImportApply
+export type ImportDecisions200 = ImportResult
+export const ImportDecisions200 = ImportResult
+export type ImportDecisions422 = HTTPValidationError
+export const ImportDecisions422 = HTTPValidationError
+export type PreviewDecisionImportParams = { readonly "X-Kittum-Reviewer": Id }
+export const PreviewDecisionImportParams = Schema.Struct({ "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type PreviewDecisionImportRequestJson = DecisionImportRequest
+export const PreviewDecisionImportRequestJson = DecisionImportRequest
+export type PreviewDecisionImport200 = DecisionImportPreview
+export const PreviewDecisionImport200 = DecisionImportPreview
+export type PreviewDecisionImport422 = HTTPValidationError
+export const PreviewDecisionImport422 = HTTPValidationError
 export type ListMissingFullTextsParams = { readonly "X-Kittum-Reviewer": Id }
 export const ListMissingFullTextsParams = Schema.Struct({ "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
 export type ListMissingFullTexts200 = ReadonlyArray<MissingReport>
@@ -1138,6 +1236,12 @@ export type MarkScreeningWrongDocument200 = WrongDocument
 export const MarkScreeningWrongDocument200 = WrongDocument
 export type MarkScreeningWrongDocument422 = HTTPValidationError
 export const MarkScreeningWrongDocument422 = HTTPValidationError
+export type GetScreeningBenchParams = { readonly "X-Kittum-Reviewer": Id }
+export const GetScreeningBenchParams = Schema.Struct({ "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type GetScreeningBench200 = BenchResult
+export const GetScreeningBench200 = BenchResult
+export type GetScreeningBench422 = HTTPValidationError
+export const GetScreeningBench422 = HTTPValidationError
 export type GetScreeningQueueParams = { readonly "scope_id": string, readonly "stage": "title_abstract" | "full_text", readonly "topic_id"?: string | null, readonly "after"?: Id | null, readonly "limit"?: number, readonly "X-Kittum-Reviewer": Id }
 export const GetScreeningQueueParams = Schema.Struct({ "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Schema.Literals(["title_abstract", "full_text"]).annotate({ "title": "Stage" }), "topic_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Topic Id", "description": "Needed only when the scope is screened in several topics." })), "after": Schema.optionalKey(Schema.Union([Id, Schema.Null]).annotate({ "title": "After", "description": "The last assignment the client holds." })), "limit": Schema.optionalKey(Schema.Number.annotate({ "title": "Limit", "default": 5 }).check(Schema.isInt().annotate({ "expected": "an integer" })).check(Schema.isGreaterThanOrEqualTo(1).annotate({ "expected": "a value greater than or equal to 1" })).check(Schema.isLessThanOrEqualTo(50).annotate({ "expected": "a value less than or equal to 50" }))), "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
 export type GetScreeningQueue200 = ReadonlyArray<QueueItem>
@@ -1160,6 +1264,32 @@ export type OpenScreeningStage201 = StageInfo
 export const OpenScreeningStage201 = StageInfo
 export type OpenScreeningStage422 = HTTPValidationError
 export const OpenScreeningStage422 = HTTPValidationError
+export type RunScreeningBenchRequestJson = BenchRequest
+export const RunScreeningBenchRequestJson = BenchRequest
+export type RunScreeningBench201 = BenchResult
+export const RunScreeningBench201 = BenchResult
+export type RunScreeningBench422 = HTTPValidationError
+export const RunScreeningBench422 = HTTPValidationError
+export type BulkDecideScreeningParams = { readonly "X-Kittum-Reviewer": Id }
+export const BulkDecideScreeningParams = Schema.Struct({ "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type BulkDecideScreeningRequestJson = BulkDecideRequest
+export const BulkDecideScreeningRequestJson = BulkDecideRequest
+export type BulkDecideScreening200 = BulkResult
+export const BulkDecideScreening200 = BulkResult
+export type BulkDecideScreening422 = HTTPValidationError
+export const BulkDecideScreening422 = HTTPValidationError
+export type GetScreeningRecordPromptParams = { readonly "assignment_id"?: Id | null, readonly "item_ref"?: string | null, readonly "X-Kittum-Reviewer": Id }
+export const GetScreeningRecordPromptParams = Schema.Struct({ "assignment_id": Schema.optionalKey(Schema.Union([Id, Schema.Null]).annotate({ "title": "Assignment Id", "description": "One of the caller's assignments (working topics)." })), "item_ref": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Item Ref", "description": "Any record, for the methods lead." })), "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
+export type GetScreeningRecordPrompt200 = RecordPrompt
+export const GetScreeningRecordPrompt200 = RecordPrompt
+export type GetScreeningRecordPrompt422 = HTTPValidationError
+export const GetScreeningRecordPrompt422 = HTTPValidationError
+export type RejudgeScreeningStageRequestJson = RejudgeRequest
+export const RejudgeScreeningStageRequestJson = RejudgeRequest
+export type RejudgeScreeningStage200 = StageInfo
+export const RejudgeScreeningStage200 = StageInfo
+export type RejudgeScreeningStage422 = HTTPValidationError
+export const RejudgeScreeningStage422 = HTTPValidationError
 export type GetScreeningStatusParams = { readonly "scope_id": string, readonly "stage": "title_abstract" | "full_text", readonly "topic_id"?: string | null, readonly "X-Kittum-Reviewer": Id }
 export const GetScreeningStatusParams = Schema.Struct({ "scope_id": Schema.String.annotate({ "title": "Scope Id" }), "stage": Schema.Literals(["title_abstract", "full_text"]).annotate({ "title": "Stage" }), "topic_id": Schema.optionalKey(Schema.Union([Schema.String, Schema.Null]).annotate({ "title": "Topic Id", "description": "Needed only when the scope is screened in several topics." })), "X-Kittum-Reviewer": Schema.suspend((): Schema.Codec<Id> => Id).annotate({ "description": "The caller's actor ID. A stand-in until the API has authentication." }) })
 export type GetScreeningStatus200 = ScopeStatus
@@ -1375,6 +1505,12 @@ export const make = (
     "getHealth": (options: Parameters<KittumApi["getHealth"]>[0]) => HttpClientRequest.get("/api/health").pipe(
       withResponse(options?.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(GetHealth200),
+      orElse: unexpectedStatus
+    }))
+    ),
+    "getJudgePromptTemplate": (options: Parameters<KittumApi["getJudgePromptTemplate"]>[0]) => HttpClientRequest.get("/api/judge/prompt-template").pipe(
+      withResponse(options?.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetJudgePromptTemplate200),
       orElse: unexpectedStatus
     }))
     ),
@@ -1712,6 +1848,37 @@ export const make = (
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(IngestCorpus201),
       "422": decodeError("IngestCorpus422", IngestCorpus422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "getKnownPool": (projectId, options: Parameters<KittumApi["getKnownPool"]>[1]) => __makePathRequest(HttpClientRequest.get, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/corpus/known-pool").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "topic_id": options.params["topic_id"] as any }),
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetKnownPool200),
+      "422": decodeError("GetKnownPool422", GetKnownPool422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "importKnownPool": (projectId, options: Parameters<KittumApi["importKnownPool"]>[1]) => __makePathRequest(HttpClientRequest.post, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/corpus/known-pool").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ImportKnownPool201),
+      "422": decodeError("ImportKnownPool422", ImportKnownPool422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "withdrawKnownPoolFile": (projectId, fileId, options: Parameters<KittumApi["withdrawKnownPoolFile"]>[2]) => __makePathRequest(HttpClientRequest.post, [projectId, fileId], () => "/api/projects/" + __encodePathParam(projectId) + "/corpus/known-pool/" + __encodePathParam(fileId) + "/withdraw").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(WithdrawKnownPoolFile200),
+      "422": decodeError("WithdrawKnownPoolFile422", WithdrawKnownPoolFile422),
       orElse: unexpectedStatus
     }))
     ))
@@ -2104,6 +2271,28 @@ export const make = (
       binaryRequest
     ))
   )),
+    "importDecisions": (projectId, options: Parameters<KittumApi["importDecisions"]>[1]) => __makePathRequest(HttpClientRequest.post, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/reports/working-export/import").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(ImportDecisions200),
+      "422": decodeError("ImportDecisions422", ImportDecisions422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "previewDecisionImport": (projectId, options: Parameters<KittumApi["previewDecisionImport"]>[1]) => __makePathRequest(HttpClientRequest.post, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/reports/working-export/import-preview").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(PreviewDecisionImport200),
+      "422": decodeError("PreviewDecisionImport422", PreviewDecisionImport422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "listMissingFullTexts": (projectId, options: Parameters<KittumApi["listMissingFullTexts"]>[1]) => __makePathRequest(HttpClientRequest.get, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/retrieval/missing").pipe(
     Effect.flatMap((request) => request.pipe(
       HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
@@ -2297,6 +2486,16 @@ export const make = (
     }))
     ))
   ),
+    "getScreeningBench": (projectId, benchId, options: Parameters<KittumApi["getScreeningBench"]>[2]) => __makePathRequest(HttpClientRequest.get, [projectId, benchId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/bench/" + __encodePathParam(benchId) + "").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetScreeningBench200),
+      "422": decodeError("GetScreeningBench422", GetScreeningBench422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
     "getScreeningQueue": (projectId, options: Parameters<KittumApi["getScreeningQueue"]>[1]) => __makePathRequest(HttpClientRequest.get, [projectId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/queue").pipe(
     Effect.flatMap((request) => request.pipe(
       HttpClientRequest.setUrlParams({ "scope_id": options.params["scope_id"] as any, "stage": options.params["stage"] as any, "topic_id": options.params["topic_id"] as any, "after": options.params["after"] as any, "limit": options.params["limit"] as any }),
@@ -2333,6 +2532,48 @@ export const make = (
       withResponse(options.config)(HttpClientResponse.matchStatus({
       "2xx": decodeSuccess(OpenScreeningStage201),
       "422": decodeError("OpenScreeningStage422", OpenScreeningStage422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "runScreeningBench": (projectId, stageId, options: Parameters<KittumApi["runScreeningBench"]>[2]) => __makePathRequest(HttpClientRequest.post, [projectId, stageId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/stages/" + __encodePathParam(stageId) + "/bench").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(RunScreeningBench201),
+      "422": decodeError("RunScreeningBench422", RunScreeningBench422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "bulkDecideScreening": (projectId, stageId, options: Parameters<KittumApi["bulkDecideScreening"]>[2]) => __makePathRequest(HttpClientRequest.post, [projectId, stageId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/stages/" + __encodePathParam(stageId) + "/bulk-decide").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(BulkDecideScreening200),
+      "422": decodeError("BulkDecideScreening422", BulkDecideScreening422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "getScreeningRecordPrompt": (projectId, stageId, options: Parameters<KittumApi["getScreeningRecordPrompt"]>[2]) => __makePathRequest(HttpClientRequest.get, [projectId, stageId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/stages/" + __encodePathParam(stageId) + "/prompt").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.setUrlParams({ "assignment_id": options.params["assignment_id"] as any, "item_ref": options.params["item_ref"] as any }),
+      HttpClientRequest.setHeaders({ "X-Kittum-Reviewer": options.params["X-Kittum-Reviewer"] ?? undefined }),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(GetScreeningRecordPrompt200),
+      "422": decodeError("GetScreeningRecordPrompt422", GetScreeningRecordPrompt422),
+      orElse: unexpectedStatus
+    }))
+    ))
+  ),
+    "rejudgeScreeningStage": (projectId, stageId, options: Parameters<KittumApi["rejudgeScreeningStage"]>[2]) => __makePathRequest(HttpClientRequest.post, [projectId, stageId], () => "/api/projects/" + __encodePathParam(projectId) + "/screening/stages/" + __encodePathParam(stageId) + "/rejudge").pipe(
+    Effect.flatMap((request) => request.pipe(
+      HttpClientRequest.bodyJsonUnsafe(options.payload),
+      withResponse(options.config)(HttpClientResponse.matchStatus({
+      "2xx": decodeSuccess(RejudgeScreeningStage200),
+      "422": decodeError("RejudgeScreeningStage422", RejudgeScreeningStage422),
       orElse: unexpectedStatus
     }))
     ))
@@ -2473,6 +2714,14 @@ readonly "renderPageStream": (documentId: string, page: string, options: { reado
 readonly "getHealth": {
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<GetHealth200, Config>, HttpClientError.HttpClientError | SchemaError>;
     <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<GetHealth200, Config | undefined>, HttpClientError.HttpClientError | SchemaError>;
+  }
+  /**
+* The fixed parts of the judge's prompt around the parts a topic's instructions fill in:
+* the stage rule each strictness selects, and the frame of the team's guidance.
+*/
+readonly "getJudgePromptTemplate": {
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config: Config }): Effect.Effect<WithOptionalResponse<GetJudgePromptTemplate200, Config>, HttpClientError.HttpClientError | SchemaError>;
+    <Config extends OperationConfig | undefined = undefined>(options: { readonly config?: Config | undefined } | undefined): Effect.Effect<WithOptionalResponse<GetJudgePromptTemplate200, Config | undefined>, HttpClientError.HttpClientError | SchemaError>;
   }
   /**
 * Anchor a verbatim quote. 404 if the layer does not contain it, 409 if it occurs more than
@@ -2732,6 +2981,28 @@ readonly "confirmExactDuplicates": {
 readonly "ingestCorpus": {
     <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof IngestCorpusRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<IngestCorpus201, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"IngestCorpus422", IngestCorpus422>>;
     <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof IngestCorpusRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<IngestCorpus201, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"IngestCorpus422", IngestCorpus422>>;
+  }
+  /**
+* The topic's known pool beside its searches: what they found of it, what they missed, and
+* what is new. For the methods lead only (403 otherwise).
+*/
+readonly "getKnownPool": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof GetKnownPoolParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<GetKnownPool200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetKnownPool422", GetKnownPool422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof GetKnownPoolParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<GetKnownPool200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetKnownPool422", GetKnownPool422>>;
+  }
+  /**
+* Add a file of papers the topic's searches should find to its known pool.
+*/
+readonly "importKnownPool": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof ImportKnownPoolRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<ImportKnownPool201, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"ImportKnownPool422", ImportKnownPool422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof ImportKnownPoolRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<ImportKnownPool201, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"ImportKnownPool422", ImportKnownPool422>>;
+  }
+  /**
+* Take a pool file out of the comparison. It stays listed, and in the ledger.
+*/
+readonly "withdrawKnownPoolFile": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, fileId: string, options: { readonly payload: typeof WithdrawKnownPoolFileRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<WithdrawKnownPoolFile200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"WithdrawKnownPoolFile422", WithdrawKnownPoolFile422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, fileId: string, options: { readonly payload: typeof WithdrawKnownPoolFileRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<WithdrawKnownPoolFile200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"WithdrawKnownPoolFile422", WithdrawKnownPoolFile422>>;
   }
   /**
 * Merge Route
@@ -3020,6 +3291,25 @@ readonly "exportWorkingSpreadsheet": {
 */
 readonly "exportWorkingSpreadsheetStream": (projectId: string, options: { readonly params: typeof ExportWorkingSpreadsheetParams.Encoded; readonly payload: typeof ExportWorkingSpreadsheetRequestJson.Encoded }) => Stream.Stream<Uint8Array, HttpClientError.HttpClientError>
   /**
+* Import an edited working export as its preview showed it: the file is stored by hash, one
+* batch event names it, its export, and the counts, and each changed row becomes one decision
+* with `origin: spreadsheet`. If anything changed since the preview, nothing is recorded (409).
+*/
+readonly "importDecisions": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof ImportDecisionsParams.Encoded; readonly payload: typeof ImportDecisionsRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<ImportDecisions200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"ImportDecisions422", ImportDecisions422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof ImportDecisionsParams.Encoded; readonly payload: typeof ImportDecisionsRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<ImportDecisions200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"ImportDecisions422", ImportDecisions422>>;
+  }
+  /**
+* What importing an edited working export would decide: the rows that change, the unchanged
+* ones, and the refused ones with their reasons. Records nothing. Only a screener's export of a
+* title and abstract stage in a working topic brings decisions back; a complete topic refuses
+* (422).
+*/
+readonly "previewDecisionImport": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof PreviewDecisionImportParams.Encoded; readonly payload: typeof PreviewDecisionImportRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<PreviewDecisionImport200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"PreviewDecisionImport422", PreviewDecisionImport422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly params: typeof PreviewDecisionImportParams.Encoded; readonly payload: typeof PreviewDecisionImportRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<PreviewDecisionImport200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"PreviewDecisionImport422", PreviewDecisionImport422>>;
+  }
+  /**
 * The reports sought for retrieval without a usable full text, with every attempt for each.
 */
 readonly "listMissingFullTexts": {
@@ -3161,6 +3451,14 @@ readonly "markScreeningWrongDocument": {
     <Config extends OperationConfig | undefined = undefined>(projectId: string, assignmentId: string, options: { readonly params: typeof MarkScreeningWrongDocumentParams.Encoded; readonly payload: typeof MarkScreeningWrongDocumentRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<MarkScreeningWrongDocument200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"MarkScreeningWrongDocument422", MarkScreeningWrongDocument422>>;
   }
   /**
+* A bench run's flips against the current readings and the human decisions, known includes
+* first. The methods lead's only.
+*/
+readonly "getScreeningBench": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, benchId: string, options: { readonly params: typeof GetScreeningBenchParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<GetScreeningBench200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetScreeningBench422", GetScreeningBench422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, benchId: string, options: { readonly params: typeof GetScreeningBenchParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<GetScreeningBench200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetScreeningBench422", GetScreeningBench422>>;
+  }
+  /**
 * The reviewer's next undecided assignments in queue order, after `after`. Items can appear
 * behind `after`; re-read without it when `remaining` in the stage status is higher than the
 * items held.
@@ -3191,6 +3489,43 @@ readonly "listScreeningStages": {
 readonly "openScreeningStage": {
     <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof OpenScreeningStageRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<OpenScreeningStage201, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"OpenScreeningStage422", OpenScreeningStage422>>;
     <Config extends OperationConfig | undefined = undefined>(projectId: string, options: { readonly payload: typeof OpenScreeningStageRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<OpenScreeningStage201, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"OpenScreeningStage422", OpenScreeningStage422>>;
+  }
+  /**
+* The test bench: the stage's judge, with a draft protocol's instructions, on the topic's
+* known includes among the stage's records and up to `limit` records people have settled. A
+* job judges them; read the result with `getScreeningBench`. 422 for a draft that does not
+* compile.
+*/
+readonly "runScreeningBench": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly payload: typeof RunScreeningBenchRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<RunScreeningBench201, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"RunScreeningBench422", RunScreeningBench422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly payload: typeof RunScreeningBenchRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<RunScreeningBench201, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"RunScreeningBench422", RunScreeningBench422>>;
+  }
+  /**
+* Decide many of the caller's own records at once, in a topic with working documentation:
+* include them, exclude them on one criterion, or accept the AI's proposal for each. One
+* decision per record with `origin: bulk`, and one batch event with the filter. A complete
+* topic refuses (422).
+*/
+readonly "bulkDecideScreening": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly params: typeof BulkDecideScreeningParams.Encoded; readonly payload: typeof BulkDecideScreeningRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<BulkDecideScreening200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"BulkDecideScreening422", BulkDecideScreening422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly params: typeof BulkDecideScreeningParams.Encoded; readonly payload: typeof BulkDecideScreeningRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<BulkDecideScreening200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"BulkDecideScreening422", BulkDecideScreening422>>;
+  }
+  /**
+* The prompt the AI judge reads a record with under the stage's protocol version.
+*/
+readonly "getScreeningRecordPrompt": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly params: typeof GetScreeningRecordPromptParams.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<GetScreeningRecordPrompt200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetScreeningRecordPrompt422", GetScreeningRecordPrompt422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly params: typeof GetScreeningRecordPromptParams.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<GetScreeningRecordPrompt200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"GetScreeningRecordPrompt422", GetScreeningRecordPrompt422>>;
+  }
+  /**
+* Re-judge an open stage under a newer published protocol version that changes only what
+* the AI reads (the topic's strictness and guidance, the criteria's keywords and examples).
+* New readings replace the old for display; the old stay in the ledger and the disclosure.
+* Human decisions stay as they are. 422 for a version that changes more.
+*/
+readonly "rejudgeScreeningStage": {
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly payload: typeof RejudgeScreeningStageRequestJson.Encoded; readonly config: Config }): Effect.Effect<WithOptionalResponse<RejudgeScreeningStage200, Config>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"RejudgeScreeningStage422", RejudgeScreeningStage422>>;
+    <Config extends OperationConfig | undefined = undefined>(projectId: string, stageId: string, options: { readonly payload: typeof RejudgeScreeningStageRequestJson.Encoded; readonly config?: Config | undefined }): Effect.Effect<WithOptionalResponse<RejudgeScreeningStage200, Config | undefined>, HttpClientError.HttpClientError | SchemaError | KittumApiError<"RejudgeScreeningStage422", RejudgeScreeningStage422>>;
   }
   /**
 * A screener's own counts, or the whole stage for anyone who does not screen it.

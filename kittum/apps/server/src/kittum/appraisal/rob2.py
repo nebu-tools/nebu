@@ -112,7 +112,6 @@ def _if(*questions: str, answers: tuple[Answer, ...], mode: str = "any") -> Cond
     return Condition.model_validate({"questions": questions, "answers": answers, "mode": mode})
 
 
-
 ROB2 = InstrumentDefinition(
     id="rob2",
     title="RoB 2 (randomized trials, effect of assignment to intervention)",
@@ -127,7 +126,12 @@ ROB2 = InstrumentDefinition(
             id="D1",
             title="Randomization process",
             questions=(
-                _q("1.1", "Sequence random?", "Did chance alone decide which group each participant joined?", _RANDOM),
+                _q(
+                    "1.1",
+                    "Sequence random?",
+                    "Did chance alone decide which group each participant joined?",
+                    _RANDOM,
+                ),
                 _q(
                     "1.2",
                     "Allocation concealed?",
