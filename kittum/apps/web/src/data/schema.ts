@@ -168,6 +168,9 @@ export const Criterion = Schema.Struct({
   text_de: Schema.String,
   /** A word or two for the screening strip; the strip shortens the text when there is none. */
   short_label: Schema.NullOr(Schema.String),
+  /** The reason the PRISMA flow names for records excluded on this criterion, if the protocol
+   * gives one; the flow words it from the criterion otherwise. */
+  exclusion_reason: Schema.NullOr(Schema.String),
   decidable_at: Schema.Array(Stage),
   /** Scope IDs; a criterion for a whole search topic lists every scope of the topic. */
   applies_to: Schema.Array(Schema.String),
@@ -201,6 +204,9 @@ export type SearchTopic = typeof SearchTopic.Type;
 const Question = Schema.Struct({
   id: Schema.String,
   label: Schema.String,
+  /** A few words that name the question where the full question does not fit, if the protocol
+   * gives them. */
+  short_label: Schema.NullOr(Schema.String),
   population: Schema.String,
   intervention: Schema.String,
   comparators: Schema.Array(Schema.String),

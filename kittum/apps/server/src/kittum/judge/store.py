@@ -9,21 +9,22 @@ from kittum.core import KittumError, canonical_json, content_hash, new_id
 from kittum.judge.prompt import (
     PROMPT_VERSION,
     build_request,
+    check_version,
     prompt_template_hash,
     schema_template_hash,
 )
 from kittum.judge.run import applicable, run_judge
-from kittum.judge.types import CriterionVerdict, Verdict
+from kittum.judge.types import CriterionVerdict, JudgeConfig, Verdict
 from kittum.ledger import EventDraft
 from kittum.models import weights_hash
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from kittum.core import Clock, Id
     from kittum.db import Tx
     from kittum.judge.run import JudgeRun
-    from kittum.judge.types import JudgeConfig, ScreeningItem
+    from kittum.judge.types import ScreeningItem
     from kittum.ledger import Ledger
     from kittum.models import LlmBackend, ModelRecipe
     from kittum.protocol import Criterion, JudgeInstructions
@@ -58,16 +59,16 @@ def _check_recipe(config: JudgeConfig, recipe: ModelRecipe) -> None:
 
 
 def register_config(tx: Tx, config: JudgeConfig, recipe: ModelRecipe, clock: Clock) -> None:
-    """Record a judge config once. Reusing its ID for anything else raises."""
+    """Record a judge config once, with the templates of its prompt version. Reusing its ID for
+    anything else raises."""
     _check_recipe(config, recipe)
-    if config.prompt_version != PROMPT_VERSION:
-        raise ValueError(f"unknown prompt version {config.prompt_version!r}")
+    version = check_version(config.prompt_version)
     values = {
         "model_recipe_id": recipe.id,
         "weights_hash": weights_hash(recipe),
-        "prompt_version": config.prompt_version,
-        "prompt_hash": prompt_template_hash(),
-        "schema_hash": schema_template_hash(),
+        "prompt_version": version,
+        "prompt_hash": prompt_template_hash(version),
+        "schema_hash": schema_template_hash(version),
         "decoding": decoding(config, recipe),
     }
     tx.execute(
@@ -99,6 +100,40 @@ def register_config(tx: Tx, config: JudgeConfig, recipe: ModelRecipe, clock: Clo
         )
 
 
+def load_config(tx: Tx, config_id: str) -> JudgeConfig | None:
+    """A registered judge config, with the prompt version it was registered with."""
+    row = tx.execute(
+        "select model_recipe_id, prompt_version, decoding from judge_config where id = %s",
+        (config_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    found = row["decoding"]
+    return JudgeConfig(
+        id=config_id,
+        model_id=row["model_recipe_id"],
+        prompt_version=row["prompt_version"],
+        temperature=found["temperature"],
+        seed=found["seed"],
+        max_tokens=found["max_tokens"],
+        max_attempts=found["max_attempts"],
+    )
+
+
+def config_prompt_version(tx: Tx, config_id: str) -> str:
+    """The prompt version a judge config renders with: the registered one, else the version a
+    `<label>@<version>` ID names (configs are registered when they first judge), else the version
+    new configs use."""
+    found = load_config(tx, config_id)
+    if found is not None:
+        return found.prompt_version
+    _, _, named = config_id.rpartition("@")
+    try:
+        return check_version(named)
+    except ValueError:
+        return PROMPT_VERSION
+
+
 def cache_key(
     item: ScreeningItem,
     scope_id: str,
@@ -107,11 +142,17 @@ def cache_key(
     recipe: ModelRecipe,
     protocol_hash: str,
     instructions: JudgeInstructions | None = None,
+    numbers: Mapping[str, int] | None = None,
 ) -> str:
     """Stage version, input, protocol, rendered prompt, weights, decoding, and schema. The
-    topic's instructions are in the rendered prompt."""
+    topic's instructions and (from `judge.v3`) the criteria's numbers are in the rendered
+    prompt."""
     request = build_request(
-        item, applicable(criteria, scope_id, item), config, instructions=instructions
+        item,
+        applicable(criteria, scope_id, item),
+        config,
+        instructions=instructions,
+        numbers=numbers,
     )
     return content_hash(
         {
@@ -266,6 +307,7 @@ def judge_many(
     clock: Clock,
     concurrency: int = 4,
     instructions: JudgeInstructions | None = None,
+    numbers: Mapping[str, int] | None = None,
 ) -> list[Verdict]:
     """Judge every item once, in input order, at most `concurrency` model calls at a time.
 
@@ -273,12 +315,14 @@ def judge_many(
     rerun of a finished batch costs nothing. If a concurrent batch records the same key first,
     its verdict is returned and no second row or event is written. New verdicts, their
     artifacts, and one `judge.verdict_recorded` event each are written through `tx`.
-    `instructions` are the topic's strictness and guidance (`kittum.protocol.JudgeInstructions`).
+    `instructions` are the topic's strictness and guidance (`kittum.protocol.JudgeInstructions`);
+    `numbers` the criteria's permanent numbers in the topic, by ID, for the prompt's headings.
     """
     _check_recipe(config, recipe)
     register_config(tx, config, recipe, clock)
     keys = [
-        cache_key(i, scope_id, criteria, config, recipe, protocol_hash, instructions) for i in items
+        cache_key(i, scope_id, criteria, config, recipe, protocol_hash, instructions, numbers)
+        for i in items
     ]
     rows = tx.execute(
         "select * from verdict where project_id = %s and cache_key = any(%s)",
@@ -290,7 +334,9 @@ def judge_many(
         with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
             runs = list(
                 pool.map(
-                    lambda item: run_judge(item, scope_id, criteria, config, backend, instructions),
+                    lambda item: run_judge(
+                        item, scope_id, criteria, config, backend, instructions, numbers
+                    ),
                     todo.values(),
                 )
             )

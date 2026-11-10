@@ -2,16 +2,21 @@
 // open menu never triggers screen keys.
 import { useEffect, useEffectEvent } from "react";
 
-const typing = (target: EventTarget | null) =>
+// A checkbox or radio takes no typed text, so the screen's keys still work while one has focus
+// (Space and Enter stay the control's own).
+const typing = (target: EventTarget | null, key: string) =>
   target instanceof HTMLElement &&
-  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
+  (target.isContentEditable ||
+    ["TEXTAREA", "SELECT"].includes(target.tagName) ||
+    (target instanceof HTMLInputElement &&
+      !(["checkbox", "radio"].includes(target.type) && key !== " " && key !== "Enter")));
 
 const blocked = (event: KeyboardEvent) =>
   event.defaultPrevented ||
   event.metaKey ||
   event.ctrlKey ||
   event.altKey ||
-  typing(event.target) ||
+  typing(event.target, event.key) ||
   document.querySelector("[role=dialog][data-open], [role=menu], [data-popup-open]") !== null;
 
 /**

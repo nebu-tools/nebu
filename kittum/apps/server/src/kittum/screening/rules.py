@@ -111,6 +111,12 @@ def criteria_for(topic: SearchTopic, scope_id: str, stage: Stage) -> tuple[Crite
     )
 
 
+def criterion_numbers(topic: SearchTopic) -> dict[str, int]:
+    """Each criterion's permanent number: its place in the topic's criteria, from 1. Every screen
+    and export names a criterion by this number, whatever stage shows only some of them."""
+    return {c.id: n for n, c in enumerate(topic.criteria, start=1)}
+
+
 def percent_of(percent: str, n: int) -> int:
     """How many of `n` items a protocol percentage asks for, rounded up: any share above zero
     gets at least one."""

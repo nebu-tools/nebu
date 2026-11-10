@@ -26,8 +26,8 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from kittum.appraisal import Appraisal
 from kittum.appraisal import appraisals as load_appraisals
 from kittum.core import Id, KittumError, NotFoundError, Record
-from kittum.judge import USER_TEMPLATE, instructions_hash
-from kittum.ledger import PostgresLedger
+from kittum.judge import USER_TEMPLATES, instructions_hash
+from kittum.ledger import PostgresLedger, VerifyReport, verify_chain
 from kittum.protocol import (
     DocumentationLevel,
     ReviewProtocol,
@@ -394,6 +394,9 @@ class Review(Record):
     """The accepted extraction values at the cutoff, the latest per semantic key."""
     appraisals: tuple[Appraisal, ...] = ()
     """The risk-of-bias appraisals at the cutoff, by study, report, and result."""
+    integrity: VerifyReport | None = None
+    """The hash chain of the events through the cutoff, checked as the review was read. A
+    broken chain makes every report of this review an unverified draft."""
 
     @property
     def document(self) -> ReviewProtocol:
@@ -502,10 +505,11 @@ def load_review(
             events,
             {j.id: j.model_dump(mode="json") for j in judges},
             store,
-            judge_template=USER_TEMPLATE,
+            judge_templates=USER_TEMPLATES,
         ),
         extracted=load_extracted(tx, project_id, cutoff),
         appraisals=tuple(load_appraisals(tx, project_id, cutoff_seq=cutoff)),
+        integrity=verify_chain(project_id, events),
     )
 
 

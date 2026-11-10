@@ -49,6 +49,7 @@ from kittum.screening import (
     StageSpec,
     bench_handler,
     criteria_for,
+    criterion_numbers,
     judge_handler,
     topic_for,
 )
@@ -381,13 +382,18 @@ def recorded_backend(
     strict: bool = False,
 ) -> RecordedBackend:
     """Recorded completions keyed by the exact request the judge sends for each record, with a
-    topic's instructions if it has any. A `strict` backend has no answer for any other request,
-    so a prompt without the instructions fails the call."""
+    topic's instructions if it has any and its criteria's numbers. A `strict` backend has no
+    answer for any other request, so a prompt without the instructions fails the call."""
+    numbers = criterion_numbers(topic_for(compile(protocol_source()).protocol, SCOPE, None))
     table = {}
     for r in records:
         item = ScreeningItem(item_ref=r.item_ref, stage=stage, title=r.title, text=r.text)
         request = build_request(
-            item, applicable(criteria, SCOPE, item), CONFIG, instructions=instructions
+            item,
+            applicable(criteria, SCOPE, item),
+            CONFIG,
+            instructions=instructions,
+            numbers=numbers,
         )
         found = (answers or {}).get(r.item_ref)
         table[RecordedBackend.key(request)] = found or (

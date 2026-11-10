@@ -5,9 +5,8 @@
 // verdict, rationale, and quote; `,` and `.` step through them, and the record marks the verified
 // quote of the one in view. The queue holds human disagreements only, so being in it says nothing
 // about the AI.
-import { useRouteContext } from "@tanstack/react-router";
+import { Link, useRouteContext } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
 
 import type {
   AdjudicationItem,
@@ -19,10 +18,13 @@ import type {
   Outcome,
   QuoteSpan,
   ReviewerColumn,
+  ScopeStatus,
   StageInfo,
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
 import { codePointIndex } from "../../lib/codepoints.ts";
+import { Button } from "../../ui/Button.tsx";
+import { EmptyState } from "../../ui/Empty.tsx";
 import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { OUTCOMES, Status, VERDICTS } from "../../ui/Status.tsx";
@@ -31,7 +33,9 @@ import { PdfViewer } from "../pdf/PdfViewer.tsx";
 import type { PageHighlight } from "../pdf/PdfViewer.tsx";
 import { AiReading } from "../screening/AiReading.tsx";
 import { Mentions, useEvidence } from "../screening/evidence.tsx";
+import { shortQuestion } from "../screening/FullText.tsx";
 import { Marked, orderSections, placeQuote } from "../screening/RecordText.tsx";
+import { byKey, keyOf, numberOf } from "../screening/criteria.ts";
 
 interface Conflict {
   readonly stage: StageInfo;
@@ -42,22 +46,19 @@ const STAGE_LABEL = { title_abstract: "Title and abstract", full_text: "Full tex
 
 export function AdjudicationQueue() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, adjudicatedStages } = useProject();
+  const { project, me, labels, scopeLabel, adjudicatedStages, screeningStage } = useProject();
   const [conflicts, setConflicts] = useState<ReadonlyArray<Conflict> | null>(null);
+  const [counts, setCounts] = useState<ReadonlyArray<ScopeStatus | null>>([]);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
     let live = true;
+    const caller = { projectId: project.id, as: me.actor_id };
     Promise.all(
       adjudicatedStages.map((stage) =>
         run(
-          workbench.adjudications({
-            projectId: project.id,
-            as: me.actor_id,
-            scopeId: stage.scope_id,
-            stage: stage.stage,
-          }),
+          workbench.adjudications({ ...caller, scopeId: stage.scope_id, stage: stage.stage }),
         ).then((items) => items.map((item) => ({ stage, item }))),
       ),
     ).then(
@@ -66,28 +67,134 @@ export function AdjudicationQueue() {
         live &&
         setError(e instanceof WorkbenchError ? e.message : "Kittum could not load the conflicts."),
     );
+    // The figures for the empty queue: what each stage has settled so far.
+    Promise.all(
+      adjudicatedStages.map((stage) =>
+        run(workbench.status({ ...caller, scopeId: stage.scope_id, stage: stage.stage })).catch(
+          () => null,
+        ),
+      ),
+    ).then((found) => live && setCounts(found));
     return () => {
       live = false;
     };
   }, [workbench, project.id, me.actor_id, adjudicatedStages, reload]);
 
+  const params = { projectId: project.id };
+  // The table lists the records a person screens; an adjudicator who screens nothing has none.
+  const screensToo =
+    screeningStage("title_abstract") !== null || screeningStage("full_text") !== null;
+  const exits = (
+    <>
+      <Link
+        to="/p/$projectId/progress"
+        params={params}
+        className="rounded-[4px] border border-rule-strong bg-sheet px-3 py-1.5 text-sm hover:bg-sheet-2"
+      >
+        See the review&rsquo;s progress
+      </Link>
+      {screensToo ? (
+        <Link
+          to="/p/$projectId/screening/table"
+          params={params}
+          className="rounded-[4px] border border-rule-strong bg-sheet px-3 py-1.5 text-sm hover:bg-sheet-2"
+        >
+          Review your decisions
+        </Link>
+      ) : null}
+    </>
+  );
+
   if (adjudicatedStages.length === 0) {
     return (
-      <Message title="Nothing to adjudicate">
+      <EmptyState title="Nothing to adjudicate" actions={exits}>
         You adjudicate no screening stage of this review. The methods lead names the adjudicators
         when opening a stage.
-      </Message>
+      </EmptyState>
     );
   }
-  if (error) return <Message title="Kittum could not load the conflicts">{error}</Message>;
-  if (conflicts === null) return <Message title="Loading the conflicts" />;
+  if (error) {
+    return (
+      <EmptyState title="Kittum could not load the conflicts">
+        <span role="alert">{error}</span>
+      </EmptyState>
+    );
+  }
+  if (conflicts === null) return <p className="px-8 py-10 text-ink-2">Loading the conflicts.</p>;
   const [first] = conflicts;
   if (!first) {
+    const scopeIds = [...new Set(adjudicatedStages.map((s) => s.scope_id))];
+    const oneScope = scopeIds.length === 1 ? scopeIds[0] : undefined;
+    const showResolved = counts.some((c) => c?.metrics?.conflicts_resolved !== undefined);
     return (
-      <Message title="No open conflicts">
-        A record comes here when two people screen it differently. You see their decisions side by
-        side, and the AI&rsquo;s reading only after you decide.
-      </Message>
+      <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
+        {/* The same strip as the screening queues: where this is. */}
+        <div className="flex h-9 items-center border-b border-rule bg-paper px-4 text-xs text-ink-2">
+          <span className="truncate" title={oneScope ? scopeLabel(oneScope) : undefined}>
+            {oneScope
+              ? `${labels.scope}: ${shortQuestion(scopeLabel(oneScope))}`
+              : `${adjudicatedStages.length} stages you adjudicate`}
+          </span>
+        </div>
+        <div className="min-h-0 overflow-y-auto">
+          <EmptyState
+            title="No conflicts assigned to you"
+            testId="adjudication-empty"
+            actions={exits}
+          >
+            <p>A record comes here when two screeners disagree.</p>
+            <table
+              className="mt-6 w-full text-left text-md text-ink"
+              data-testid="adjudication-stages"
+            >
+              <thead>
+                <tr className="border-b border-rule-strong text-sm text-ink-2">
+                  <th className="py-1.5 pr-6 font-medium">Stage</th>
+                  {oneScope ? null : <th className="py-1.5 pr-6 font-medium">{labels.scope}</th>}
+                  <th className="py-1.5 pr-6 text-right font-medium">Open conflicts for you</th>
+                  {showResolved ? (
+                    <th className="py-1.5 pr-6 text-right font-medium">Resolved</th>
+                  ) : null}
+                  <th
+                    className="py-1.5 pl-6 text-right font-medium"
+                    title="Records the screeners have decided, out of all records in the stage"
+                  >
+                    Screened in this review
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {adjudicatedStages.map((stage, i) => {
+                  const status = counts[i];
+                  return (
+                    <tr key={`${stage.stage}-${stage.scope_id}`} className="border-b border-rule">
+                      <td className="py-2 pr-6">{STAGE_LABEL[stage.stage]}</td>
+                      {oneScope ? null : (
+                        <td className="py-2 pr-6" title={scopeLabel(stage.scope_id)}>
+                          {shortQuestion(scopeLabel(stage.scope_id), 40)}
+                        </td>
+                      )}
+                      <td className="py-2 pr-6 text-right tabular-nums">
+                        {status?.conflicts ?? 0}
+                      </td>
+                      {showResolved ? (
+                        <td className="py-2 pr-6 text-right tabular-nums">
+                          {status?.metrics?.conflicts_resolved ?? "–"}
+                        </td>
+                      ) : null}
+                      <td className="py-2 pl-6 text-right tabular-nums">
+                        {status
+                          ? `${status.screened} of ${status.screened + status.remaining}`
+                          : "–"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </EmptyState>
+        </div>
+      </div>
     );
   }
   return (
@@ -249,7 +356,7 @@ function ConflictView({
     ],
   );
 
-  useKeys((event) => {
+  const handle = (event: { readonly key: string; readonly repeat: boolean }): boolean => {
     if (event.repeat) return true;
     const key = event.key;
     if (result) {
@@ -283,7 +390,7 @@ function ConflictView({
     if (armed) {
       setArmed(false);
       if (key === "Escape") return true;
-      const criterion = /^[1-9]$/.test(key) ? criteria[Number(key) - 1] : undefined;
+      const criterion = /^[1-9]$/.test(key) ? byKey(criteria, key) : undefined;
       if (criterion) void commit({ outcome: "exclude", reason: criterion.id });
       else if (/^[1-9]$/.test(key)) setNotice(`There is no criterion ${key}.`);
       return true;
@@ -335,7 +442,10 @@ function ConflictView({
       default:
         return false;
     }
-  });
+  };
+  useKeys(handle);
+  /** A click on a button does what its key does. */
+  const press = (key: string) => handle({ key, repeat: false });
 
   // Before the decision the page shows the adjudicator's own evidence work; after it, the AI's
   // verified quote of the criterion in view.
@@ -359,14 +469,15 @@ function ConflictView({
   return (
     <div className="grid h-full grid-rows-[auto_minmax(0,1fr)_auto]">
       <div className="flex h-9 items-center gap-4 border-b border-rule bg-paper px-4 text-xs">
-        <span className="text-ink-2">
-          {STAGE_LABEL[stage.stage]}, {labels.scope.toLowerCase()} {scopeLabel(stage.scope_id)}
+        <span className="text-ink-2">{STAGE_LABEL[stage.stage]}</span>
+        <span className="min-w-0 truncate text-ink-2" title={scopeLabel(stage.scope_id)}>
+          {labels.scope}: {shortQuestion(scopeLabel(stage.scope_id))}
         </span>
-        <span className="ml-auto text-ink-3">
+        <span className="ml-auto text-ink-2">
           {waiting} {waiting === 1 ? "conflict" : "conflicts"} waiting for you
         </span>
       </div>
-      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(420px,40%)]">
+      <div className="grid min-h-0 grid-cols-[minmax(0,1fr)_minmax(420px,40%)] bg-paper">
         {!fullText ? (
           <RecordPane
             item={item}
@@ -395,7 +506,7 @@ function ConflictView({
           <p className="px-10 py-10 text-ink-3">Loading the full text.</p>
         )}
         <aside
-          className="flex min-h-0 flex-col overflow-y-auto border-l border-rule-strong bg-sheet"
+          className="my-3 mr-3 flex min-h-0 flex-col overflow-y-auto rounded-[6px] bg-raised shadow-raised"
           aria-label="Decisions"
         >
           {fullText ? (
@@ -463,34 +574,100 @@ function ConflictView({
               ) : null}
               <KeyHint keys={[",", "."]}>The AI&rsquo;s criteria</KeyHint>
               <KeyHint keys={["q"]}>Show the quote</KeyHint>
-              <KeyHint keys={[" "]}>Next conflict</KeyHint>
+              <Button
+                kind="primary"
+                size="sm"
+                keys={[" "]}
+                onMouseDown={keepFocus}
+                onClick={() => press(" ")}
+              >
+                Next conflict
+              </Button>
             </span>
           </div>
         ) : (
-          <div className="flex h-10 items-center gap-5 px-4 text-sm">
-            {item.columns.map((column, index) => (
-              <KeyHint key={column.label} keys={[String(index + 1)]}>
-                Adopt {column.label}
-              </KeyHint>
-            ))}
-            <span className="text-ink-3">or your own:</span>
-            <KeyHint keys={["i"]}>{OUTCOMES.include.label}</KeyHint>
-            <span className="text-exclude">
-              <KeyHint keys={["e"]} on={armed}>
-                {armed
-                  ? `Now press 1 to ${criteria.length} for the criterion`
-                  : "Exclude on a criterion"}
-              </KeyHint>
-            </span>
-            {stage.stage === "title_abstract" ? (
-              <KeyHint keys={["u"]}>{OUTCOMES.unclear.label}</KeyHint>
+          <div className="flex min-h-12 flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-2 text-sm">
+            {armed ? (
+              <>
+                <span className="mr-1 text-exclude">Exclude on</span>
+                {criteria.map((c) => (
+                  <Button
+                    key={c.id}
+                    kind="danger"
+                    size="sm"
+                    keys={[keyOf(criteria, c.id)]}
+                    disabled={busy}
+                    title={c.text_en}
+                    onMouseDown={keepFocus}
+                    onClick={() => press(keyOf(criteria, c.id))}
+                  >
+                    {labels[c.slot] ?? c.slot}
+                  </Button>
+                ))}
+                <Button
+                  kind="quiet"
+                  size="sm"
+                  keys={["Escape"]}
+                  onMouseDown={keepFocus}
+                  onClick={() => press("Escape")}
+                >
+                  Cancel
+                </Button>
+              </>
             ) : (
               <>
+                {item.columns.map((column, index) => (
+                  <Button
+                    key={column.label}
+                    size="sm"
+                    keys={[String(index + 1)]}
+                    disabled={busy}
+                    onMouseDown={keepFocus}
+                    onClick={() => press(String(index + 1))}
+                  >
+                    Adopt {column.label}
+                  </Button>
+                ))}
+                <span className="mx-1 text-ink-2">or your own</span>
+                <Button
+                  size="sm"
+                  keys={["i"]}
+                  disabled={busy}
+                  onMouseDown={keepFocus}
+                  onClick={() => press("i")}
+                >
+                  {OUTCOMES.include.label}
+                </Button>
+                <Button
+                  kind="danger"
+                  size="sm"
+                  keys={["e"]}
+                  disabled={busy}
+                  onMouseDown={keepFocus}
+                  onClick={() => press("e")}
+                >
+                  Exclude on a criterion
+                </Button>
+                {stage.stage === "title_abstract" ? (
+                  <Button
+                    size="sm"
+                    keys={["u"]}
+                    disabled={busy}
+                    onMouseDown={keepFocus}
+                    onClick={() => press("u")}
+                  >
+                    {OUTCOMES.unclear.label}
+                  </Button>
+                ) : null}
+              </>
+            )}
+            {stage.stage === "title_abstract" || armed ? null : (
+              <span className="ml-3 flex items-center gap-4">
                 <KeyHint keys={[",", "."]}>Mentions</KeyHint>
                 <KeyHint keys={["Enter"]}>
-                  {evidence.selection ? "Adopt selection" : "Adopt"}
+                  {evidence.selection ? "Adopt selection" : "Adopt evidence"}
                 </KeyHint>
-              </>
+              </span>
             )}
             <span
               className="ml-auto truncate text-ink-2"
@@ -508,6 +685,9 @@ function ConflictView({
   );
 }
 
+/** Buttons in the footer keep the keyboard focus where it was, so keys go on working. */
+const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault();
+
 const sameAs = (result: AdjudicationResult, column: ReviewerColumn) =>
   result.outcome === column.outcome && result.reason_criterion_id === column.reason_criterion_id;
 
@@ -516,9 +696,8 @@ const criterionLabel = (
   criteria: ReadonlyArray<Criterion>,
   labels: Record<string, string>,
 ) => {
-  const index = criteria.findIndex((c) => c.id === id);
-  const criterion = criteria[index];
-  return criterion ? `${index + 1} ${labels[criterion.slot] ?? criterion.slot}` : id;
+  const criterion = criteria.find((c) => c.id === id);
+  return criterion ? `${numberOf(criteria, id)} ${labels[criterion.slot] ?? criterion.slot}` : id;
 };
 
 function RecordPane({
@@ -542,7 +721,10 @@ function RecordPane({
     document.querySelector("[data-reveal-quote]")?.scrollIntoView({ block: "center" });
   }, [quote, showQuote]);
   return (
-    <article className="overflow-y-auto bg-sheet px-10 pt-7 pb-10" aria-label="Record">
+    <article
+      className="m-3 overflow-y-auto rounded-[6px] bg-raised px-10 pt-7 pb-10 shadow-raised"
+      aria-label="Record"
+    >
       <p className="text-xs text-ink-2">{facts}</p>
       <h1
         className="mt-2 max-w-[68ch] text-xl font-semibold tracking-[-0.01em] text-balance"
@@ -675,7 +857,7 @@ function YourEvidence({
             >
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-ink-2">
-                  {index + 1} {labels[c.slot] ?? c.slot}
+                  {numberOf(criteria, c.id)} {labels[c.slot] ?? c.slot}
                 </span>
                 {state.evidence.length > 0 ? (
                   <span className="ml-auto text-ink-2">
@@ -758,7 +940,7 @@ function AiColumn({
             >
               <AiReading
                 criterion={{
-                  number: criterion ? index + 1 : null,
+                  number: criterion ? numberOf(criteria, criterion.id) : null,
                   label: criterion ? (labels[criterion.slot] ?? criterion.slot) : c.criterion_id,
                   text: criterion?.text_en ?? null,
                 }}
@@ -787,12 +969,3 @@ function AiColumn({
 
 /** At full text the title is in the header, not on a PDF page, so there is nothing to mark. */
 const IN_TITLE = "It is in the record's title, not on the page.";
-
-function Message({ title, children }: { title: string; children?: ReactNode }) {
-  return (
-    <div className="mx-auto max-w-[640px] px-10 py-16">
-      <h1 className="text-xl font-semibold">{title}</h1>
-      {children ? <p className="mt-2 text-md text-ink-2">{children}</p> : null}
-    </div>
-  );
-}

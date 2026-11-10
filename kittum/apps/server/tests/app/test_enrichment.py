@@ -299,11 +299,7 @@ def test_a_lead_enriches_the_corpus_and_fetches_open_access_full_texts(
         assert refused.status_code == 403, path
     # The ledger tells a reviewer that it holds, not how many events of which type it has.
     theirs = ok(client.get(f"/api/projects/{pid}/ledger/verify", headers=as_sam))
-    assert theirs["ok"] and (theirs["by_type"], theirs["events"], theirs["verify"]) == (
-        None,
-        None,
-        None,
-    )
+    assert theirs["ok"] and not {"by_type", "events", "verify"} & theirs.keys()
 
     # The lead uploads one trial by hand, then fetches the rest from open access.
     vitamin_c = report_of["10.1186/s12916-026-05037-x"]

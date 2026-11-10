@@ -8,7 +8,7 @@ import type { Page } from "@playwright/test";
  */
 export const includeAll = async (page: Page, look?: (title: string) => Promise<void>) => {
   const title = page.getByTestId("record-title");
-  const finished = page.getByRole("heading", { name: "Queue finished" });
+  const finished = page.getByRole("heading", { name: "Your title and abstract queue is done" });
   const banner = page.getByTestId("ai-reveal");
   // The record on screen now, or null between records and while the AI is still reading: never
   // wait for a title that may not come back (as in review.spec.ts).

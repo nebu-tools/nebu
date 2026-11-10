@@ -1,6 +1,8 @@
-// A dense grid in the manner of a spreadsheet: 24px rows, hairline rules, a sticky header with a
+// A dense grid in the manner of a spreadsheet: 30px rows, hairline rules, a sticky header with a
 // ▾ menu per column (sort, "text contains", a checklist of values), resizable columns, and only
-// the rows on screen rendered, so 20,000 records scroll as easily as 20.
+// the rows on screen rendered, so 20,000 records scroll as easily as 20. Columns that may grow
+// share the room the others leave, so the grid fills its width. Where rows can be marked, a
+// checkbox column comes first, with a header checkbox for every row in view.
 import { Popover } from "@base-ui/react/popover";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
@@ -8,10 +10,15 @@ import type { ReactNode } from "react";
 import { active, EMPTY, filtered, toggleSort, valuesOf } from "./grid.ts";
 import type { Column, Filter, ViewState } from "./grid.ts";
 
-const ROW = 24;
-const HEADER = 26;
+const ROW = 30;
+const HEADER = 34;
+
+/** The height the grid needs for its rows: a sheet that holds a few rows ends at the last one
+ * (a scrollbar's room included), and a long one scrolls inside its frame. */
+export const gridHeight = (rows: number) => HEADER + (rows > 0 ? rows * ROW : 72) + 16;
 const OVERSCAN = 12;
 const MIN_WIDTH = 40;
+const MARK = 40;
 const SHOWN_VALUES = 300;
 
 interface GridProps<R> {
@@ -34,6 +41,16 @@ interface GridProps<R> {
   /** Marks a row, e.g. one the reviewer has decided. */
   readonly rowTone?: (row: R) => string;
   readonly label: string;
+  /** What to show when no row passes the filters. */
+  readonly empty?: ReactNode;
+  /** Checkboxes that mark rows: one per row (Shift extends from the last one), and one in the
+   * header for every row in view. */
+  readonly markable?: {
+    readonly onToggle: (index: number, shift: boolean) => void;
+    readonly onAll: (on: boolean) => void;
+    /** The row's name, for its checkbox's label. */
+    readonly name: (row: R) => string;
+  };
 }
 
 export function Grid<R>({
@@ -49,22 +66,43 @@ export function Grid<R>({
   rowKey,
   rowTone,
   label,
+  empty,
+  markable,
 }: GridProps<R>) {
   const scroller = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [height, setHeight] = useState(600);
+  const [room, setRoom] = useState(0);
   const byId = useMemo(() => new Map(columns.map((c) => [c.id, c])), [columns]);
-  const shown = state.columns.flatMap((id) => {
+  const fixed = state.columns.flatMap((id) => {
     const column = byId.get(id);
-    return column ? [{ column, width: state.widths[id] ?? column.width }] : [];
+    return column
+      ? [{ column, width: state.widths[id] ?? column.width, set: id in state.widths }]
+      : [];
   });
-  const total = shown.reduce((sum, c) => sum + c.width, 0);
+  // The room the columns leave goes to those that may grow, unless the reviewer sized them.
+  const spare = Math.max(
+    0,
+    room - (markable ? MARK : 0) - fixed.reduce((sum, c) => sum + c.width, 0),
+  );
+  const shares = fixed.reduce((sum, c) => sum + (c.set ? 0 : (c.column.grow ?? 0)), 0);
+  const shown = fixed.map((c) => ({
+    column: c.column,
+    width:
+      c.set || !shares ? c.width : c.width + Math.floor((spare * (c.column.grow ?? 0)) / shares),
+  }));
+  const lead = markable ? MARK : 0;
+  const total = lead + shown.reduce((sum, c) => sum + c.width, 0);
 
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    setHeight(el.clientHeight);
-    const observer = new ResizeObserver(() => setHeight(el.clientHeight));
+    const measure = () => {
+      setHeight(el.clientHeight);
+      setRoom(el.clientWidth);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
@@ -85,12 +123,12 @@ export function Grid<R>({
   return (
     <div
       ref={scroller}
-      className="relative h-full overflow-auto bg-sheet text-xs"
+      className="relative h-full overflow-auto bg-raised text-sm"
       onScroll={(e) => setScrollTop(e.currentTarget.scrollTop)}
       role="grid"
       aria-label={label}
       aria-rowcount={rows.length + 1}
-      aria-colcount={shown.length}
+      aria-colcount={shown.length + (markable ? 1 : 0)}
       data-testid="grid"
     >
       <div
@@ -99,6 +137,20 @@ export function Grid<R>({
         className="sticky top-0 z-10 flex border-b border-rule-strong bg-sheet-2"
         style={{ width: total, height: HEADER }}
       >
+        {markable ? (
+          <div
+            role="columnheader"
+            className="flex flex-none items-center justify-center border-r border-rule-strong"
+            style={{ width: MARK }}
+          >
+            <MarkAll
+              all={rows.length > 0 && rows.every((r) => marked?.has(rowKey(r)))}
+              some={rows.some((r) => marked?.has(rowKey(r)))}
+              count={rows.length}
+              onAll={markable.onAll}
+            />
+          </div>
+        ) : null}
         {shown.map(({ column, width }) => (
           <HeaderCell
             key={column.id}
@@ -128,7 +180,7 @@ export function Grid<R>({
                 isSelected
                   ? "bg-marker-soft shadow-[inset_2px_0_0_var(--marker-edge)]"
                   : isMarked
-                    ? "bg-petrol-wash"
+                    ? "bg-petrol-wash shadow-[inset_2px_0_0_var(--petrol)]"
                     : `${rowTone?.(row) ?? ""} hover:bg-sheet-2`
               } ${isMarked && isSelected ? "outline outline-1 -outline-offset-1 outline-petrol" : ""}`}
               style={{ top: index * ROW, height: ROW, width: total }}
@@ -138,11 +190,35 @@ export function Grid<R>({
               }}
               onDoubleClick={() => onOpen?.(index)}
             >
+              {markable ? (
+                <div
+                  role="gridcell"
+                  className="flex flex-none items-center justify-center border-r border-rule"
+                  style={{ width: MARK }}
+                  // The checkbox marks; it does not select the row.
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-petrol"
+                    checked={isMarked}
+                    aria-label={`Select ${markable.name(row)}`}
+                    onChange={() => undefined}
+                    onClick={(e) => {
+                      markable.onToggle(index, e.shiftKey);
+                      // After a mouse click the table's keys work again (a focused checkbox
+                      // would take them); from the keyboard, focus stays.
+                      if (e.detail > 0) e.currentTarget.blur();
+                    }}
+                  />
+                </div>
+              ) : null}
               {shown.map(({ column, width }) => (
                 <div
                   key={column.id}
                   role="gridcell"
-                  className={`flex-none truncate border-r border-rule px-1.5 leading-[23px] ${
+                  className={`flex-none truncate border-r border-rule px-2 leading-[29px] ${
                     column.align === "right" ? "text-right tabular-nums" : ""
                   }`}
                   style={{ width }}
@@ -156,7 +232,9 @@ export function Grid<R>({
         })}
       </div>
       {rows.length === 0 ? (
-        <p className="sticky left-0 px-3 py-4 text-ink-3">No rows match the filters.</p>
+        <div className="sticky left-0 px-4 py-6 text-ink-2">
+          {empty ?? "No rows match the filters."}
+        </div>
       ) : null}
     </div>
   );
@@ -201,26 +279,46 @@ function HeaderCell<R>({
     <div
       role="columnheader"
       aria-sort={sort ? (sort.desc ? "descending" : "ascending") : "none"}
-      className="relative flex flex-none items-center border-r border-rule-strong"
+      className={`group relative flex flex-none items-center border-r border-rule-strong ${
+        sort ? "bg-petrol-wash" : ""
+      }`}
       style={{ width }}
       data-column={column.id}
     >
       <button
         type="button"
-        className="flex h-full min-w-0 flex-1 items-center gap-1 px-1.5 text-left font-semibold text-ink-2 hover:text-ink"
-        title={`Sort by ${column.header}. Shift-click adds it to the sort.`}
+        className={`flex h-full min-w-0 flex-1 items-center gap-1 px-2 text-left font-semibold hover:text-ink ${
+          sort ? "text-ink" : "text-ink-2"
+        }`}
+        title={`${column.header}. ${
+          sort
+            ? `Sorted ${sort.desc ? "descending" : "ascending"}. Click to ${sort.desc ? "stop sorting" : "reverse"}.`
+            : "Click to sort."
+        } Shift-click adds it to the sort.`}
         aria-label={`Sort by ${column.header}`}
         onClick={(e) => onState((s) => ({ ...s, sort: toggleSort(s.sort, column.id, e.shiftKey) }))}
       >
-        <span className="truncate">{column.header}</span>
+        <span className="truncate">{column.short ?? column.header}</span>
         {sort ? (
-          <span className="flex-none text-petrol" aria-hidden="true">
+          <span
+            className="flex flex-none items-center text-petrol"
+            aria-hidden="true"
+            data-testid={`sorted-${column.id}`}
+          >
             {sort.desc ? "↓" : "↑"}
             {state.sort.length > 1 ? <sub className="text-[9px]">{place + 1}</sub> : null}
           </span>
-        ) : null}
+        ) : (
+          <span
+            className={`hidden flex-none text-ink-3 ${column.compact ? "" : "group-hover:inline"}`}
+            aria-hidden="true"
+          >
+            ↕
+          </span>
+        )}
       </button>
       <FilterMenu
+        floating={column.compact ?? false}
         column={column}
         filter={filter}
         sorted={sort ? (sort.desc ? "desc" : "asc") : null}
@@ -260,6 +358,7 @@ function HeaderCell<R>({
 }
 
 function FilterMenu<R>({
+  floating,
   column,
   filter,
   sorted,
@@ -267,6 +366,7 @@ function FilterMenu<R>({
   onFilter,
   onSort,
 }: {
+  floating: boolean;
   column: Column<R>;
   filter: Filter | undefined;
   sorted: "asc" | "desc" | null;
@@ -279,8 +379,12 @@ function FilterMenu<R>({
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger
-        className={`mr-0.5 flex h-[18px] w-[16px] flex-none items-center justify-center rounded-[2px] text-[10px] ${
+        className={`mr-1 flex h-[20px] w-[18px] flex-none items-center justify-center rounded-[3px] text-[11px] ${
           on ? "bg-petrol text-petrol-ink" : "text-ink-3 hover:bg-rule hover:text-ink"
+        } ${
+          floating && !on
+            ? "absolute top-[6px] right-0 bg-sheet-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[popup-open]:opacity-100"
+            : ""
         }`}
         aria-label={`Filter and sort ${column.header}${on ? " (filtered)" : ""}`}
         data-testid={`filter-${column.id}`}
@@ -455,5 +559,37 @@ function MenuButton({
     >
       {children}
     </button>
+  );
+}
+
+function MarkAll({
+  all,
+  some,
+  count,
+  onAll,
+}: {
+  all: boolean;
+  some: boolean;
+  count: number;
+  onAll: (on: boolean) => void;
+}) {
+  const box = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = some && !all;
+  }, [some, all]);
+  return (
+    <input
+      ref={box}
+      type="checkbox"
+      className="h-4 w-4 accent-petrol"
+      checked={all}
+      disabled={count === 0}
+      aria-label={all ? "Deselect every row in view" : `Select all ${count} rows in view`}
+      title={all ? "Deselect every row in view" : `Select all ${count} rows in view (a)`}
+      onChange={() => onAll(!all)}
+      onClick={(e) => {
+        if (e.detail > 0) e.currentTarget.blur();
+      }}
+    />
   );
 }

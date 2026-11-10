@@ -53,6 +53,7 @@ from kittum.screening import (
     Sentinel,
     StageSpec,
     criteria_for,
+    criterion_numbers,
     judge_handler,
     topic_for,
 )
@@ -154,6 +155,9 @@ class ReviewWorld:
         topic = topic_for(self.protocol.version.protocol, self.scope, self.topic)
         return criteria_for(topic, self.scope, stage)
 
+    def numbers(self) -> dict[str, int]:
+        return criterion_numbers(topic_for(self.protocol.version.protocol, self.scope, self.topic))
+
     def record(self, prefix: str) -> ScreeningRecord:
         (found,) = [r for r in self.records if r.title.startswith(prefix)]
         return found
@@ -244,7 +248,9 @@ class ReviewWorld:
         table = {}
         for r in [*records, *(s.record for s in self.sentinels)]:
             item = ScreeningItem(item_ref=r.item_ref, stage=stage, title=r.title, text=r.text)
-            request = build_request(item, applicable(criteria, self.scope, item), self.config)
+            request = build_request(
+                item, applicable(criteria, self.scope, item), self.config, numbers=self.numbers()
+            )
             table[RecordedBackend.key(request)] = answers(r, criteria)
         backend = RecordedBackend(table, model_identity="Qwen/Qwen3.8-27B")
         runner = functools.partial(

@@ -21,6 +21,7 @@ export function AiReading({
   markedAt,
   marked = true,
   compact,
+  named = true,
 }: {
   criterion: CriterionName;
   status: CriterionStatus;
@@ -34,18 +35,22 @@ export function AiReading({
   /** The quote is the one marked in the record now, so it shares the marker. */
   marked?: boolean;
   compact?: boolean;
+  /** Off where the card around it already names the criterion and its status. */
+  named?: boolean;
 }) {
   return (
     <div
       className={compact ? "grid gap-0.5 text-xs" : "grid gap-1 text-sm"}
       data-testid="ai-reading"
     >
-      <p className="flex flex-wrap items-baseline gap-x-2">
-        <span className="text-ink-2" data-testid="ai-criterion">
+      <p
+        className={`flex flex-wrap items-baseline gap-x-2 ${!named && !downgradedFrom ? "hidden" : ""}`}
+      >
+        <span className={`text-ink-2 ${named ? "" : "sr-only"}`} data-testid="ai-criterion">
           {criterion.number !== null ? `${criterion.number} ` : ""}
           {criterion.label}
         </span>
-        <Status term={VERDICTS[status]} />
+        {named ? <Status term={VERDICTS[status]} /> : null}
         {downgradedFrom ? (
           <span className="text-ink-3">
             The model said {VERDICTS[downgradedFrom].label.toLowerCase()}, but its quote failed

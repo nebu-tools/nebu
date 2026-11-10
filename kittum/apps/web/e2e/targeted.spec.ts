@@ -79,7 +79,7 @@ test("a targeted search: a pool screens, and a second opinion settles an unsure 
 
   await test.step("the protocol says working documentation, and the presets fill the mode", async () => {
     await page.goto(`/p/${pid}/protocol?as=${lead.lead}`);
-    await expect(page.getByTestId("documentation")).toContainText("Working.");
+    await expect(page.getByTestId("documentation")).toContainText("Working documentation");
     await page.keyboard.press("v"); // a new version, in the form
     await page.getByRole("button", { name: /^Start from the published version/ }).click();
     const mode = page.getByTestId("mode");
@@ -91,16 +91,22 @@ test("a targeted search: a pool screens, and a second opinion settles an unsure 
       "A confounder search for our own model.",
     );
     await mode.getByRole("button", { name: "Documented SLR" }).click();
-    await expect(mode.getByLabel("Screening mode")).toHaveValue("M1");
+    const modes = mode.getByRole("radiogroup", { name: "Screening mode" });
+    await expect(modes.getByRole("radio", { checked: true })).toHaveValue("M1");
+    await expect(mode.getByRole("button", { name: "Documented SLR" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(mode.getByLabel("Why this mode")).toHaveCount(0);
     await mode.getByRole("button", { name: "Targeted search" }).click();
-    await expect(mode.getByLabel("Screening mode")).toHaveValue("S");
+    await expect(modes.getByRole("radio", { checked: true })).toHaveValue("S");
+    await expect(modes.getByRole("radio", { name: /^Pool of screeners/ })).toBeChecked();
   });
 
   await test.step("the lead opens screening with a pool of two and the AI shown before", async () => {
     await page.goto(`/p/${pid}/setup?as=${lead.lead}`);
     const form = page.getByRole("form", { name: "Open a screening stage" });
-    await expect(form.getByTestId("stage-documentation")).toContainText("Working.");
+    await expect(form.getByTestId("stage-documentation")).toContainText("Working documentation");
     await expect(form.getByLabel("Sentinel file")).toHaveCount(0);
     await form.getByRole("checkbox", { name: "Ola Berg" }).uncheck();
     await form.getByLabel("When reviewers see the AI's reading").selectOption({

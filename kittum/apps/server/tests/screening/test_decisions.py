@@ -425,3 +425,34 @@ def test_full_text_decisions_need_one_reason_not_a_verdict_per_criterion(
         (human,) = [p for p in status.metrics.agreement if p.kind == "human_human"]
         assert human.items == 1
         assert world.ledger.verify(tx, world.project_id).ok
+
+
+def test_a_record_the_adjudicator_marks_unclear_goes_on_to_full_text(world: World) -> None:
+    """Unclear at title and abstract means include, whether the screeners agree on it or an
+    adjudicator decides it. The stage's outcome says include, so the record is sought for
+    retrieval and counted with the included ones, as the ledger's PRISMA flow counts it."""
+    a, b = world.people.a, world.people.b
+    title = "Efficacy and safety of lumacaftor"
+    with world.db.transaction() as tx:
+        a_item = item(world, a, title)
+        decide(world, tx, a, a_item.assignment_id, Decision(outcome="include"), a_item.etag)
+        b_item = item(world, b, title)
+        exclusion = Decision(outcome="exclude", reason_criterion_id="POP")
+        decide(world, tx, b, b_item.assignment_id, exclusion, b_item.etag)
+        (conflict,) = world.screening.adjudication_queue(
+            tx, world.project_id, world.people.adjudicator, SCOPE, STAGE
+        )
+        world.screening.adjudicate(
+            tx,
+            command_id=new_id(),
+            project_id=world.project_id,
+            adjudicator_id=world.people.adjudicator,
+            conflict_id=conflict.conflict_id,
+            expected_etag=conflict.etag,
+            decision=Decision(outcome="unclear"),
+            timing=timing(0),
+        )
+        outcomes = world.screening.outcomes(tx, world.project_id, SCOPE, STAGE)
+        assert outcomes[world.record(title).item_ref] == "include"
+        assert "unclear" not in outcomes.values()
+        assert world.ledger.verify(tx, world.project_id).ok

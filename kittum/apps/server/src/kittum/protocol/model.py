@@ -132,6 +132,9 @@ class ReviewQuestion(Record):
 
     id: Identifier
     label: LocalizedText
+    short_label: Text | None = Field(default=None, exclude_if=lambda v: v is None)
+    """A few words that name the question wherever the full question does not fit ("Phone
+    support vs usual care"). Left out of the protocol (and its hash) when empty."""
     population: LocalizedText
     intervention: LocalizedText
     comparators: tuple[Comparator, ...] = ()
@@ -173,6 +176,9 @@ class Criterion(Record):
     short_label: Text | None = Field(default=None, exclude_if=lambda v: v is None)
     """A word or two for the screening strip ("Adults", "RCT"); the full text stays on demand.
     Left out of the protocol (and its hash) when empty."""
+    exclusion_reason: Text | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The reason a paper gives for a record this criterion excludes ("Not a randomised
+    controlled trial"), as the PRISMA flow diagram prints it. Left out when empty."""
     keywords: tuple[Text, ...] = ()  # an exclusion quote must contain one of them, if any
     positive_examples: tuple[str, ...] = ()
     negative_examples: tuple[str, ...] = ()
@@ -274,18 +280,45 @@ type Guidance = Annotated[
 ]
 
 
-class JudgeInstructions(Record):
-    """The editable part of the AI judge's prompt for one search topic.
+def _user_template_placeholders(value: str) -> str:
+    missing = [p for p in USER_TEMPLATE_REQUIRED if p not in value]
+    if missing:
+        raise ValueError(
+            "The user message must keep " + " and ".join(missing) + ": Kittum puts the criteria"
+            " and the record there."
+        )
+    return value
 
-    Everything else in the prompt is fixed: the status definitions, the quote rules, the text
-    that tells the model the record is data, the record's hashed tag, and the answer schema. A
-    topic that sets neither field leaves them out of the protocol, so its content hash stays as
-    it was before topics had instructions."""
+
+USER_TEMPLATE_REQUIRED = ("{criteria}", "{text}")
+"""Placeholders a team's own user message must keep; `{stage}`, `{tag}`, and `{title}` are
+optional."""
+
+type PromptText = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=40000)
+]
+type UserTemplate = Annotated[PromptText, AfterValidator(_user_template_placeholders)]
+
+
+class JudgeInstructions(Record):
+    """The editable parts of the AI judge's prompt for one search topic.
+
+    The strictness and the guidance fill the stage rule. A team may also replace the whole
+    system message (`system_prompt`, where `{stage_rule}` marks where the stage rule and the
+    guidance go) and the user message (`user_template`, which must keep `{criteria}` and
+    `{text}`). The answer schema and Kittum's quote check stay: they are how Kittum reads and
+    checks an answer. The protocol's versions are the prompt's history; clearing a field goes back
+    to Kittum's wording. A topic that sets nothing leaves the instructions out of the protocol,
+    and unset fields stay out of it, so content hashes stay as they were before."""
 
     strictness: JudgeStrictness = "conservative"
     guidance: Guidance | None = None
     """The review team's own words for the model, slotted into the prompt after the stage rule:
     which records the team counts as relevant, terms it uses, cases it wants read one way."""
+    system_prompt: PromptText | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The team's own system message in place of Kittum's, or None for Kittum's."""
+    user_template: UserTemplate | None = Field(default=None, exclude_if=lambda v: v is None)
+    """The team's own user message template in place of Kittum's, or None for Kittum's."""
 
 
 def _default_instructions(value: JudgeInstructions) -> bool:

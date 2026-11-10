@@ -1,4 +1,7 @@
-// Title and abstract with protocol terms, entities, and (after a reveal) the AI's quoted span.
+// Title and abstract with protocol terms, entities, the AI's main quoted span (the marker), and
+// its other verified quotes, tinted by what they show: met in the include colour, not met in the
+// exclude colour.
+import { Fragment } from "react";
 import type { ReactNode } from "react";
 
 import type { Highlight, QuoteSpan } from "../../data/schema.ts";
@@ -10,6 +13,19 @@ interface Run {
   readonly criteria: ReadonlyArray<string>;
   readonly entities: ReadonlyArray<string>;
   readonly quote: boolean;
+  /** Another verified AI quote over this run, if any. */
+  readonly other: OtherQuote | null;
+}
+
+/** A verified AI quote besides the main one, as a UTF-16 range of the same text. */
+export interface OtherQuote {
+  readonly range: readonly [number, number];
+  readonly kind: "met" | "not_met";
+  readonly title: string;
+  /** The criterion's ID, so its row in the rail can light the quote up. */
+  readonly id?: string;
+  /** The criterion's number, set after the quote. */
+  readonly label?: string;
 }
 
 /**
@@ -22,6 +38,7 @@ const runs = (
   to: number,
   highlights: ReadonlyArray<Highlight>,
   quote: readonly [number, number] | null,
+  others: ReadonlyArray<OtherQuote> = [],
 ): Run[] => {
   const at = codePointIndex(text);
   const marks = highlights
@@ -32,9 +49,11 @@ const runs = (
     cuts.add(Math.max(s, from));
     cuts.add(Math.min(e, to));
   }
-  if (quote && quote[0] < to && quote[1] > from) {
-    cuts.add(Math.max(quote[0], from));
-    cuts.add(Math.min(quote[1], to));
+  for (const q of [quote, ...others.map((o) => o.range)]) {
+    if (q && q[0] < to && q[1] > from) {
+      cuts.add(Math.max(q[0], from));
+      cuts.add(Math.min(q[1], to));
+    }
   }
   const points = [...cuts].sort((a, b) => a - b);
   const out: Run[] = [];
@@ -48,6 +67,7 @@ const runs = (
       criteria: covering.filter((l) => l.startsWith("protocol:")).map((l) => l.slice(9)),
       entities: covering.filter((l) => l.startsWith("entity:")).map((l) => l.slice(7)),
       quote: quote !== null && quote[0] <= start && quote[1] >= end,
+      other: others.find((o) => o.range[0] <= start && o.range[1] >= end) ?? null,
     });
   }
   return out;
@@ -59,6 +79,10 @@ export function Marked({
   to = text.length,
   highlights,
   quote,
+  others = [],
+  quoteLabel,
+  quoteId,
+  lit,
   describe,
 }: {
   text: string;
@@ -66,6 +90,13 @@ export function Marked({
   to?: number;
   highlights: ReadonlyArray<Highlight>;
   quote: readonly [number, number] | null;
+  /** The AI's other verified quotes, tinted rather than marked. */
+  others?: ReadonlyArray<OtherQuote>;
+  /** The main quote's criterion number, set after it, and its criterion's ID. */
+  quoteLabel?: string | undefined;
+  quoteId?: string | undefined;
+  /** The criterion whose quote is lit up now (its rail row is hovered). */
+  lit?: string | null;
   describe: (criterionId: string) => string;
 }) {
   const nodes: ReactNode[] = [];
@@ -76,16 +107,23 @@ export function Marked({
     nodes.push(
       <mark
         key={`q${nodes.length}`}
-        className="evidence"
+        className={`evidence ${lit && lit === quoteId ? "ai-lit" : ""}`}
         data-reveal-quote=""
         title="The AI judge's quote"
       >
         {quoted}
       </mark>,
     );
+    // The criterion's number after the quote, outside it, so the quote's text stays the record's.
+    if (quoteLabel)
+      nodes.push(
+        <sup key={`qn${nodes.length}`} className="ai-num" data-kind="main" aria-hidden="true">
+          {quoteLabel}
+        </sup>,
+      );
     quoted = [];
   };
-  for (const run of runs(text, from, to, highlights, quote)) {
+  for (const run of runs(text, from, to, highlights, quote, others)) {
     const slice = text.slice(run.start, run.end);
     const classes = [run.criteria.length ? "term" : "", run.entities.length ? "entity" : ""].filter(
       Boolean,
@@ -93,13 +131,38 @@ export function Marked({
     const title = [...run.criteria.map(describe), ...run.entities.map((e) => `Entity: ${e}`)].join(
       "\n",
     );
-    const node: ReactNode = classes.length ? (
+    const plain: ReactNode = classes.length ? (
       <span key={`s${run.start}`} className={classes.join(" ")} title={title}>
         {slice}
       </span>
     ) : (
       slice
     );
+    const tint: ReactNode =
+      run.other && !run.quote ? (
+        <mark
+          key={`o${run.start}`}
+          className={`${run.other.kind === "met" ? "ai-met" : "ai-not-met"} ${
+            lit && lit === run.other.id ? "ai-lit" : ""
+          }`}
+          title={run.other.title}
+        >
+          {plain}
+        </mark>
+      ) : (
+        plain
+      );
+    const node: ReactNode =
+      run.other && !run.quote && run.other.label && run.end === run.other.range[1] ? (
+        <Fragment key={`of${run.start}`}>
+          {tint}
+          <sup className="ai-num" data-kind={run.other.kind} aria-hidden="true">
+            {run.other.label}
+          </sup>
+        </Fragment>
+      ) : (
+        tint
+      );
     if (run.quote) {
       quoted.push(node);
     } else {

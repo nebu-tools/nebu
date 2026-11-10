@@ -64,7 +64,7 @@ const fieldIndex = async (page: Page, projectId: string, runId: string, as: stri
  * population, each on the first protocol-term mention adopted as evidence. */
 const screenFullTexts = async (page: Page) => {
   const heading = page.getByRole("complementary", { name: "Criteria" }).getByRole("heading");
-  const finished = page.getByRole("heading", { name: "Full texts finished" });
+  const finished = page.getByRole("heading", { name: "Your available full-text queue is done" });
   const notice = page.getByTestId("fulltext-notice");
   const reveal = page.getByTestId("ai-reveal");
   for (;;) {
@@ -151,7 +151,11 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
     await sentinel.getByLabel("Sentinel PDF").setInputFiles(SENTINEL_PDF);
     await sentinel.getByRole("button", { name: "Add the sentinel" }).click();
     await expect(lead.getByTestId("retrieval-notice")).toContainText("Added the sentinel");
-    // It is no report: the list does not grow.
+    // It is no report: the reports sought stay three.
+    await expect(lead.getByTestId("retrieval-counts")).toHaveText(
+      "1 of 3 reports sought have a PDF",
+    );
+    await lead.getByRole("button", { name: /^All \d/ }).click();
     await expect(lead.getByTestId("retrieval-row")).toHaveCount(3);
   });
 
@@ -226,7 +230,7 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
     await dialog.getByRole("button", { name: "Request the run" }).click();
     await expect(lead.getByTestId("extraction-runs-notice")).toContainText("Requested a run");
     // The stack's worker runs it; the list looks again until it is done.
-    await expect(lead.getByTestId("run-status")).toHaveText("Ready to review", { timeout: 60_000 });
+    await expect(lead.getByTestId("run-status")).toHaveText("10 to verify", { timeout: 60_000 });
     await expect(lead.getByTestId("run-progress")).toHaveText("0 of 10 accepted");
     await expect(lead.getByTestId("extraction-run")).toContainText("Janus path");
     const runs = (await (
@@ -292,7 +296,7 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
     await page.keyboard.press("Enter"); // the one run
     await expect(page.getByTestId("accepted-count")).toHaveText("0 of 10 accepted");
     expect(at("participants", "intervention", "n_analysed")).toBe(0);
-    await expect(selected.getByTestId("field-value")).toHaveText("52participants");
+    await expect(selected.getByTestId("field-value")).toHaveText("52 participants");
     await expect(page.getByTestId("source-highlight").first()).toBeVisible();
     await page.waitForTimeout(700); // the source on screen past the floor, on a quick machine
     await acceptOnce(() => page.keyboard.press("Enter"), "0 of 10 accepted", "1 of 10 accepted");
@@ -334,16 +338,36 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
     await acceptOnce(() => value.press("Enter"), "1 of 10 accepted", "2 of 10 accepted");
     const row = page.getByTestId("field-row").nth(target);
     await expect(row.getByTestId("field-value")).toHaveText("6.5%");
-    await expect(row).toContainText("Edited");
+    await expect(row).toContainText("Accepted, edited");
   });
 
   await test.step("both values are among the accepted values, the edit with its own span", async () => {
-    await page.getByRole("link", { name: "Runs" }).click();
+    await page.getByRole("link", { name: "All runs" }).click();
     await expect(page.getByTestId("run-progress")).toHaveText("2 of 10 accepted");
+    // In the protocol's words and the schema's order, under their run and endpoint, each with
+    // its page and path; the values still to verify are listed with them.
     await expect(page.getByTestId("assertion")).toHaveText([
-      /^hba1cinterventionm12mean6\.5%/,
-      /^participantsinterventionbaselinen_analysed52participantscritical$/,
+      /CHW-led careBaselineAnalysed52 participantsCritical/,
+      /CHW-led care12 monthsMean6\.5%/,
     ]);
+    await expect(page.getByTestId("endpoint-group")).toHaveText([
+      /^Participants/,
+      /^HbA1c/,
+      /^Deaths/,
+    ]);
+    await expect(page.getByTestId("open-value")).toHaveCount(8);
+    const editedRow = page.getByTestId("assertion").filter({ hasText: "6.5%" });
+    await expect(editedRow).toContainText("p. 5 · Edited by hand");
+    await expect(editedRow).toContainText("Sam Okafor");
+    await expect(page.getByTestId("assertion").filter({ hasText: "Analysed" })).toContainText(
+      "Janus",
+    );
+    // "Edited by hand" opens the history: what the paths read, and the correction with its span.
+    await editedRow.getByRole("button", { name: "Edited by hand" }).click();
+    const history = page.getByTestId("field-history");
+    await expect(history).toContainText("Sam Okafor corrected the value by hand to 6.5%");
+    await expect(history).toContainText("in place of what Janus read (missing)");
+    await expect(history).toContainText("From page 5");
     const assertions = (await (
       await page.request.get(`/api/projects/${projectId}/extraction/assertions`, {
         headers: { "X-Kittum-Reviewer": sam },
@@ -373,7 +397,9 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
     // Rendering the disclosure next leaves the values' downloads working, and the other way round.
     await lead.keyboard.press("a");
     await expect(lead.getByTestId("disclosure")).toBeVisible();
-    const disclosureJson = lead.getByRole("link", { name: "ai_disclosure.json" });
+    const disclosureJson = lead
+      .getByTestId("disclosure")
+      .getByRole("link", { name: "Download JSON" });
     await expect(disclosureJson).toBeVisible();
     const fetched = (link: typeof disclosureJson) =>
       link.evaluate((a: HTMLAnchorElement) =>
@@ -382,12 +408,14 @@ test("a reviewer accepts and corrects values Janus read from a trial the screene
           () => false,
         ),
       );
-    expect(await fetched(lead.getByRole("link", { name: "extracted_values.json" }))).toBe(true);
+    const extractedFile = (name: string) =>
+      lead.getByTestId("extracted").getByRole("link", { name: `Download ${name}` });
+    expect(await fetched(extractedFile("JSON"))).toBe(true);
     await lead.keyboard.press("e");
     await expect(values.locator("tbody tr")).toHaveCount(2);
     expect(await fetched(disclosureJson)).toBe(true);
     const download = lead.waitForEvent("download");
-    await lead.getByRole("link", { name: "extracted_values.csv" }).click();
+    await extractedFile("CSV").click();
     const csv = readFileSync((await (await download).path()) ?? "", "utf8").split("\n");
     expect(csv[0]).toMatch(/^study,report,field,value,unit,quantity,endpoint,timepoint,arm,/);
     expect(csv.filter((line) => line.includes(",manual_edit,"))).toHaveLength(1);

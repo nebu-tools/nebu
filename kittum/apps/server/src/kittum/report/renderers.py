@@ -14,12 +14,13 @@ from kittum.core import Id, Record
 from kittum.judge import VERIFIER_LIMITS, instructions_hash
 from kittum.report import appraised
 from kittum.report.extracted import as_csv, as_json
-from kittum.report.prisma import flows, svg
+from kittum.report.prisma import AI_NOTE, flows, retrieval_note, svg
 from kittum.report.ris_format import ris_dumps, ris_entry
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from kittum.protocol import Criterion
     from kittum.report.review import ItemResult, Review, SearchRun, StageResult
     from kittum.search import SourceRecord
 
@@ -63,16 +64,117 @@ def md_table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
 
 def render_prisma(review: Review, scope_id: str | None) -> list[RenderedFile]:
     files = []
+    registry = registry_records(review)
     for f in flows(review, scope_id):
         name = safe_name(f"{f.topic_id}-{f.scope_id}")
-        title = f"PRISMA 2020 flow: {f.topic_id}, scope {f.scope_id}"
+        entries = len(set(f.members.get("reports_not_retrieved", ())) & registry)
+        drawing = svg(
+            f,
+            "PRISMA 2020 flow diagram",
+            subtitle=flow_subtitle(review, f.topic_id, f.scope_id),
+            reasons=exclusion_reasons(review, f.topic_id),
+            registry_not_retrieved=entries,
+            notes=[
+                AI_NOTE,
+                *(
+                    [retrieval_note(f.reports_not_retrieved - entries, entries)]
+                    if f.reports_not_retrieved
+                    else []
+                ),
+            ],
+            warning=unverified(review),
+        )
         files.append(json_file(f"{name}.json", f.model_dump(mode="json")))
         files.append(
-            RenderedFile(
-                path=f"{name}.svg", media_type="image/svg+xml", data=svg(f, title).encode()
-            )
+            RenderedFile(path=f"{name}.svg", media_type="image/svg+xml", data=drawing.encode())
         )
     return files
+
+
+def unverified(review: Review) -> str | None:
+    """The warning every report of a review carries while its ledger's hash chain is broken at
+    or before the report's cutoff, or None when the chain holds."""
+    check = review.integrity
+    if check is None or check.ok:
+        return None
+    return (
+        f"Unverified draft: the ledger's hash chain breaks at event {check.first_bad_seq}, "
+        f"before this report's event {review.cutoff_seq}. Kittum cannot vouch for these figures."
+    )
+
+
+def _words(text: dict[str, str], language: str) -> str:
+    return text.get(language) or next(iter(text.values()), "")
+
+
+def flow_subtitle(review: Review, topic_id: str, scope_id: str) -> list[str]:
+    """What a flow answers, in the protocol's words: the scope's label, and the search topic's
+    too when the protocol has several topics."""
+    protocol = review.document
+    topic = review.topic(topic_id)
+    label = next((s.label for s in topic.scopes if s.id == scope_id), scope_id)
+    topic_label = _words(topic.label, protocol.default_language)
+    if len(protocol.search_topics) > 1 and topic_label != label:
+        return [f"Search topic: {topic_label}", label]
+    return [label]
+
+
+def criterion_short(criterion: Criterion) -> str:
+    """A criterion's short name, as the workbench shows it: the protocol's short label, else its
+    slot in words, marked when it is an exclusion criterion."""
+    own = (criterion.short_label or "").strip()
+    name = own or criterion.slot.replace("_", " ").capitalize()
+    return f"{name} (exclusion)" if criterion.polarity == "exclude" and not own else name
+
+
+def exclusion_reasons(review: Review, topic_id: str) -> dict[str, str]:
+    """Each criterion of a topic as a short exclusion reason in a figure: the protocol's own
+    exclusion reason ("Not a randomised controlled trial"), else by its permanent number
+    (its place in the topic, as every screen and export numbers it) and its short name, as the
+    workbench names it: "6 Randomised trial not met", or an exclusion criterion's own name. The
+    protocol holds the full wording under that number."""
+    named = {"unstated": "Reason not recorded"}
+    for n, c in enumerate(review.topic(topic_id).criteria, start=1):
+        # The protocol's own short exclusion reason, when it has one, as a paper words it.
+        own = (c.exclusion_reason or "").strip()
+        short = criterion_short(c)
+        named[c.id] = own or (f"{n} {short} not met" if c.polarity == "include" else f"{n} {short}")
+    return named
+
+
+REGISTRY_ID = re.compile(
+    r"^(NCT\d{8}|ISRCTN\d+|DRKS\d+|ACTRN\d+|ChiCTR[\w-]+|CTRI/[\d/]+|jRCT\w+|IRCT\w+|KCT\d+"
+    r"|PACTR\d+|TCTR\d+|UMIN\d+|NTR\d+|EUCTR[\w-]+|\d{4}-\d{6}-\d{2}(?:-\d{2})?)$",
+    re.IGNORECASE,
+)
+"""Trial registry IDs Kittum knows, as the workbench's `registryUrl` knows them."""
+REGISTRY_JOURNAL = re.compile(
+    r"clinicaltrials\.gov|isrctn|trial regist|clinical trials regist", re.IGNORECASE
+)
+
+
+def registry_records(review: Review) -> set[str]:
+    """The reports that are trial registry entries, not articles: no occurrence has a DOI, and
+    one has a registry ID Kittum knows or names a registry where the journal would be. This is
+    the workbench's `isRegistryOnly`, so Retrieval, Progress, and the PRISMA flow count the same
+    reports: there is no article to retrieve until the trial's results are published."""
+    if review.identity is None:
+        return set()
+    by_occurrence = review.records_by_occurrence()
+    with_doi: set[str] = set()
+    registry: set[str] = set()
+    for link in review.identity.links:
+        found = by_occurrence.get(link.occurrence_id)
+        if found is None:
+            continue
+        record, report = found[1], str(link.report_id)
+        if record.doi:
+            with_doi.add(report)
+        if any(REGISTRY_ID.match(i.strip()) for i in record.registry_ids) or (
+            REGISTRY_JOURNAL.search(record.journal or "")
+        ):
+            registry.add(report)
+    return registry - with_doi
 
 
 # RIS files.
@@ -386,6 +488,29 @@ def _pseudonyms(review: Review) -> dict[str, str]:
     return {p: f"Reviewer {n}" for n, p in enumerate(people, start=1)} | {"ai": "AI"}
 
 
+def _first_decisions(stage: StageResult) -> dict[str, int]:
+    """The screeners' first decisions on records, the ones agreement compares: how many there
+    are, and how many a person made with the AI's reading on screen (reveal `before`). The rest
+    were made blind."""
+    first = [d for i in stage.records for d in i.provisional]
+    return {"total": len(first), "ai_on_screen": sum(1 for d in first if d.ai_shown_before)}
+
+
+def _pair_on_screen(stage: StageResult, kind: str, raters: Sequence[str]) -> int:
+    """Of the records a pair's agreement covers, those where a person of the pair decided with
+    the AI's reading on screen."""
+    people = [r for r in raters if r != "ai"]
+    n = 0
+    for i in stage.records:
+        first = {str(d.reviewer_id): d for d in i.provisional}
+        if not all(p in first for p in people):
+            continue
+        if kind != "human_human" and i.ai_excludes is None:
+            continue
+        n += any(first[p].ai_shown_before for p in people)
+    return n
+
+
 def disclosure(review: Review) -> dict[str, Any]:
     """The disclosure record: stored data only, no template."""
     names = _pseudonyms(review)
@@ -429,6 +554,9 @@ def disclosure(review: Review) -> dict[str, Any]:
             "judge_instructions": {
                 "strictness": t.judge.strictness,
                 "guidance": t.judge.guidance,
+                # The team's own wording of the whole prompt, if any; section 6 prints it.
+                "own_system_prompt": t.judge.system_prompt is not None,
+                "own_user_template": t.judge.user_template is not None,
                 "instructions_hash": instructions_hash(t.judge),
             },
         }
@@ -451,6 +579,10 @@ def disclosure(review: Review) -> dict[str, Any]:
                 "records": len(records),
                 "records_read_by_ai": sum(1 for i in records if i.ai_excludes is not None),
                 "ai_proposed_exclusions": sum(1 for i in records if i.ai_excludes),
+                # Before Kittum checks the quotes: the model answered not met on a criterion.
+                "ai_own_reading_exclusions": sum(
+                    1 for i in records if i.ai_includes_by_own_reading is False
+                ),
                 "agreement": [
                     {
                         "kind": a.kind,
@@ -466,9 +598,11 @@ def disclosure(review: Review) -> dict[str, Any]:
                         },
                         "kappa": a.kappa,
                         "pabak": a.pabak,
+                        "ai_on_screen": _pair_on_screen(s, a.kind, a.raters),
                     }
                     for a in s.agreement
                 ],
+                "first_decisions": _first_decisions(s),
                 "reveals_shown": s.reveals_shown,
                 "revised_after_reveal": s.revised_after_reveal,
                 "conflicts_resolved": s.conflicts_resolved,
@@ -492,6 +626,8 @@ def disclosure(review: Review) -> dict[str, Any]:
                 ],
                 "excluded": len(excluded),
                 "excluded_with_ai_proposal": sum(1 for i in excluded if i.ai_excludes),
+                "excluded_after_ai_seen": sum(1 for i in excluded if i.ai_revealed),
+                "excluded_after_ai_rescreen": sum(1 for i in excluded if i.ai_rescreened),
                 "audit": s.audit.model_dump(mode="json"),
                 "ai_shown_before": s.ai_shown_before,
                 "second_opinions": s.second_opinions.model_dump(mode="json")
@@ -539,9 +675,18 @@ def disclosure(review: Review) -> dict[str, Any]:
         ],
         "ai_parts": [dict(p) for p in review.protocol_ai_parts],
     }
+    check = review.integrity
     return {
         "project": review.project_name,
         "cutoff_seq": review.cutoff_seq,
+        "integrity": None
+        if check is None
+        else {
+            "ok": check.ok,
+            "checked_through_seq": check.checked_through_seq,
+            "first_bad_seq": check.first_bad_seq,
+            "reason": check.reason,
+        },
         "protocol_hash": review.protocol.version.content_hash if review.protocol else None,
         "protocol_assistant": assistant,
         "models": models,
@@ -557,8 +702,8 @@ STAGE_NAMES = {"title_abstract": "Title and abstract", "full_text": "Full text"}
 
 AI_READING = {
     "human_human": "",
-    "human_ai": "the AI's own reading",
-    "human_ai_verified": "the AI's checked reading",
+    "human_ai": "the AI's raw reading",
+    "human_ai_verified": "the AI's quote-checked reading",
 }
 """How the AI's side of a pair is named: the model's reading before Kittum checks its quotes,
 or after."""
@@ -574,17 +719,41 @@ def rater_names(agreement: dict[str, Any]) -> tuple[str, str]:
 
 
 def agreement_sentence(agreement: dict[str, Any]) -> str:
-    """ "Reviewer 1 and the AI's own reading agreed on 18 of 33 records. ..." """
+    """ "Reviewer 1 and the AI's raw reading agreed on 18 of 33 records. ..." """
     first, second = rater_names(agreement)
     n, agreed = agreement["items"], agreement["agreed"]
     if n == 0:
         return f"{first} and {second} have no record in common yet."
     share = round(100 * agreed / n)
+    seen = agreement.get("ai_on_screen") or 0
     return (
         f"{first} and {second} agreed on {agreed} of {n} records ({share}%). "
         f"Cohen's kappa is {_number(agreement['kappa'])} and PABAK is "
         f"{_number(agreement['pabak'])}. Both cover all {n} records, agreed or not."
+        + (f" On {seen} of them a person decided with the AI's reading on screen." if seen else "")
     )
+
+
+def _agreement_basis(stages: list[dict[str, Any]]) -> list[str]:
+    """Which decisions agreement compares, and which of them were not blind: never a claim the
+    stages' reveal settings contradict."""
+    seen = [s for s in stages if s["first_decisions"]["ai_on_screen"]]
+    text = "Kittum compares each person's first decision on a record."
+    if not seen:
+        return [text + " Each was made blind, before Kittum showed any AI output."]
+    return [
+        text + " A first decision is blind unless the person saw the AI's reading while deciding, "
+        "which only a stage whose reveal setting is before allows. "
+        + " ".join(
+            f"{STAGE_NAMES.get(s['stage'], s['stage'])}, scope {s['scope_id']}: "
+            f"{s['first_decisions']['ai_on_screen']} of {s['first_decisions']['total']} first "
+            "decisions were made with the AI's reading on screen."
+            for s in seen
+        )
+        + " Agreement with the AI in "
+        + ("that stage" if len(seen) == 1 else "those stages")
+        + " is not independent."
+    ]
 
 
 def agreement_table(agreement: dict[str, Any]) -> str:
@@ -685,13 +854,27 @@ def prompt_section(card: dict[str, Any]) -> list[str]:
     return lines
 
 
+def _prompt_wording(j: dict[str, Any]) -> str:
+    own = [
+        name
+        for name, key in (
+            ("system message", "own_system_prompt"),
+            ("user message", "own_user_template"),
+        )
+        if j.get(key)
+    ]
+    return "Kittum's" if not own else "The team's own " + " and ".join(own)
+
+
 def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile]:
     del scope_id
     d = disclosure(review)
     stages = d["stages"]
+    warning = unverified(review)
     lines = [
         f"# AI-use disclosure: {d['project']}",
         "",
+        *([f"**{warning}**", ""] if warning else []),
         "Kittum wrote this page from the disclosure record it keeps with the review "
         "(`ai_disclosure.json`). The sections follow the RAISE recommendations for reporting AI "
         "use in evidence synthesis. The authors of RAISE have not reviewed this page. It covers "
@@ -741,7 +924,8 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
                 "Reveal",
                 "Records",
                 "Read by the AI",
-                "AI proposed to exclude",
+                "AI's raw reading excludes",
+                "AI proposed to exclude (quote-checked reading)",
                 "Excluded by people",
             ],
             [
@@ -753,8 +937,33 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
                     s["reveal"].replace("_", " "),
                     s["records"],
                     s["records_read_by_ai"],
+                    s["ai_own_reading_exclusions"],
                     s["ai_proposed_exclusions"],
                     s["excluded"],
+                ]
+                for s in stages
+            ],
+        ),
+        "Exclusions decided by people, and how the AI was involved in them. One record can "
+        "count in more than one column.",
+        "",
+        md_table(
+            [
+                "Scope",
+                "Stage",
+                "Excluded by people",
+                "AI's quote-checked reading also excluded",
+                "AI's reading seen before the final decision",
+                "Sent to a blind extra screen by the AI",
+            ],
+            [
+                [
+                    s["scope_id"],
+                    STAGE_NAMES.get(s["stage"], s["stage"]),
+                    s["excluded"],
+                    s["excluded_with_ai_proposal"],
+                    s["excluded_after_ai_seen"],
+                    s["excluded_after_ai_rescreen"],
                 ]
                 for s in stages
             ],
@@ -762,18 +971,22 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
         "### The AI's screening instructions",
         "",
         "Each topic sets how strictly the AI reads its records and may add guidance in the "
-        "team's own words. Everything else in the prompt is fixed (section 6). Conservative means "
+        "team's own words. A team may also replace the system message or the user message with "
+        "its own wording; the Prompt column says which wording each topic used, and section 6 "
+        "prints the prompts in full. The answer format and Kittum's quote check stay either "
+        "way. Conservative means "
         "the AI answers not met only when a record certainly fails a criterion; decisive means "
         "it also does when the record makes passing improbable. Either way it must quote the "
         "record.",
         "",
         md_table(
-            ["Topic", "Strictness", "Guidance", "Instructions SHA-256"],
+            ["Topic", "Strictness", "Guidance", "Prompt", "Instructions SHA-256"],
             [
                 [
                     t["topic_id"],
                     t["judge_instructions"]["strictness"],
                     t["judge_instructions"]["guidance"] or "None",
+                    _prompt_wording(t["judge_instructions"]),
                     f"`{t['judge_instructions']['instructions_hash'][:16]}`",
                 ]
                 for t in d["topics"]
@@ -821,10 +1034,10 @@ def render_disclosure(review: Review, scope_id: str | None) -> list[RenderedFile
         else "People wrote every field of the published protocol.\n",
         "## 3. Agreement in this review",
         "",
-        "Kittum compares the decisions each person made before any AI output was shown. A "
-        "decision counts as include or exclude. Unclear and insufficient information count as "
-        "include. The AI's own reading excludes a record when the model answered not met on any "
-        "criterion. The AI's checked reading excludes only when Kittum also found the model's "
+        *_agreement_basis(stages),
+        "A decision counts as include or exclude. Unclear and insufficient information count as "
+        "include. The AI's raw reading excludes a record when the model answered not met on any "
+        "criterion. The AI's quote-checked reading excludes only when Kittum also found the model's "
         "quote in the record. Cohen's kappa and PABAK cover every record both sides decided, "
         "not only the records where they disagreed.",
         "",
@@ -1114,6 +1327,8 @@ def render_extraction(review: Review, scope_id: str | None) -> list[RenderedFile
 def _risk_of_bias_md(review: Review) -> str:
     """A table per instrument in use: one row per study and result."""
     lines = [f"# Risk of bias\n\nAt ledger event {review.cutoff_seq}.\n"]
+    if warning := unverified(review):
+        lines.append(f"\n**{warning}**\n")
     if not review.appraisals:
         lines.append("\nNobody has appraised a result yet.\n")
     for instrument_id in dict.fromkeys(a.instrument for a in review.appraisals):

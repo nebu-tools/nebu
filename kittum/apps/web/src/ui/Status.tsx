@@ -1,63 +1,55 @@
-// The status vocabulary. A status shows as the key letter that sets it, in its colour, with a
-// word beside it wherever there is room. Colour never carries the meaning alone.
+// The status vocabulary. One glyph set for every status: a check for include, met, low risk, and
+// accepted; a cross for exclude, not met, and high risk; a question mark for unclear; a minus for
+// some concerns, as the RoB 2 tool draws it; a circle for missing or not done. A status shows as a round mark in its colour, with
+// a word beside it wherever there is room. Colour never carries the meaning alone.
 import type { ReactNode } from "react";
 
 import type { CriterionStatus, Judgement, Outcome, ProposalStatus } from "../data/schema.ts";
 
-type Tone = "include" | "exclude" | "unclear" | "insufficient" | "neutral" | "petrol";
+// The colour rule: green passes or includes; red fails or excludes; purple is unclear; orange is
+// some concerns, a finished judgement between low and high; amber waits for a person (to verify, a disagreement, outdated); neutral ink marks
+// importance (critical) and missing.
+type Tone =
+  | "include"
+  | "exclude"
+  | "unclear"
+  | "concern"
+  | "insufficient"
+  | "neutral"
+  | "petrol"
+  | "waits";
 
 const TONES: Record<Tone, string> = {
   include: "bg-include-wash text-include",
   exclude: "bg-exclude-wash text-exclude",
   unclear: "bg-unclear-wash text-unclear",
+  concern: "bg-concern-wash text-concern",
   insufficient: "bg-insufficient-wash text-insufficient",
   neutral: "bg-sheet-2 text-ink-2 shadow-[inset_0_0_0_1px_var(--rule-strong)]",
   petrol: "bg-petrol-wash text-petrol",
+  waits: "bg-marker-soft text-marker-edge shadow-[inset_0_0_0_1px_var(--marker-edge)]",
 };
 
 const TONE_TEXT: Record<Tone, string> = {
   include: "text-include",
   exclude: "text-exclude",
   unclear: "text-unclear",
+  concern: "text-concern",
   insufficient: "text-insufficient",
   neutral: "text-ink-2",
   petrol: "text-petrol",
+  waits: "text-marker-edge",
 };
 
-interface Term {
+export interface Term {
   readonly glyph: ReactNode;
   readonly label: string;
   readonly tone: Tone;
 }
 
-export const OUTCOMES: Record<Outcome, Term & { readonly glyph: string; readonly past: string }> = {
-  include: { glyph: "i", label: "Include", past: "Included", tone: "include" },
-  exclude: { glyph: "e", label: "Exclude", past: "Excluded", tone: "exclude" },
-  unclear: { glyph: "u", label: "Unclear", past: "Marked unclear", tone: "unclear" },
-  insufficient_information: {
-    glyph: "x",
-    label: "Insufficient information",
-    past: "Marked insufficient information",
-    tone: "insufficient",
-  },
-};
-
-export const VERDICTS: Record<CriterionStatus, Term> = {
-  met: { glyph: "y", label: "Met", tone: "include" },
-  not_met: { glyph: "n", label: "Not met", tone: "exclude" },
-  unclear: { glyph: "?", label: "Unclear", tone: "unclear" },
-};
-
-/** Risk-of-bias judgements, with the glyphs of the usual RoB 2 traffic-light plots. */
-export const JUDGEMENTS: Record<Judgement, Term> = {
-  low: { glyph: "+", label: "Low", tone: "include" },
-  some_concerns: { glyph: "−", label: "Some concerns", tone: "unclear" },
-  high: { glyph: "×", label: "High", tone: "exclude" },
-};
-
 export const PROPOSAL_STATUS: Record<ProposalStatus, Term> = {
   extracted: { glyph: "·", label: "Extracted", tone: "neutral" },
-  missing: { glyph: "–", label: "Missing", tone: "insufficient" },
+  missing: { glyph: "○", label: "Missing", tone: "insufficient" },
   ambiguous: { glyph: "?", label: "Ambiguous", tone: "unclear" },
   invalid: { glyph: "!", label: "Invalid", tone: "exclude" },
   error: { glyph: "!", label: "Error", tone: "exclude" },
@@ -76,6 +68,37 @@ const check = (
     />
   </svg>
 );
+
+export const VERDICTS: Record<CriterionStatus, Term> = {
+  met: { glyph: check, label: "Met", tone: "include" },
+  not_met: { glyph: "×", label: "Not met", tone: "exclude" },
+  unclear: { glyph: "?", label: "Unclear", tone: "unclear" },
+};
+
+export const OUTCOMES: Record<Outcome, Term & { readonly past: string }> = {
+  include: { glyph: check, label: "Include", past: "Included", tone: "include" },
+  exclude: { glyph: "×", label: "Exclude", past: "Excluded", tone: "exclude" },
+  unclear: { glyph: "?", label: "Unclear", past: "Marked unclear", tone: "unclear" },
+  insufficient_information: {
+    glyph: "○",
+    label: "Insufficient information",
+    past: "Marked insufficient information",
+    tone: "insufficient",
+  },
+};
+
+/** Risk-of-bias judgements: low as a check, some concerns as a minus in orange (never the "?" of
+ * unclear), high as a cross. */
+export const JUDGEMENTS: Record<Judgement, Term> = {
+  low: { glyph: check, label: "Low", tone: "include" },
+  some_concerns: { glyph: "\u2212", label: "Some concerns", tone: "concern" },
+  high: { glyph: "×", label: "High", tone: "exclude" },
+};
+
+/** Something that waits for a person: a value to verify, a disagreement to look at. */
+export const WAITS: Term = { glyph: "!", label: "Waits for you", tone: "waits" };
+/** Not done yet, or missing. */
+export const NOT_DONE: Term = { glyph: "○", label: "Not done", tone: "neutral" };
 
 export const ADOPTED: Term = { glyph: check, label: "Adopted as evidence", tone: "petrol" };
 export const ACCEPTED: Term = { glyph: check, label: "Accepted", tone: "include" };

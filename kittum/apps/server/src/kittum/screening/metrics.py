@@ -148,7 +148,10 @@ class StageData:
         if history and history[-1]["state"] == "open":
             return "conflict"
         if history:
-            return history[-1]["outcome"]
+            # Unclear means include, as it does for the screeners: an adjudicator who marks a
+            # record unclear at title and abstract sends it on to full text.
+            adjudicated = history[-1]["outcome"]
+            return "include" if adjudicated == "unclear" else adjudicated
         if not self.screened(ref):
             return None
         second = self.second(ref) if self.asked(ref) else None

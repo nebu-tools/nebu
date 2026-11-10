@@ -35,7 +35,7 @@ const cli = (...args: string[]) =>
 /** Screens a person's full texts: the trial included, the sentinel excluded on the population. */
 const screenFullTexts = async (page: Page) => {
   const heading = page.getByRole("complementary", { name: "Criteria" }).getByRole("heading");
-  const finished = page.getByRole("heading", { name: "Full texts finished" });
+  const finished = page.getByRole("heading", { name: "Your available full-text queue is done" });
   const notice = page.getByTestId("fulltext-notice");
   const reveal = page.getByTestId("ai-reveal");
   for (;;) {
@@ -157,7 +157,7 @@ test("the lead appraises a result of an included trial with RoB 2", async ({ bro
     await lead.keyboard.press("Enter");
     await expect(notice).toContainText("Adopted as evidence for 1.1");
     await lead.keyboard.press("1");
-    await expect(answered("1.1")).toHaveText("Y");
+    await expect(answered("1.1")).toHaveText("Yes");
     await expect(lead.locator("[data-testid=rob-question][aria-current]")).toContainText("1.2");
     await lead.keyboard.press("2");
     await lead.keyboard.press("4");
@@ -166,7 +166,7 @@ test("the lead appraises a result of an included trial with RoB 2", async ({ bro
     // An open-label trial without deviations because of the trial context: 2.4 and 2.5 are NA.
     for (const key of ["1", "1", "4"]) await lead.keyboard.press(key);
     await expect(lead.locator("[data-testid=rob-question][aria-current]")).toContainText("2.6");
-    await expect(answered("2.4")).toHaveText("NA");
+    await expect(answered("2.4")).toHaveText("Not applicable");
     await lead.keyboard.press("1");
     await expect(lead.getByTestId("rob-D2")).toContainText("Low");
     // 3.1: outcome data for nearly all; D3 is low and 3.2 to 3.4 do not apply.
@@ -202,11 +202,11 @@ test("the lead appraises a result of an included trial with RoB 2", async ({ bro
     await lead.keyboard.press("g");
     await lead.keyboard.press("r");
     // The report keys are the lead's: wait until the screen knows who is looking.
-    await expect(lead.getByText("Render the PRISMA flow")).toBeVisible();
+    await expect(lead.getByRole("button", { name: /^Generate the flow diagram/ })).toBeVisible();
     await lead.keyboard.press("b");
     const row = lead.getByTestId("risk-of-bias-table").locator("tbody tr");
     await expect(row).toHaveCount(1);
     await expect(row).toContainText(RESULT);
-    await expect(row.locator("td").last()).toHaveText("High †");
+    await expect(row.locator("td").last()).toContainText("High †");
   });
 });

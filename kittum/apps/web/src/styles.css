@@ -12,8 +12,11 @@
 
 :root {
   color-scheme: light;
-  --paper: #eaeeec;
+  --paper: #e4e9e7;
   --sheet: #f9faf9;
+  /* Depth: the page is paper; a working surface is a raised panel; groups inside are flat. */
+  --raised: #ffffff;
+  --shadow-raised: 0 1px 2px rgb(24 37 42 / 0.06), 0 4px 14px rgb(24 37 42 / 0.07);
   --sheet-2: #f1f4f2;
   --ink: #18252a;
   --ink-2: #47565b;
@@ -29,6 +32,9 @@
   --marker-edge: #8f6a00;
   --include: #1f6a3d;
   --include-wash: #dcefe2;
+  /* Risk of bias, some concerns: between low and high, apart from unclear and from waits. */
+  --concern: #a24b12;
+  --concern-wash: #f8e4d4;
   --exclude: #a12f2a;
   --exclude-wash: #f6e1df;
   --unclear: #4d479b;
@@ -41,8 +47,10 @@
 
 [data-theme="dark"] {
   color-scheme: dark;
-  --paper: #172024;
+  --paper: #141c20;
   --sheet: #1e292d;
+  --raised: #223035;
+  --shadow-raised: 0 1px 2px rgb(0 0 0 / 0.35), 0 6px 18px rgb(0 0 0 / 0.3);
   --sheet-2: #243136;
   --ink: #dbe4e2;
   --ink-2: #a8b5b4;
@@ -58,6 +66,8 @@
   --marker-edge: #e8bf45;
   --include: #7ccb97;
   --include-wash: #1d3a2a;
+  --concern: #f0a06a;
+  --concern-wash: #3d2618;
   --exclude: #f08b85;
   --exclude-wash: #452423;
   --unclear: #aca6f2;
@@ -73,6 +83,8 @@
   --font-sans: "IBM Plex Sans Variable", "IBM Plex Sans", system-ui, sans-serif;
   --color-paper: var(--paper);
   --color-sheet: var(--sheet);
+  --color-raised: var(--raised);
+  --shadow-raised: var(--shadow-raised);
   --color-sheet-2: var(--sheet-2);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
@@ -88,6 +100,8 @@
   --color-marker-edge: var(--marker-edge);
   --color-include: var(--include);
   --color-include-wash: var(--include-wash);
+  --color-concern: var(--concern);
+  --color-concern-wash: var(--concern-wash);
   --color-exclude: var(--exclude);
   --color-exclude-wash: var(--exclude-wash);
   --color-unclear: var(--unclear);
@@ -174,7 +188,17 @@
     color: var(--sheet);
   }
 
-  /* Status mark: the key letter that sets a status, in that status's colour. */
+  /* A key shown on a button: smaller, and in the button's own colours. */
+  .key.key-on-button {
+    height: 1.45em;
+    min-width: 1.45em;
+    border-color: color-mix(in oklab, currentColor 45%, transparent);
+    background: transparent;
+    color: inherit;
+    font-size: 11.5px;
+  }
+
+  /* Status mark: a round badge in the status's colour, never shaped like a key. */
   .mark {
     display: inline-flex;
     width: 18px;
@@ -182,7 +206,7 @@
     flex: none;
     align-items: center;
     justify-content: center;
-    border-radius: 3px;
+    border-radius: 999px;
     font-size: 11.5px;
     font-weight: 620;
     line-height: 1;
@@ -201,6 +225,59 @@
     box-shadow: 0 1.5px 0 var(--marker-edge);
     padding: 0 1px;
     margin: 0 -1px;
+  }
+  /* The AI's other verified quotes: a tint of what they show, quieter than the marker. */
+  mark.ai-met,
+  mark.ai-not-met {
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+    margin: 0 -1px;
+  }
+  mark.ai-met {
+    background: color-mix(in oklab, var(--include-wash) 85%, transparent);
+    box-shadow: 0 1.5px 0 color-mix(in oklab, var(--include) 55%, transparent);
+  }
+  /* The criterion's number after an AI quote, and the quote of a hovered criterion. */
+  sup.ai-num {
+    display: inline-block;
+    min-width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    margin-right: 2px;
+    padding: 0 4px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 16px;
+    text-align: center;
+    vertical-align: 4px;
+    background: var(--marker-edge);
+    color: var(--sheet);
+  }
+  sup.ai-num[data-kind="met"] {
+    background: var(--include);
+  }
+  sup.ai-num[data-kind="not_met"] {
+    background: var(--exclude);
+  }
+  mark.ai-lit {
+    outline: 2px solid var(--petrol);
+    outline-offset: 1px;
+  }
+  /* A passing criterion's quote is not why the record is in question: it stays unmarked, number
+     and all, until its row in the criteria list is hovered. The deciding quote and any quote
+     that argues for exclusion stay marked. */
+  mark.ai-met:not(.ai-lit) {
+    background: transparent;
+    box-shadow: none;
+  }
+  mark.ai-met:not(.ai-lit) + sup.ai-num {
+    display: none;
+  }
+  mark.ai-not-met {
+    background: color-mix(in oklab, var(--exclude-wash) 90%, transparent);
+    box-shadow: 0 1.5px 0 color-mix(in oklab, var(--exclude) 60%, transparent);
   }
   .evidence-box {
     position: absolute;

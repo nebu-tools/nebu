@@ -32,6 +32,7 @@ from kittum.app.lifecycle import (
 from kittum.core import Id, Record, sha256_hex
 from kittum.corpus import confirm
 from kittum.gateway import HttpRequest, HttpResponse
+from kittum.judge import JUDGE_V2
 from kittum.models import Completion, CompletionRequest, request_key
 from kittum.runs import PostgresJobQueue, Worker
 from kittum.screening import JUDGE_JOB, judge_handler
@@ -133,7 +134,10 @@ class DemoBackend:
 def demo_judge(registry: ModelRegistry) -> Judge:
     recipe = registry.get(RECORDED_MODEL)
     return Judge(
-        config=judge_config(RECORDED_MODEL, label="demo-recorded"),
+        # judge.v2, not the current version: `judge_answers.json` holds the models' answers to the
+        # judge.v2 prompt, so the replay says it sends that prompt, and demo projects judged
+        # before judge.v3 keep their config ("demo-recorded@judge.v2").
+        config=judge_config(RECORDED_MODEL, label="demo-recorded", prompt_version=JUDGE_V2),
         recipe=recipe,
         # KITTUM_DEMO_JUDGE_DELAY (seconds per call) makes the replay as slow as a model, so the
         # end-to-end test screens while the AI is still reading.

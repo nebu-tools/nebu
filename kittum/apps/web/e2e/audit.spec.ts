@@ -306,7 +306,9 @@ test("the lead traces a count to a record, looks back at an earlier event, and s
       events.filter({ hasText: "Morgan Lee confirmed 2 search results as the same record" }),
     ).toHaveCount(1);
     await expect(
-      events.filter({ hasText: "Jun Park excluded the record on POP, blind" }),
+      events.filter({
+        hasText: "Jun Park excluded the record on criterion 1 (Population), blind",
+      }),
     ).toHaveCount(1);
     await expect(
       events.filter({ hasText: "Elena Weiss adjudicated and included the record" }),
@@ -323,7 +325,9 @@ test("the lead traces a count to a record, looks back at an earlier event, and s
     await expect(reveal).toContainText("Full text");
     await expect(reveal).toContainText("They changed it at event");
     await expect(
-      events.filter({ hasText: "Sam Okafor excluded the record on INT, blind" }),
+      events.filter({
+        hasText: "Sam Okafor excluded the record on criterion 2 (Intervention), blind",
+      }),
     ).toHaveCount(1);
     await expect(
       events.filter({
@@ -411,17 +415,18 @@ test("the lead traces a count to a record, looks back at an earlier event, and s
     forgePayload(projectId, tampered, "outcome", "include");
 
     await page.keyboard.press("v");
-    await expect(page.getByTestId("integrity-verdict")).toHaveText(
-      `The chain breaks at event ${tampered}.`,
-    );
+    await expect(page.getByTestId("integrity-verdict")).toHaveText("1 failed check");
     const finding = page.getByTestId("finding");
     await expect(finding).toHaveCount(1);
     await expect(finding).toHaveAttribute("data-seq", String(tampered));
     await expect(finding).toHaveAttribute("data-check", "payload_hash");
-    await expect(finding).toContainText("Payload hash, screening.decided");
+    await expect(finding).toContainText("Payload hash check on a screening decision");
     await expect(finding).toContainText("Recomputed");
     await expect(page.getByTestId("strip-break")).toHaveCount(1);
-    await expect(strip).toContainText(`The chain breaks at event ${tampered}`);
+    await expect(strip).toContainText(`Events 1 to ${tampered - 1} verified`);
+    await expect(page.getByTestId("chain-alert")).toContainText(
+      `The chain breaks at event ${tampered}.`,
+    );
     // The checkpoint still verifies: an edit that keeps the hashes leaves the chain's head alone.
     await expect(page.getByTestId("checkpoints")).toContainText("Valid");
     await finding.getByRole("button", { name: `Show event ${tampered} as stored` }).click();

@@ -74,6 +74,27 @@ def test_hash_is_stable_across_yaml_json_and_key_order() -> None:
     assert _compile(edited).content_hash != from_yaml.content_hash
 
 
+def test_a_question_short_label_is_kept_and_stays_out_of_the_hash_while_unset() -> None:
+    plain = _compile(example_text())
+    dumped = plain.protocol.model_dump(mode="json")
+    # Unset, it is not in the stored protocol, so every published hash stays as it was.
+    assert all("short_label" not in q for q in dumped["questions"])
+
+    named = example_source()
+    named["questions"][0]["short_label"] = "  NRT versus control "
+    compiled = _compile(named)
+    assert compiled.protocol.questions[0].short_label == "NRT versus control"
+    assert compiled.protocol.model_dump(mode="json")["questions"][0]["short_label"] == (
+        "NRT versus control"
+    )
+    assert compiled.content_hash != plain.content_hash
+    # The scope keeps the question's own label; the short label is only a name for it.
+    assert (
+        compiled.protocol.search_topics[0].scopes[0].label
+        == plain.protocol.search_topics[0].scopes[0].label
+    )
+
+
 def _break(edit: Any) -> ProtocolError:
     source = example_source()
     edit(source)

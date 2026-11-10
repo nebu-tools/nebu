@@ -1,6 +1,13 @@
 import pytest
 
-from kittum.protocol import Profile, compile, render_prompt, render_question
+from kittum.protocol import (
+    Profile,
+    compile,
+    render_prompt,
+    render_prompt_criterion,
+    render_prompt_rules,
+    render_question,
+)
 from tests.protocol.support import example_text
 
 PROTOCOL = compile(example_text(), profiles={}).protocol
@@ -41,7 +48,7 @@ def test_a_profile_renames_slots_in_headings() -> None:
     assert q.hint == "To exclude, mark the passage that shows it."
 
 
-def test_judge_prompt_asks_for_a_verbatim_quote() -> None:
+def test_judge_v2_prompt_asks_for_a_verbatim_quote() -> None:
     prompt = render_prompt(BY_ID["DESIGN"], "title_abstract")
     assert prompt.startswith("### Criterion DESIGN (study type)")
     assert "  EN: Randomized or quasi-randomized controlled trial." in prompt
@@ -76,3 +83,48 @@ def test_exclusion_criterion_inverts_the_answer() -> None:
 def test_full_text_criteria_are_not_asked_at_title_and_abstract() -> None:
     with pytest.raises(ValueError, match="COMP-CONTROL is not decidable at title_abstract"):
         render_prompt(BY_ID["COMP-CONTROL"], "title_abstract")
+
+
+def test_judge_v3_names_criteria_as_reviewers_do_and_states_the_rules_once() -> None:
+    """The heading carries the permanent number and short label (the slot without one), the ID
+    is the answer key, one language needs no label, and the rules live above the criteria."""
+    adults = BY_ID["POP"].model_copy(update={"short_label": "Adult smokers"})
+    assert render_prompt_criterion(adults, "title_abstract", number=1) == (
+        "### Criterion 1: Adult smokers (population)\n"
+        "Answer key: `POP`\n"
+        "Inclusion criterion. The record passes if it meets this condition:\n"
+        "DE: Erwachsene (ab 18 Jahren), die Tabak rauchen.\n"
+        "EN: Adults (18 years or older) who smoke tobacco.\n"
+        "Records that do not pass:\n"
+        "- Adolescent smokers aged 12 to 17 years.\n"
+        "- Smokeless tobacco users."
+    )
+    design = render_prompt_criterion(BY_ID["DESIGN"], "full_text", number=5)
+    assert design.splitlines()[:4] == [
+        "### Criterion 5: Study type",
+        "Answer key: `DESIGN`",
+        "Inclusion criterion. The record passes if it meets this condition:",
+        "Randomized or quasi-randomized controlled trial.",
+    ]
+    assert 'A `not_met` quote must contain one of: "cohort", "cross-sectional"' in design
+    assert "verbatim" not in design and "absence of information" not in design
+    # A caller that does not know the topic gets no number rather than a wrong one.
+    assert render_prompt_criterion(adults, "full_text", number=None).startswith(
+        "### Criterion: Adult smokers (population)\n"
+    )
+    excluded = BY_ID["DESIGN"].model_copy(
+        update={"polarity": "exclude", "text": {"en": "Conference abstract only."}}
+    )
+    assert (
+        "Exclusion criterion. The record passes unless it shows this:\nConference abstract only."
+        in (render_prompt_criterion(excluded, "full_text", number=2))
+    )
+
+    rules = render_prompt_rules("title_abstract")
+    assert "An inclusion criterion is a condition the record must meet." in rules
+    assert "`not_met` if the record shows it" in rules
+    assert "copy a verbatim quote from the title and abstract" in rules
+    assert "absence of information is never `not_met`" in rules
+    full_text = render_prompt_rules("full_text")
+    assert "copy a verbatim quote from the full text" in full_text
+    assert "absence of information" not in full_text

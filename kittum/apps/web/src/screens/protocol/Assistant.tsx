@@ -6,7 +6,8 @@
 // one. Fields a model wrote carry an AI mark that names the model until a person changes them, and
 // the publication records them for the AI disclosure. Hit counts run no search.
 import { useRouteContext, useRouter } from "@tanstack/react-router";
-import { useCallback, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
 import type {
@@ -21,9 +22,12 @@ import type {
   SuggestedChange,
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
-import { Button, Field, Select, TextArea, TextInput, failure } from "../../ui/Form.tsx";
+import { keyWords, MODE_LABELS } from "../../lib/labels.ts";
+import { formatTime } from "../../lib/format.ts";
+import { Button } from "../../ui/Button.tsx";
+import { Field, Select, TextArea, failure } from "../../ui/Form.tsx";
 import { Instructions } from "./Instructions.tsx";
-import { Key, KeyHint } from "../../ui/Key.tsx";
+import { Key } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { useProject } from "../project.tsx";
 import {
@@ -42,6 +46,8 @@ import {
   strategyPath,
   toDoc,
   valueAt,
+  comesAfter,
+  nextLabel,
   withPreset,
 } from "./document.ts";
 import type { Preset } from "./document.ts";
@@ -85,12 +91,8 @@ const STAGES: ReadonlyArray<readonly [string, string]> = [
   ["full_text", "Full text"],
 ];
 
-const MODES: ReadonlyArray<readonly [string, string]> = [
-  ["M1", "M1, two people screen every record and the AI is a third screener"],
-  ["M2", "M2, one person screens every record and the AI is the second screener"],
-  ["M3", "M3, two people screen in the AI's order and stop early"],
-  ["S", "S, one person of a pool screens each record and asks for a second opinion when unsure"],
-];
+/** The screening modes, in the order a lead weighs them. */
+const MODES = ["M1", "M2", "M3", "S"] as const;
 
 /** "45 s", "2 min 5 s". */
 const elapsed = (seconds: number) =>
@@ -125,13 +127,15 @@ const plainIssue = (message: string) =>
 
 /** Where a problem is, in the form's words: "Question 1, population", "Criterion C2". */
 const whereIn = (doc: Doc, path: string) => {
-  const q = /^questions\[(\d+)\](?:\.(label|population|intervention|comparators\[(\d+)\]))?/.exec(
-    path,
-  );
+  const q =
+    /^questions\[(\d+)\](?:\.(label|short_label|population|intervention|comparators\[(\d+)\]))?/.exec(
+      path,
+    );
   if (q) {
     const n = Number(q[1]) + 1;
     if (q[3] !== undefined) return `Question ${n}, comparator ${Number(q[3]) + 1}`;
-    return q[2] ? `Question ${n}, ${q[2] === "label" ? "question" : q[2]}` : `Question ${n}`;
+    const part = q[2] === "label" ? "question" : q[2] === "short_label" ? "short label" : q[2];
+    return part ? `Question ${n}, ${part}` : `Question ${n}`;
   }
   const o = /^outcomes\[(\d+)\]/.exec(path);
   if (o) return `Outcome ${Number(o[1]) + 1}`;
@@ -163,18 +167,19 @@ type Counted =
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
 export function Assistant({
+  barSlot,
   handover,
   paused,
-  onYaml,
   onCurrent,
   onPublished,
 }: {
+  /** Where the revision bar goes: the screen's toolbar, outside the form's scroll. */
+  barSlot: HTMLElement | null;
   /** True while the screen switches to YAML: the form's keys wait, so none acts on what it hands
    * over. */
   paused: boolean;
   /** Where to open: the form as the lead left it, or a protocol from the YAML view. */
   handover: Handover | null;
-  onYaml: (doc: Doc, base: ProtocolRevision | null) => void;
   /** Where the form is and what it shows, so the YAML view opens the same protocol and the
    * form comes back to the same place. */
   onCurrent: (current: FormState) => void;
@@ -372,7 +377,12 @@ export function Assistant({
         workbench.parseProtocol(await run(workbench.protocolSource(project.id))),
       );
       const read = parsed.source ? toDoc(parsed.source) : null;
-      if (read && "doc" in read) setWorking({ doc: read.doc, base: null });
+      // The new version starts with the next version label, so it never repeats the one in force.
+      if (read && "doc" in read)
+        setWorking({
+          doc: { ...read.doc, version_label: nextLabel(read.doc.version_label) },
+          base: null,
+        });
       else setError(read?.problem ?? "Kittum could not read the published version.");
     } catch (e) {
       setError(failure(e, "Kittum could not load the published version."));
@@ -411,119 +421,146 @@ export function Assistant({
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-[210px_minmax(0,1fr)_minmax(360px,32%)]">
-      <Rail
-        revisions={revisions}
-        at={at}
-        people={people}
-        locked={working !== null}
-        onSelect={(i) => {
-          if (working) return;
-          setAt(i);
-          setError(null);
-        }}
-        onDescribe={model?.configured ? () => setDescribing(true) : null}
+    // The form at about 880px with its revision panel beside it, in the lead pages' column; one
+    // scroll for the page, the revision bar and the panel stay in view. The history is a list
+    // that opens from the revision bar.
+    <div className="h-full min-h-0 overflow-y-auto bg-paper" data-form-scroll>
+      {/* The page's top edge fades, so a field that scrolls out reads as scrolled, not cut. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none sticky top-0 z-20 -mb-5 h-5 bg-linear-to-b from-paper to-transparent"
       />
-      <FormView
-        key={working?.base?.id ?? current?.id ?? "new"}
-        working={working}
-        shown={shown}
-        revisions={revisions}
-        current={current}
-        newest={newest}
-        people={people}
-        model={model}
-        issues={issues}
-        saving={saving}
-        countOf={countOf}
-        onCount={count}
-        onEdit={edit}
-        onSave={() => void save()}
-        onDiscard={discard}
-        onStep={step}
-        onRestore={() => void restore()}
-        onNewest={() => setAt(revisions.length - 1)}
-        onYaml={() => onYaml(shown.doc, shown.base)}
-        onImproved={(outcome) => {
-          if (outcome.revision) return reload(outcome.revision.id);
-          setError(
-            outcome.unchanged
-              ? "The model suggests no change to this part."
-              : `The model's answer still had problems after ${outcome.attempts} tries. ${(outcome.issues ?? []).map((i) => `${i.path}: ${i.message}`).join(". ")}`,
-          );
-          return Promise.resolve();
-        }}
-        onError={setError}
-      />
-      <aside
-        className="min-h-0 overflow-y-auto border-l border-rule-strong bg-paper px-5 py-5"
-        aria-label="Revision details"
-      >
-        {error ? (
-          <p
-            role="alert"
-            className="mb-4 border-l-2 border-exclude pl-3 text-sm text-exclude"
-            data-testid="assist-error"
-          >
-            {error}
-          </p>
-        ) : null}
-        {working ? (
-          <Unsaved
-            working={working}
-            next={revisions.length + 1}
-            issues={issues}
-            saving={saving}
-            onSave={() => void save()}
-            onDiscard={discard}
-          />
-        ) : current?.kind === "suggestion" && current.suggestion && current.parent_id ? (
-          <SuggestionReview
-            key={current.id}
-            revision={current}
-            base={revisions.find((r) => r.id === current.parent_id) ?? null}
-            countOf={countOf}
-            onCount={count}
-            onAccept={(ids) =>
-              act(
-                async () =>
-                  (
-                    await run(
-                      workbench.acceptChanges({
-                        ...caller,
-                        suggestionId: current.id,
-                        changeIds: ids,
-                      }),
-                    )
-                  ).id,
-                "Kittum could not accept the changes.",
-              )
-            }
-            onReject={() => setAt(revisions.findIndex((r) => r.id === current.parent_id))}
-          />
-        ) : current ? (
-          <>
-            <Provenance revision={current} revisions={revisions} people={people} />
-            <Compare key={current.id} revision={current} revisions={revisions} />
-            <Publish
-              revision={current}
-              onPublish={async (reason) => {
-                const stored = await run(
-                  workbench.publishRevision({ ...caller, revisionId: current.id, reason }),
-                );
-                await router.invalidate();
-                const written = current.ai_parts?.length ?? 0;
-                onPublished(
-                  `Published version ${stored.version.protocol.version_label} from revision ${current.seq}. The ledger records your approval` +
-                    (written
-                      ? ` and the ${written} ${written === 1 ? "field" : "fields"} a model wrote.`
-                      : "."),
-                );
-              }}
+      <div className="mx-auto grid max-w-[1616px] grid-cols-[minmax(0,1000px)_380px] items-start gap-8 px-8 pt-5 pb-12">
+        <FormView
+          barSlot={barSlot}
+          at={at}
+          onSelect={(i) => {
+            if (working) return;
+            setAt(i);
+            setError(null);
+          }}
+          onDescribe={model?.configured ? () => setDescribing(true) : null}
+          key={working?.base?.id ?? current?.id ?? "new"}
+          working={working}
+          shown={shown}
+          revisions={revisions}
+          current={current}
+          newest={newest}
+          people={people}
+          model={model}
+          issues={issues}
+          saving={saving}
+          countOf={countOf}
+          onCount={count}
+          onEdit={edit}
+          onSave={() => void save()}
+          onDiscard={discard}
+          onStep={step}
+          onRestore={() => void restore()}
+          onNewest={() => setAt(revisions.length - 1)}
+          onImproved={(outcome) => {
+            if (outcome.revision) return reload(outcome.revision.id);
+            setError(
+              outcome.unchanged
+                ? "The model suggests no change to this part."
+                : `The model's answer still had problems after ${outcome.attempts} tries. ${(outcome.issues ?? []).map((i) => `${i.path}: ${i.message}`).join(". ")}`,
+            );
+            return Promise.resolve();
+          }}
+          onError={setError}
+        />
+        <aside
+          className="sticky top-5 max-h-[calc(100vh-9rem)] overflow-y-auto pr-1"
+          aria-label="Revision details"
+        >
+          {error ? (
+            <p
+              role="alert"
+              className="mb-4 border-l-2 border-exclude pl-3 text-sm text-exclude"
+              data-testid="assist-error"
+            >
+              {error}
+            </p>
+          ) : null}
+          {working ? (
+            <Unsaved
+              working={working}
+              next={revisions.length + 1}
+              issues={issues}
+              saving={saving}
+              drafts={Boolean(model?.configured)}
+              onSave={() => void save()}
+              onDiscard={discard}
             />
-          </>
-        ) : null}
-      </aside>
+          ) : current?.kind === "suggestion" && current.suggestion && current.parent_id ? (
+            <SuggestionReview
+              key={current.id}
+              revision={current}
+              base={revisions.find((r) => r.id === current.parent_id) ?? null}
+              countOf={countOf}
+              onCount={count}
+              onAccept={(ids) =>
+                act(
+                  async () =>
+                    (
+                      await run(
+                        workbench.acceptChanges({
+                          ...caller,
+                          suggestionId: current.id,
+                          changeIds: ids,
+                        }),
+                      )
+                    ).id,
+                  "Kittum could not accept the changes.",
+                )
+              }
+              onReject={() => setAt(revisions.findIndex((r) => r.id === current.parent_id))}
+            />
+          ) : current ? (
+            <>
+              {/* Context beside the sheet: recessed into the desk, not raised. */}
+              <div className="rounded-[4px] bg-sheet-2 px-4 py-4">
+                <Provenance revision={current} revisions={revisions} people={people} />
+                <Publish
+                  versionLabel={docOf(current).version_label}
+                  inForce={protocol?.protocol.version_label ?? null}
+                  onRelabel={(label) =>
+                    act(
+                      async () =>
+                        (
+                          await run(
+                            workbench.saveRevision({
+                              ...caller,
+                              source: forSaving({ ...docOf(current), version_label: label }),
+                              baseId: current.id,
+                            }),
+                          )
+                        ).id,
+                      "Kittum could not save the new version label.",
+                    )
+                  }
+                  onPublish={async (reason) => {
+                    const stored = await run(
+                      workbench.publishRevision({ ...caller, revisionId: current.id, reason }),
+                    );
+                    await router.invalidate();
+                    const written = current.ai_parts?.length ?? 0;
+                    onPublished(
+                      `Published version ${stored.version.protocol.version_label} from revision ${current.seq}. The ledger records your approval` +
+                        (written
+                          ? ` and the ${written} ${written === 1 ? "field" : "fields"} a model wrote.`
+                          : "."),
+                    );
+                  }}
+                />
+              </div>
+              <FormLinks doc={shown.doc} />
+              <Compare key={current.id} revision={current} revisions={revisions} />
+            </>
+          ) : null}
+          {working || current?.kind === "suggestion" ? <FormLinks doc={shown.doc} /> : null}
+        </aside>
+      </div>
     </div>
   );
 }
@@ -577,8 +614,11 @@ function Start({
               </span>
             </button>
           ) : model ? (
-            <p className="text-sm text-ink-3">
-              No model is set up for drafts. Set KITTUM_ASSIST_MODEL to ask one.
+            <p
+              className="text-sm text-ink-2"
+              title="The server reads the model from KITTUM_ASSIST_MODEL."
+            >
+              No model is set up for drafts. Whoever runs the server can set one up.
             </p>
           ) : null}
         </div>
@@ -687,12 +727,13 @@ function DraftPrompt({
             className="!px-4 !py-3 text-md leading-[25px]"
           />
           <div className="flex items-center gap-4">
-            <Button primary type="submit" disabled={busy || !text.trim()}>
+            <Button
+              kind="primary"
+              type="submit"
+              disabled={busy || !text.trim()}
+              keys={["Ctrl", "Enter"]}
+            >
               {busy ? "Drafting" : "Draft the protocol"}
-              <span className="inline-flex gap-0.5">
-                <Key k="Ctrl" />
-                <Key k="Enter" />
-              </span>
             </Button>
             {!busy ? (
               <button
@@ -792,100 +833,119 @@ function useMarkLabel(
   };
 }
 
-function Rail({
+/** The revision history, opened from the revision bar. The list stays in the page while closed,
+ * so the newest revision and its author can be read without opening it. */
+function History({
   revisions,
   at,
   people,
   locked,
   onSelect,
-  onDescribe,
 }: {
   revisions: ReadonlyArray<ProtocolRevision>;
   at: number;
   people: ReadonlyMap<string, string>;
   locked: boolean;
   onSelect: (index: number) => void;
-  onDescribe: (() => void) | null;
 }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
   const seqOf = (id: string | null | undefined) => revisions.find((r) => r.id === id)?.seq;
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node) || !root.current?.contains(event.target)) setOpen(false);
+    };
+    // Escape closes the list and goes no further, so it does not also leave a suggestion.
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", outside);
+    window.addEventListener("keydown", escape, { capture: true });
+    return () => {
+      window.removeEventListener("pointerdown", outside);
+      window.removeEventListener("keydown", escape, { capture: true });
+    };
+  }, [open]);
   return (
-    <nav
-      className="flex min-h-0 flex-col border-r border-rule-strong bg-sheet-2"
-      aria-label="Revisions"
-    >
-      <div className="flex items-center justify-between border-b border-rule px-3 py-2.5">
-        <span className="text-xs font-semibold text-ink-2">History</span>
-        <span className="flex gap-0.5" title="Previous and next revision">
-          <Key k="," />
-          <Key k="." />
-        </span>
-      </div>
-      <ol className="min-h-0 flex-1 overflow-y-auto py-1" data-testid="revision-rail">
-        {revisions.length === 0 ? (
-          <li className="px-3 py-1.5 text-xs text-ink-3">
-            No revisions yet. Save to add the first.
-          </li>
-        ) : null}
-        {[...revisions].reverse().map((r) => {
-          const index = revisions.indexOf(r);
-          const selected = index === at;
-          return (
-            <li key={r.id}>
-              <button
-                type="button"
-                onClick={() => onSelect(index)}
-                disabled={locked && !selected}
-                aria-current={selected ? "true" : undefined}
-                data-testid="revision"
-                className={`grid w-full grid-cols-[2rem_1fr] px-3 py-1.5 text-left text-sm disabled:opacity-60 ${selected ? "bg-petrol-wash" : "hover:bg-sheet"}`}
-              >
-                <span className={`text-ink-3 ${selected ? "font-semibold text-ink" : ""}`}>
-                  {r.seq}
-                </span>
-                <span className="min-w-0">
-                  <span className="block">
-                    {KIND[r.kind]}
-                    {r.kind === "restore" ? ` ${seqOf(r.parent_id)}` : ""}
-                  </span>
+    <div className="relative" ref={root}>
+      <Button
+        kind="secondary"
+        size="sm"
+        aria-expanded={open}
+        aria-controls="revision-list"
+        onClick={() => setOpen((o) => !o)}
+      >
+        History, {revisions.length} {revisions.length === 1 ? "revision" : "revisions"}
+      </Button>
+      <nav
+        id="revision-list"
+        aria-label="Revisions"
+        hidden={!open}
+        className="absolute top-full left-0 z-30 mt-1 w-[340px] rounded-[4px] border border-rule-strong bg-sheet py-1 shadow-[0_10px_28px_rgb(0_0_0/0.16)]"
+      >
+        <ol className="max-h-[60vh] overflow-y-auto" data-testid="revision-rail">
+          {revisions.length === 0 ? (
+            <li className="px-3 py-1.5 text-sm text-ink-2">
+              No revisions yet. Save to add the first.
+            </li>
+          ) : null}
+          {[...revisions].reverse().map((r) => {
+            const index = revisions.indexOf(r);
+            const selected = index === at;
+            return (
+              <li key={r.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSelect(index);
+                    setOpen(false);
+                  }}
+                  disabled={locked && !selected}
+                  aria-current={selected ? "true" : undefined}
+                  data-testid="revision"
+                  className={`grid w-full grid-cols-[2rem_1fr] px-3 py-2 text-left text-sm disabled:opacity-60 ${selected ? "bg-petrol-wash" : "hover:bg-sheet-2"}`}
+                >
                   <span
-                    className="flex items-center gap-1 text-2xs text-ink-2"
-                    data-testid="author"
+                    className={`tabular-nums ${selected ? "font-semibold text-ink" : "text-ink-2"}`}
                   >
-                    {r.model ? <AiTag label={`Written by ${r.model.recipe_id}`} /> : null}
-                    <span className="truncate">
-                      {authorOf(r, people)},{" "}
-                      {new Date(r.created_at).toLocaleTimeString("en-GB", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                    {r.seq}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block font-medium">
+                      {KIND[r.kind]}
+                      {r.kind === "restore" ? ` ${seqOf(r.parent_id)}` : ""}
+                    </span>
+                    <span
+                      className="flex items-center gap-1 text-xs text-ink-2"
+                      data-testid="author"
+                    >
+                      {r.model ? <AiTag label={`Written by ${r.model.recipe_id}`} /> : null}
+                      <span className="truncate">
+                        {authorOf(r, people)}, {formatTime(r.created_at)}
+                      </span>
                     </span>
                   </span>
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
-      {onDescribe && locked ? (
-        <p className="border-t border-rule p-3 text-xs text-ink-2" data-testid="draft-locked">
-          Save or discard your changes before you ask the model for a new draft.
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        <p className="border-t border-rule px-3 pt-1.5 pb-1 text-xs text-ink-2">
+          <Key k="," /> and <Key k="." /> step through the history without changing it.
         </p>
-      ) : onDescribe ? (
-        <div className="border-t border-rule p-3">
-          <button
-            type="button"
-            onClick={onDescribe}
-            className="text-sm text-petrol hover:underline"
-          >
-            Ask the model for a new draft
-          </button>
-        </div>
-      ) : null}
-    </nav>
+      </nav>
+    </div>
   );
 }
 
 function FormView({
+  barSlot,
+  at,
+  onSelect,
+  onDescribe,
   working,
   shown,
   revisions,
@@ -903,10 +963,13 @@ function FormView({
   onStep,
   onRestore,
   onNewest,
-  onYaml,
   onImproved,
   onError,
 }: {
+  barSlot: HTMLElement | null;
+  at: number;
+  onSelect: (index: number) => void;
+  onDescribe: (() => void) | null;
   working: Working | null;
   shown: Working;
   revisions: ReadonlyArray<ProtocolRevision>;
@@ -924,7 +987,6 @@ function FormView({
   onStep: (by: number) => void;
   onRestore: () => void;
   onNewest: () => void;
-  onYaml: () => void;
   onImproved: (outcome: AssistOutcome) => Promise<void>;
   onError: (message: string | null) => void;
 }) {
@@ -1005,6 +1067,7 @@ function FormView({
     mono?: boolean;
     placeholder?: string;
     big?: boolean;
+    rows?: number;
     after?: ReactNode;
   }) => (
     <FormField
@@ -1018,64 +1081,83 @@ function FormView({
   );
 
   return (
-    <section className="min-h-0 overflow-y-auto bg-sheet" aria-label="Protocol form">
-      <header className="sticky top-0 z-10 border-b border-rule bg-sheet/95 backdrop-blur">
-        <div className="flex items-center gap-3 px-8 py-2.5 text-sm">
-          {working ? (
+    // The sheet on the desk: the one raised surface of the screen. Its parts are flat groups.
+    <section className="rounded-[6px] bg-raised shadow-raised" aria-label="Protocol form">
+      {barSlot
+        ? createPortal(
             <>
-              <span className="font-semibold" data-testid="unsaved">
-                {base
-                  ? `Your changes to revision ${base.seq}, not saved yet`
-                  : "A new protocol, not saved yet"}
-              </span>
-              <span className="ml-auto flex items-center gap-3">
-                <Button primary onClick={onSave} disabled={saving}>
-                  {saving ? "Saving" : `Save as revision ${revisions.length + 1}`}
-                  <span className="inline-flex gap-0.5">
-                    <Key k="Ctrl" />
-                    <Key k="Enter" />
+              <span className="h-5 w-px flex-none bg-rule-strong" aria-hidden="true" />
+              {revisions.length ? (
+                <History
+                  revisions={revisions}
+                  at={at}
+                  people={people}
+                  locked={working !== null}
+                  onSelect={onSelect}
+                />
+              ) : null}
+              {working ? (
+                <>
+                  <span className="font-semibold" data-testid="unsaved">
+                    {base
+                      ? `Your changes to revision ${base.seq}, not saved yet`
+                      : "A new protocol, not saved yet"}
                   </span>
+                  <span className="ml-auto flex items-center gap-2">
+                    <Button
+                      kind="primary"
+                      onClick={onSave}
+                      disabled={saving}
+                      keys={["Ctrl", "Enter"]}
+                    >
+                      {saving ? "Saving" : `Save as revision ${revisions.length + 1}`}
+                    </Button>
+                    <Button kind="quiet" onClick={onDiscard}>
+                      Discard
+                    </Button>
+                  </span>
+                </>
+              ) : current ? (
+                <>
+                  <span className="font-semibold">
+                    Draft revision {current.seq} of {revisions.length}
+                  </span>
+                  {/* Who wrote it and how is in the panel beside the form, said once. */}
+                  <span className="ml-auto flex items-center gap-1">
+                    {/* The keys are , and . (the History list says so); the buttons name them on hover. */}
+                    <Button
+                      kind="quiet"
+                      size="sm"
+                      aria-label="Previous revision"
+                      title="Previous revision (,)"
+                      disabled={at === 0}
+                      onClick={() => onStep(-1)}
+                    >
+                      ‹ Previous
+                    </Button>
+                    <Button
+                      kind="quiet"
+                      size="sm"
+                      aria-label="Next revision"
+                      title="Next revision (.)"
+                      disabled={newest}
+                      onClick={() => onStep(1)}
+                    >
+                      Next ›
+                    </Button>
+                  </span>
+                </>
+              ) : null}
+              {onDescribe && !working ? (
+                <Button kind="quiet" size="sm" onClick={onDescribe}>
+                  Ask the model for a new draft
                 </Button>
-                <button type="button" onClick={onDiscard} className="text-ink-2 hover:text-ink">
-                  Discard
-                </button>
-              </span>
-            </>
-          ) : current ? (
-            <>
-              <span className="font-semibold">
-                Revision {current.seq} of {revisions.length}
-              </span>
-              <span className="text-ink-2">
-                {KIND[current.kind]} by {authorOf(current, people)}
-              </span>
-              <span className="ml-auto flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() => onStep(-1)}
-                  className="text-ink-2 hover:text-ink"
-                >
-                  <KeyHint keys={[","]}>Previous</KeyHint>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onStep(1)}
-                  className="text-ink-2 hover:text-ink"
-                >
-                  <KeyHint keys={["."]}>Next</KeyHint>
-                </button>
-              </span>
-            </>
-          ) : null}
-          <button
-            type="button"
-            onClick={onYaml}
-            disabled={saving}
-            className="text-ink-2 hover:text-ink disabled:opacity-50"
-          >
-            Open as YAML
-          </button>
-        </div>
+              ) : null}
+            </>,
+            barSlot,
+          )
+        : null}
+      <header className="overflow-hidden rounded-t-[6px]">
         {viewing && !newest && latest ? (
           <div
             className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-unclear/40 bg-unclear-wash px-8 py-2.5 text-sm"
@@ -1086,12 +1168,12 @@ function FormView({
               {latest.seq} stays the newest, and the history keeps every revision.
             </p>
             <span className="ml-auto flex items-center gap-3">
-              <Button onClick={onRestore} keys="r">
+              <Button onClick={onRestore} keys={["r"]}>
                 Restore this revision
               </Button>
-              <button type="button" onClick={onNewest} className="text-ink-2 hover:text-ink">
+              <Button kind="quiet" onClick={onNewest}>
                 Go to revision {latest.seq}
-              </button>
+              </Button>
             </span>
             <p className="w-full text-xs text-ink-2">
               Restoring saves a copy of revision {current.seq} as revision {latest.seq + 1}, under
@@ -1110,7 +1192,7 @@ function FormView({
         ) : null}
       </header>
 
-      <article className="max-w-[880px] px-8 pt-6 pb-16" data-testid="revision-view">
+      <article className="max-w-[944px] px-8 pt-6 pb-16" data-testid="revision-view">
         {field({
           id: "title",
           label: "Title",
@@ -1121,12 +1203,200 @@ function FormView({
           placeholder: "The title of the review",
           onChange: (v) => change((x) => (x.title = localized(x.title, v))),
         })}
-        <p className="mt-1 text-xs text-ink-3">
-          Version label {d.version_label}
-          {!working && current ? `, content hash ${current.content_hash.slice(0, 12)}` : ""}
-        </p>
+        <div className="mt-3 max-w-[260px]">
+          {field({
+            id: "version-label",
+            label: "Version label",
+            part: "version_label",
+            at: "version_label",
+            value: d.version_label,
+            placeholder: "1.2",
+            onChange: (v) => change((x) => (x.version_label = v)),
+          })}
+        </div>
 
-        <SectionHead title="Questions" />
+        {/* The criteria first, as the published protocol shows them. */}
+        {d.search_topics.map((topic, ti) => {
+          const tat = `search_topics[${ti}]`;
+          const editTopic = (fn: (x: Mutable<Topic>) => void) => change((x) => fn(topicAt(x, ti)));
+          return (
+            <section key={`criteria-${topic.id}`}>
+              <SectionHead
+                id={`form-criteria-${topic.id}`}
+                title={
+                  d.search_topics.length > 1
+                    ? `Eligibility criteria: ${t(topic.label)}`
+                    : "Eligibility criteria"
+                }
+              />
+              <ul className="mt-2 grid gap-4">
+                {topic.criteria.map((c, ci) => {
+                  const part = `search_topics[${topic.id}].criteria[${c.id}]`;
+                  const cat = `${tat}.criteria[${ci}]`;
+                  const editCriterion = (fn: (x: Mutable<Criterion>) => void) =>
+                    editTopic((x) => {
+                      x.criteria = x.criteria.map((y, i) => {
+                        if (i !== ci) return y;
+                        const next = { ...y } as Mutable<Criterion>;
+                        fn(next);
+                        return next;
+                      });
+                    });
+                  return (
+                    <li
+                      key={c.id}
+                      className="grid gap-1.5"
+                      data-testid="criterion"
+                      data-criterion={c.id}
+                    >
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                        <span className="text-sm font-semibold text-ink" title={c.id}>
+                          Criterion {ci + 1}
+                        </span>
+                        <Select
+                          aria-label={`Kind of criterion ${c.id}`}
+                          value={c.polarity}
+                          disabled={suggestion}
+                          onChange={(e) => {
+                            const v = e.currentTarget.value;
+                            editCriterion((x) => (x.polarity = v));
+                          }}
+                          className="!w-auto !py-0.5 !text-xs"
+                        >
+                          <option value="include">Inclusion</option>
+                          <option value="exclude">Exclusion</option>
+                        </Select>
+                        <Mark text={label(marks(`${part}.polarity`))} />
+                        <Select
+                          aria-label={`Part of the question for criterion ${c.id}`}
+                          value={c.slot ?? ""}
+                          disabled={suggestion}
+                          onChange={(e) => {
+                            const v = e.currentTarget.value;
+                            editCriterion((x) => (x.slot = v));
+                          }}
+                          className="!w-auto !py-0.5 !text-xs"
+                        >
+                          {c.slot ? null : <option value="">Choose a part</option>}
+                          {Object.entries(SLOTS).map(([value, text]) => (
+                            <option key={value} value={value}>
+                              {text}
+                            </option>
+                          ))}
+                        </Select>
+                        <Mark text={label(marks(`${part}.slot`))} />
+                        <span className="text-ink-2">Decided at</span>
+                        {STAGES.map(([stage, text]) => (
+                          <label key={stage} className="inline-flex items-center gap-1">
+                            <input
+                              type="checkbox"
+                              disabled={suggestion}
+                              checked={c.decidable_at.includes(stage)}
+                              onChange={(e) => {
+                                const on = e.currentTarget.checked;
+                                editCriterion(
+                                  (x) =>
+                                    (x.decidable_at = STAGES.map(([s]) => s).filter((s) =>
+                                      s === stage ? on : x.decidable_at.includes(s),
+                                    )),
+                                );
+                              }}
+                              className="accent-[var(--petrol)]"
+                            />
+                            {text}
+                          </label>
+                        ))}
+                        <Mark text={label(marks(`${part}.decidable_at`))} />
+                        <span className="ml-auto flex items-center gap-2">
+                          {ask(part, `criterion ${c.id}`)}
+                          {suggestion || topic.criteria.length < 2 ? null : (
+                            <RemoveButton
+                              label={`Remove criterion ${c.id}`}
+                              onClick={() =>
+                                editTopic(
+                                  (x) => (x.criteria = x.criteria.filter((_, i) => i !== ci)),
+                                )
+                              }
+                            />
+                          )}
+                        </span>
+                      </div>
+                      <FieldIssues
+                        issues={issuesAt(issues, `${cat}.decidable_at`).concat(
+                          issuesAt(issues, `${cat}.applies_to`),
+                        )}
+                      />
+                      {field({
+                        id: `${c.id}-text`,
+                        label: "Text of the criterion",
+                        part: `${part}.text`,
+                        at: `${cat}.text`,
+                        value: t(c.text),
+                        multiline: true,
+                        placeholder:
+                          c.polarity === "include"
+                            ? "What a record must show to stay in, in one sentence"
+                            : "What makes a record go out, in one sentence",
+                        onChange: (v) => editCriterion((x) => (x.text = localized(x.text, v))),
+                      })}
+                      {field({
+                        id: `${c.id}-short`,
+                        label: "Short label on the screening strip",
+                        part: `${part}.short_label`,
+                        at: `${cat}.short_label`,
+                        value: c.short_label ?? "",
+                        placeholder: "A word or two, such as Adults or RCT",
+                        onChange: (v) =>
+                          editCriterion((x) => {
+                            if (v.trim()) x.short_label = v;
+                            else delete x.short_label;
+                          }),
+                      })}
+                      {field({
+                        id: `${c.id}-exclusion-reason`,
+                        label: "Exclusion reason in the flow diagram",
+                        part: `${part}.exclusion_reason`,
+                        at: `${cat}.exclusion_reason`,
+                        value: c.exclusion_reason ?? "",
+                        placeholder: "e.g. Not a randomised controlled trial",
+                        onChange: (v) =>
+                          editCriterion((x) => {
+                            // Optional, and left out while empty, as the server leaves it out.
+                            if (v.trim()) x.exclusion_reason = v;
+                            else delete x.exclusion_reason;
+                          }),
+                      })}
+                    </li>
+                  );
+                })}
+              </ul>
+              <FieldIssues issues={issues.filter((i) => i.path === `${tat}.criteria`)} />
+              {suggestion ? null : (
+                <AddButton
+                  onClick={() =>
+                    editTopic((x) => {
+                      x.criteria = [
+                        ...x.criteria,
+                        {
+                          id: freshId("C", allCriteria),
+                          slot: "other",
+                          polarity: "include",
+                          text: { [lang]: "" },
+                          decidable_at: ["title_abstract", "full_text"],
+                          applies_to: [topic.id],
+                        },
+                      ];
+                    })
+                  }
+                >
+                  Add a criterion
+                </AddButton>
+              )}
+            </section>
+          );
+        })}
+
+        <SectionHead id="form-questions" title="Questions" />
         <ol className="grid gap-6">
           {d.questions.map((q, qi) => {
             const part = `questions[${q.id}]`;
@@ -1165,11 +1435,27 @@ function FormView({
                   part: `${part}.label`,
                   at: `${at}.label`,
                   value: t(q.label),
-                  placeholder: "A short name for the question",
+                  placeholder: "The question as the review asks it",
                   onChange: (v) =>
                     change((x) => {
                       const y = x.questions[qi] as Mutable<Question>;
                       y.label = localized(y.label, v);
+                    }),
+                })}
+                {field({
+                  id: `${q.id}-short`,
+                  label: "Short label",
+                  part: `${part}.short_label`,
+                  at: `${at}.short_label`,
+                  value: q.short_label ?? "",
+                  placeholder:
+                    "A few words that name it on every screen, such as Phone support vs usual care",
+                  onChange: (v) =>
+                    change((x) => {
+                      const y = x.questions[qi] as Mutable<Question>;
+                      // Left out while empty, so the protocol's hash stays as it was.
+                      if (v.trim()) y.short_label = v;
+                      else delete y.short_label;
                     }),
                 })}
                 {(["population", "intervention"] as const).map((k) =>
@@ -1258,12 +1544,12 @@ function FormView({
           </AddButton>
         )}
 
-        <SectionHead title="Outcomes" />
+        <SectionHead id="form-outcomes" title="Outcomes" />
         <ul className="grid gap-2">
           {d.outcomes.map((o, oi) =>
             field({
               id: `outcome-${o.id}`,
-              label: o.category === "primary" ? "Primary outcome" : "Secondary outcome",
+              label: outcomeLabel(d.outcomes, oi),
               part: `outcomes[${o.id}].name`,
               at: `outcomes[${oi}]`,
               value: t(o.name),
@@ -1302,7 +1588,7 @@ function FormView({
               })
             }
           >
-            Add a secondary outcome
+            Add an outcome
           </AddButton>
         )}
 
@@ -1312,116 +1598,180 @@ function FormView({
           return (
             <section key={topic.id} data-testid="topic">
               <SectionHead title={`Search topic: ${t(topic.label)}`} />
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-4">
-                {field({
-                  id: `${topic.id}-label`,
-                  label: "Name of the search topic",
-                  part: `search_topics[${topic.id}].label`,
-                  at: `${tat}.label`,
-                  value: t(topic.label),
-                  onChange: (v) => editTopic((x) => (x.label = localized(x.label, v))),
-                })}
-                <div className="grid gap-1" data-testid="mode">
+              {field({
+                id: `${topic.id}-label`,
+                label: "Name of the search topic",
+                part: `search_topics[${topic.id}].label`,
+                at: `${tat}.label`,
+                value: t(topic.label),
+                onChange: (v) => editTopic((x) => (x.label = localized(x.label, v))),
+              })}
+              <div
+                id={`form-mode-${topic.id}`}
+                className="mt-5 grid scroll-mt-8 gap-2.5"
+                data-testid="mode"
+              >
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                  <span className="flex items-center gap-1.5">
+                    <span id={`mode-${topic.id}`} className="text-md font-semibold">
+                      Screening mode
+                    </span>
+                    <Mark text={label(marks(`search_topics[${topic.id}].mode`))} />
+                  </span>
                   {suggestion ? null : (
                     <div
-                      className="flex flex-wrap items-center gap-2 text-xs"
+                      className="ml-auto flex items-center gap-2 text-sm"
                       role="group"
                       aria-label="Preset"
                     >
-                      <span className="font-semibold text-ink-2">Preset</span>
-                      {(Object.keys(PRESETS) as Preset[]).map((preset) => (
-                        <button
-                          key={preset}
-                          type="button"
-                          aria-pressed={presetOf(topic) === preset}
-                          title={PRESETS[preset].description}
-                          onClick={() =>
-                            change((x) => {
-                              x.search_topics = x.search_topics.map((y, i) =>
-                                i === ti ? withPreset(y, preset) : y,
-                              );
-                            })
-                          }
-                          className={`rounded-[3px] border px-2 py-0.5 ${presetOf(topic) === preset ? "border-petrol font-semibold text-ink" : "border-rule text-ink-2 hover:text-ink"}`}
-                        >
-                          {PRESETS[preset].label}
-                        </button>
-                      ))}
+                      <span className="text-ink-2">Preset</span>
+                      <span className="inline-flex rounded-[4px] border border-rule-strong bg-sheet-2 p-0.5">
+                        {(Object.keys(PRESETS) as Preset[]).map((preset) => {
+                          const on = presetOf(topic) === preset;
+                          return (
+                            <button
+                              key={preset}
+                              type="button"
+                              aria-pressed={on}
+                              title={PRESETS[preset].description}
+                              onClick={() =>
+                                change((x) => {
+                                  x.search_topics = x.search_topics.map((y, i) =>
+                                    i === ti ? withPreset(y, preset) : y,
+                                  );
+                                })
+                              }
+                              className={`inline-flex items-center gap-1.5 rounded-[3px] px-2.5 py-1 ${on ? "bg-petrol font-semibold text-petrol-ink" : "text-ink-2 hover:bg-sheet hover:text-ink"}`}
+                            >
+                              {on ? (
+                                <svg width="11" height="9" viewBox="0 0 12 10" aria-hidden="true">
+                                  <path
+                                    d="M1 5.2l3.4 3.3L11 1.5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                  />
+                                </svg>
+                              ) : null}
+                              {PRESETS[preset].label}
+                            </button>
+                          );
+                        })}
+                        {presetOf(topic) === null ? (
+                          <span
+                            className="inline-flex items-center rounded-[3px] bg-sheet px-2.5 py-1 font-semibold text-ink shadow-[inset_0_0_0_1px_var(--rule-strong)]"
+                            data-testid="preset-custom"
+                            title="The mode or the audit plan differs from both presets."
+                          >
+                            Custom
+                          </span>
+                        ) : null}
+                      </span>
                     </div>
                   )}
-                  <span className="flex items-center gap-1.5">
-                    <label
-                      htmlFor={`mode-${topic.id}`}
-                      className="text-xs font-semibold text-ink-2"
-                    >
-                      Screening mode
-                    </label>
-                    <Mark text={label(marks(`search_topics[${topic.id}].mode`))} />
-                  </span>
-                  <Select
-                    id={`mode-${topic.id}`}
-                    value={topic.mode ?? ""}
-                    disabled={suggestion}
-                    onChange={(e) => {
-                      const mode = e.currentTarget.value;
-                      editTopic((x) => (x.mode = mode));
-                    }}
-                  >
-                    {topic.mode ? null : <option value="">Choose a mode</option>}
-                    {MODES.map(([value, text]) => (
-                      <option key={value} value={value}>
-                        {text}
-                      </option>
-                    ))}
-                  </Select>
-                  <FieldIssues
-                    issues={issuesAt(issues, `${tat}.mode`).concat(
-                      issuesAt(issues, `${tat}.validation_pack`),
-                      issuesAt(issues, `${tat}.stopping`),
-                      issuesAt(issues, `${tat}.audit.sentinel_percent`),
-                      issuesAt(issues, `${tat}.audit.random_audit_percent`),
-                    )}
-                  />
-                  {topic.mode && topic.mode !== "M1"
-                    ? field({
-                        id: `${topic.id}-mode-rationale`,
-                        label: "Why this mode",
-                        part: `search_topics[${topic.id}].mode_rationale`,
-                        at: `${tat}.mode_rationale`,
-                        value: t(topic.mode_rationale ?? undefined),
-                        ...(topic.mode === "S"
-                          ? {
-                              placeholder:
-                                "A confounder search for our own model, not a submission",
-                            }
-                          : {}),
-                        onChange: (v) =>
-                          editTopic(
-                            (x) =>
-                              (x.mode_rationale = v.trim()
-                                ? localized(x.mode_rationale ?? {}, v)
-                                : null),
-                          ),
-                      })
-                    : null}
                 </div>
+                {suggestion ? null : (
+                  <p className="text-sm text-ink-2" data-testid="preset-sets">
+                    {(() => {
+                      const preset = presetOf(topic);
+                      return preset
+                        ? `${PRESETS[preset].label} sets: ${PRESETS[preset].sets}.`
+                        : "Custom: the mode or the audit plan matches neither preset. A preset sets the mode, the sentinels, the audit sample, and with them the documentation level.";
+                    })()}
+                  </p>
+                )}
+                <div
+                  role="radiogroup"
+                  aria-labelledby={`mode-${topic.id}`}
+                  className="grid grid-cols-2 gap-2"
+                >
+                  {MODES.map((mode) => {
+                    const on = topic.mode === mode;
+                    return (
+                      <label
+                        key={mode}
+                        title={`Mode ${mode}`}
+                        className={`grid gap-0.5 rounded-[4px] border px-3 py-2 text-sm ${suggestion ? "" : "cursor-pointer"} ${on ? "border-petrol bg-petrol-wash" : "border-rule-strong hover:border-ink-3"}`}
+                      >
+                        <span className="flex items-center gap-2 font-semibold">
+                          <input
+                            type="radio"
+                            name={`mode-${topic.id}`}
+                            value={mode}
+                            checked={on}
+                            disabled={suggestion}
+                            onChange={() => editTopic((x) => (x.mode = mode))}
+                            className="accent-[var(--petrol)]"
+                          />
+                          {MODE_LABELS[mode]!.short}
+                        </span>
+                        <span className="pl-[21px] text-sm text-ink-2">
+                          {MODE_LABELS[mode]!.long}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <FieldIssues
+                  issues={issuesAt(issues, `${tat}.mode`).concat(
+                    issuesAt(issues, `${tat}.validation_pack`),
+                    issuesAt(issues, `${tat}.stopping`),
+                    issuesAt(issues, `${tat}.audit.sentinel_percent`),
+                    issuesAt(issues, `${tat}.audit.random_audit_percent`),
+                  )}
+                />
+                {topic.mode && topic.mode !== "M1"
+                  ? field({
+                      id: `${topic.id}-mode-rationale`,
+                      label: "Why this mode",
+                      multiline: true,
+                      rows: 3,
+                      part: `search_topics[${topic.id}].mode_rationale`,
+                      at: `${tat}.mode_rationale`,
+                      value: t(topic.mode_rationale ?? undefined),
+                      ...(topic.mode === "S"
+                        ? {
+                            placeholder: "A confounder search for our own model, not a submission",
+                          }
+                        : {}),
+                      onChange: (v) =>
+                        editTopic(
+                          (x) =>
+                            (x.mode_rationale = v.trim()
+                              ? localized(x.mode_rationale ?? {}, v)
+                              : null),
+                        ),
+                    })
+                  : null}
               </div>
 
               <Instructions
                 topic={topic}
                 disabled={suggestion}
                 source={() => forSaving(d)}
-                onChange={({ strictness, guidance }) =>
+                onChange={({ strictness, guidance, system_prompt, user_template }) =>
                   editTopic((x) => {
                     const text = guidance.trim() ? guidance : null;
                     // The defaults stay out of the document, as the server leaves them out.
-                    if (strictness === "conservative" && !text) delete x.judge;
-                    else x.judge = { strictness, ...(text ? { guidance } : {}) };
+                    if (strictness === "conservative" && !text && !system_prompt && !user_template)
+                      delete x.judge;
+                    else
+                      x.judge = {
+                        strictness,
+                        ...(text ? { guidance } : {}),
+                        ...(system_prompt ? { system_prompt } : {}),
+                        ...(user_template ? { user_template } : {}),
+                      };
                   })
                 }
               />
 
-              <h3 className="mt-6 text-md font-semibold">Sources and their queries</h3>
+              <h3
+                id={`form-sources-${topic.id}`}
+                className="mt-6 scroll-mt-8 text-md font-semibold"
+              >
+                Sources and their queries
+              </h3>
               <ul className="mt-2 grid gap-5">
                 {topic.source_plan.sources.map((s, si) => {
                   const dialect = dialectOf(s);
@@ -1565,155 +1915,6 @@ function FormView({
                   ))}
                 </div>
               )}
-
-              <h3 className="mt-6 text-md font-semibold">Eligibility criteria</h3>
-              <ul className="mt-2 grid gap-4">
-                {topic.criteria.map((c, ci) => {
-                  const part = `search_topics[${topic.id}].criteria[${c.id}]`;
-                  const cat = `${tat}.criteria[${ci}]`;
-                  const editCriterion = (fn: (x: Mutable<Criterion>) => void) =>
-                    editTopic((x) => {
-                      x.criteria = x.criteria.map((y, i) => {
-                        if (i !== ci) return y;
-                        const next = { ...y } as Mutable<Criterion>;
-                        fn(next);
-                        return next;
-                      });
-                    });
-                  return (
-                    <li
-                      key={c.id}
-                      className="grid gap-1.5"
-                      data-testid="criterion"
-                      data-criterion={c.id}
-                    >
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                        <span className="font-semibold text-ink-2">Criterion {c.id}</span>
-                        <Select
-                          aria-label={`Kind of criterion ${c.id}`}
-                          value={c.polarity}
-                          disabled={suggestion}
-                          onChange={(e) => {
-                            const v = e.currentTarget.value;
-                            editCriterion((x) => (x.polarity = v));
-                          }}
-                          className="!w-auto !py-0.5 !text-xs"
-                        >
-                          <option value="include">Inclusion</option>
-                          <option value="exclude">Exclusion</option>
-                        </Select>
-                        <Mark text={label(marks(`${part}.polarity`))} />
-                        <Select
-                          aria-label={`Part of the question for criterion ${c.id}`}
-                          value={c.slot ?? ""}
-                          disabled={suggestion}
-                          onChange={(e) => {
-                            const v = e.currentTarget.value;
-                            editCriterion((x) => (x.slot = v));
-                          }}
-                          className="!w-auto !py-0.5 !text-xs"
-                        >
-                          {c.slot ? null : <option value="">Choose a part</option>}
-                          {Object.entries(SLOTS).map(([value, text]) => (
-                            <option key={value} value={value}>
-                              {text}
-                            </option>
-                          ))}
-                        </Select>
-                        <Mark text={label(marks(`${part}.slot`))} />
-                        <span className="text-ink-2">Decided at</span>
-                        {STAGES.map(([stage, text]) => (
-                          <label key={stage} className="inline-flex items-center gap-1">
-                            <input
-                              type="checkbox"
-                              disabled={suggestion}
-                              checked={c.decidable_at.includes(stage)}
-                              onChange={(e) => {
-                                const on = e.currentTarget.checked;
-                                editCriterion(
-                                  (x) =>
-                                    (x.decidable_at = STAGES.map(([s]) => s).filter((s) =>
-                                      s === stage ? on : x.decidable_at.includes(s),
-                                    )),
-                                );
-                              }}
-                              className="accent-[var(--petrol)]"
-                            />
-                            {text}
-                          </label>
-                        ))}
-                        <Mark text={label(marks(`${part}.decidable_at`))} />
-                        <span className="ml-auto flex items-center gap-2">
-                          {ask(part, `criterion ${c.id}`)}
-                          {suggestion || topic.criteria.length < 2 ? null : (
-                            <RemoveButton
-                              label={`Remove criterion ${c.id}`}
-                              onClick={() =>
-                                editTopic(
-                                  (x) => (x.criteria = x.criteria.filter((_, i) => i !== ci)),
-                                )
-                              }
-                            />
-                          )}
-                        </span>
-                      </div>
-                      <FieldIssues
-                        issues={issuesAt(issues, `${cat}.decidable_at`).concat(
-                          issuesAt(issues, `${cat}.applies_to`),
-                        )}
-                      />
-                      {field({
-                        id: `${c.id}-text`,
-                        label: "Text of the criterion",
-                        part: `${part}.text`,
-                        at: `${cat}.text`,
-                        value: t(c.text),
-                        multiline: true,
-                        placeholder:
-                          c.polarity === "include"
-                            ? "What a record must show to stay in, in one sentence"
-                            : "What makes a record go out, in one sentence",
-                        onChange: (v) => editCriterion((x) => (x.text = localized(x.text, v))),
-                      })}
-                      {field({
-                        id: `${c.id}-short`,
-                        label: "Short label on the screening strip",
-                        part: `${part}.short_label`,
-                        at: `${cat}.short_label`,
-                        value: c.short_label ?? "",
-                        placeholder: "A word or two, such as Adults or RCT",
-                        onChange: (v) =>
-                          editCriterion((x) => {
-                            if (v.trim()) x.short_label = v;
-                            else delete x.short_label;
-                          }),
-                      })}
-                    </li>
-                  );
-                })}
-              </ul>
-              <FieldIssues issues={issues.filter((i) => i.path === `${tat}.criteria`)} />
-              {suggestion ? null : (
-                <AddButton
-                  onClick={() =>
-                    editTopic((x) => {
-                      x.criteria = [
-                        ...x.criteria,
-                        {
-                          id: freshId("C", allCriteria),
-                          slot: "other",
-                          polarity: "include",
-                          text: { [lang]: "" },
-                          decidable_at: ["title_abstract", "full_text"],
-                          applies_to: [topic.id],
-                        },
-                      ];
-                    })
-                  }
-                >
-                  Add a criterion
-                </AddButton>
-              )}
             </section>
           );
         })}
@@ -1722,9 +1923,26 @@ function FormView({
   );
 }
 
-function SectionHead({ title }: { title: string }) {
+/** "Primary outcome", "Secondary outcome 2", or for a profile's own category "Outcome 3,
+ * mortality": numbered within its kind when the kind has more than one. */
+const outcomeLabel = (outcomes: Doc["outcomes"], index: number) => {
+  const o = outcomes[index]!;
+  const kind =
+    o.category === "primary"
+      ? "Primary outcome"
+      : o.category === "secondary"
+        ? "Secondary outcome"
+        : null;
+  if (!kind) return `Outcome ${index + 1}, ${keyWords(o.category).toLowerCase()}`;
+  const same = outcomes.filter((y) => y.category === o.category);
+  return same.length > 1 ? `${kind} ${same.indexOf(o) + 1}` : kind;
+};
+
+function SectionHead({ id, title }: { id?: string; title: string }) {
   return (
-    <h2 className="mt-9 mb-3 border-t border-rule-strong pt-3 text-lg font-semibold">{title}</h2>
+    <h2 id={id} className="mt-10 mb-3 scroll-mt-8 text-lg font-semibold">
+      {title}
+    </h2>
   );
 }
 
@@ -1776,6 +1994,7 @@ function FormField({
   mono,
   placeholder,
   big,
+  rows,
   after,
   mark,
   model,
@@ -1790,6 +2009,8 @@ function FormField({
   mono?: boolean;
   placeholder?: string;
   big?: boolean;
+  /** At least this many lines, for a text a person writes in sentences. */
+  rows?: number | undefined;
   after?: ReactNode;
   mark: string | null;
   model: string | null;
@@ -1802,7 +2023,7 @@ function FormField({
   const inputId = `field-${id}`;
   return (
     <div
-      className={`grid gap-0.5 ${mark ? "border-l-2 border-dashed border-petrol pl-2.5" : "pl-3"}`}
+      className={`grid scroll-mt-8 gap-0.5 ${mark ? "border-l-2 border-dashed border-petrol pl-2.5" : "pl-3"}`}
       data-testid={mark ? "ai-written" : "field"}
       data-model={model ?? undefined}
     >
@@ -1819,14 +2040,14 @@ function FormField({
           id={inputId}
           value={value}
           readOnly={readOnly}
-          rows={1}
+          rows={rows ?? 1}
           spellCheck={!mono}
           placeholder={placeholder}
           onChange={(e) => onChange(e.currentTarget.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !multiline && !e.ctrlKey && !e.metaKey) e.preventDefault();
           }}
-          className={`${control} min-h-[30px] min-w-0`}
+          className={`${control} min-w-0 ${rows && rows > 1 ? "min-h-[72px]" : "min-h-[30px]"}`}
         />
         {after}
       </span>
@@ -1916,6 +2137,7 @@ function Unsaved({
   next,
   issues,
   saving,
+  drafts,
   onSave,
   onDiscard,
 }: {
@@ -1923,12 +2145,14 @@ function Unsaved({
   next: number;
   issues: ReadonlyArray<ProtocolIssue>;
   saving: boolean;
+  /** A model is set up: a new draft waits until the changes are saved or discarded. */
+  drafts: boolean;
   onSave: () => void;
   onDiscard: () => void;
 }) {
   const { me } = useProject();
   return (
-    <section data-testid="unsaved-panel">
+    <section data-testid="unsaved-panel" className="rounded-[4px] bg-sheet-2 px-4 py-4">
       <h2 className="text-md font-semibold">Not saved yet</h2>
       <p className="mt-1 text-sm text-ink-2">
         {working.base
@@ -1947,11 +2171,16 @@ function Unsaved({
         </>
       ) : null}
       <div className="mt-4 flex items-center gap-3">
-        <Button primary onClick={onSave} disabled={saving}>
+        <Button kind="primary" onClick={onSave} disabled={saving}>
           {saving ? "Saving" : `Save as revision ${next}`}
         </Button>
         <Button onClick={onDiscard}>Discard</Button>
       </div>
+      {drafts ? (
+        <p className="mt-3 text-xs text-ink-2" data-testid="draft-locked">
+          Save or discard your changes before you ask the model for a new draft.
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -2210,14 +2439,88 @@ function SuggestionReview({
       ) : null}
 
       <div className="mt-5 flex items-center gap-3">
-        <Button primary onClick={() => void accept()} disabled={!chosen.size || busy} keys="a">
+        <Button
+          kind="primary"
+          onClick={() => void accept()}
+          disabled={!chosen.size || busy}
+          keys={["a"]}
+        >
           {busy ? "Accepting" : `Accept ${chosen.size} of ${changes.length}`}
         </Button>
-        <Button onClick={onReject} keys="Esc">
+        <Button onClick={onReject} keys={["Escape"]}>
           Leave all
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Links to the parts of the form, so a long protocol is a click from each part. */
+function FormLinks({ doc }: { doc: Doc }) {
+  // The published protocol's order: criteria first, then the questions, the outcomes, and each
+  // search topic's screening settings.
+  const many = doc.search_topics.length > 1;
+  const named = (t: Topic) =>
+    many ? `, ${t.label[doc.default_language] ?? Object.values(t.label)[0] ?? ""}` : "";
+  const links: ReadonlyArray<readonly [string, string]> = [
+    ...doc.search_topics.map(
+      (t) => [`form-criteria-${t.id}`, `Eligibility criteria${named(t)}`] as const,
+    ),
+    ["form-questions", "Questions"],
+    ["form-outcomes", "Outcomes"],
+    ...doc.search_topics.flatMap(
+      (t) =>
+        [
+          [`form-mode-${t.id}`, `Screening mode${named(t)}`],
+          [`form-instructions-${t.id}`, `Instructions for the AI${named(t)}`],
+          [`bench-${t.id}`, `Test bench${named(t)}`],
+          [`form-sources-${t.id}`, `Sources and queries${named(t)}`],
+        ] as const,
+    ),
+  ];
+  // The part in view: the last one whose top has passed under the revision bar.
+  const [active, setActive] = useState<string | null>(null);
+  const ids = links.map(([id]) => id).join(" ");
+  useEffect(() => {
+    const scroller = document.querySelector("[data-form-scroll]");
+    if (!scroller) return;
+    const find = () => {
+      // The reading line: about a third down the visible form, where a person reads.
+      const box = scroller.getBoundingClientRect();
+      const top = box.top + box.height * 0.35;
+      let found: string | null = null;
+      for (const id of ids.split(" ")) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top <= top) found = id;
+      }
+      setActive(found);
+    };
+    find();
+    scroller.addEventListener("scroll", find, { passive: true });
+    return () => scroller.removeEventListener("scroll", find);
+  }, [ids]);
+  return (
+    <nav aria-label="Parts of the form" className="mt-5 text-sm">
+      <h3 className="text-xs font-semibold text-ink-2">On this form</h3>
+      <ul className="mt-1.5 grid gap-0.5 border-l border-rule">
+        {links.map(([id, name]) => (
+          <li key={id}>
+            <a
+              href={`#${id}`}
+              aria-current={active === id ? "location" : undefined}
+              onClick={(e) => {
+                // The form scrolls in its own pane; scroll there instead of changing the URL.
+                e.preventDefault();
+                document.getElementById(id)?.scrollIntoView({ block: "start" });
+              }}
+              className={`-ml-px block border-l-2 py-0.5 pl-3 hover:underline ${active === id ? "border-petrol font-semibold text-ink" : "border-transparent text-petrol"}`}
+            >
+              {name}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </nav>
   );
 }
 
@@ -2237,7 +2540,9 @@ function Provenance({
   const n = revision.accepted?.change_ids.length ?? 0;
   return (
     <section data-testid="provenance">
-      <h2 className="text-md font-semibold">Revision {revision.seq}</h2>
+      <h2 className="text-md font-semibold" title={`Content hash ${revision.content_hash}`}>
+        Draft revision {revision.seq}
+      </h2>
       <p className="mt-1 text-sm text-ink-2">
         {revision.kind === "draft"
           ? `${model?.recipe_id ?? "A model"} drafted this protocol from the description ${person} wrote.`
@@ -2289,17 +2594,23 @@ function Provenance({
           </dd>
         </dl>
       ) : null}
-      <p className="mt-3 flex items-center gap-1.5 text-xs text-ink-2" data-testid="written-count">
-        {written.length ? (
-          <>
-            <AiTag label="Written by a model" />
-            {written.length} {written.length === 1 ? "field was" : "fields were"} written by a
-            model. Point at a mark to see which.
-          </>
-        ) : (
-          "A person wrote every field."
-        )}
-      </p>
+      {/* A revision written by hand with no model's field says so once, in the line above. */}
+      {written.length || revision.kind !== "edit" ? (
+        <p
+          className="mt-2 flex items-center gap-1.5 text-xs text-ink-2"
+          data-testid="written-count"
+        >
+          {written.length ? (
+            <>
+              <AiTag label="Written by a model" />
+              {written.length} {written.length === 1 ? "field was" : "fields were"} written by a
+              model. Point at a mark to see which.
+            </>
+          ) : (
+            "A person wrote every field."
+          )}
+        </p>
+      ) : null}
     </section>
   );
 }
@@ -2424,21 +2735,33 @@ function WordDiff({ before, after }: { before: string; after: string }) {
 }
 
 function Publish({
-  revision,
+  versionLabel,
+  inForce,
+  onRelabel,
   onPublish,
 }: {
-  revision: ProtocolRevision;
+  /** The version label the revision carries: what the published protocol will be called. */
+  versionLabel: string;
+  /** The label of the version in force, or null before the first publication. */
+  inForce: string | null;
+  /** Saves the revision again under another version label, as a new revision. */
+  onRelabel: (label: string) => Promise<unknown> | undefined;
   onPublish: (reason: string | null) => Promise<void>;
 }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [relabelling, setRelabelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A draft whose label does not come after the one in force would publish a version that
+  // repeats it or goes back.
+  const repeats = inForce !== null && !comesAfter(versionLabel, inForce);
+  const blocked = busy || !reason.trim() || repeats;
   return (
     <form
-      className="mt-6 grid gap-3 border-t border-rule-strong pt-4"
+      className="mt-4 grid gap-2.5 border-t border-rule pt-3"
       onSubmit={(e) => {
         e.preventDefault();
-        if (busy) return;
+        if (blocked) return;
         setBusy(true);
         setError(null);
         onPublish(reason.trim() || null)
@@ -2447,14 +2770,59 @@ function Publish({
       }}
     >
       <Field
-        label="Reason"
-        hint="Why this version, in one sentence. The ledger keeps it with your approval and the fields a model wrote."
+        label="Reason (required)"
+        hint="Why this version, in a sentence. The ledger keeps it with your approval."
       >
-        <TextInput value={reason} onChange={(e) => setReason(e.currentTarget.value)} />
+        <TextArea
+          rows={2}
+          value={reason}
+          onChange={(e) => setReason(e.currentTarget.value)}
+          className="resize-y"
+        />
       </Field>
-      <div>
-        <Button primary type="submit" disabled={busy}>
-          {busy ? "Publishing" : `Publish revision ${revision.seq}`}
+      {repeats ? (
+        <p
+          className="flex items-start gap-2 text-sm text-marker-edge"
+          data-testid="version-repeats"
+        >
+          <span
+            className="mark bg-marker-soft shadow-[inset_0_0_0_1px_var(--marker-edge)]"
+            aria-hidden="true"
+          >
+            !
+          </span>
+          <span className="grid gap-2">
+            <span>
+              This draft is labelled version {versionLabel}, which does not come after version{" "}
+              {inForce}, the one in force.
+            </span>
+            <span>
+              <Button
+                size="sm"
+                disabled={relabelling}
+                onClick={() => {
+                  setRelabelling(true);
+                  void Promise.resolve(onRelabel(nextLabel(inForce ?? versionLabel))).finally(() =>
+                    setRelabelling(false),
+                  );
+                }}
+              >
+                {relabelling
+                  ? "Saving"
+                  : `Use ${nextLabel(inForce ?? versionLabel)} and save as a new revision`}
+              </Button>
+            </span>
+          </span>
+        </p>
+      ) : (
+        <p className="text-sm text-ink-2" data-testid="publishes-as">
+          Publishing makes this draft protocol version {versionLabel}
+          {inForce ? `, after version ${inForce}` : ""}. Every decision reads it from then on.
+        </p>
+      )}
+      <div className="flex items-center gap-3">
+        <Button kind="primary" type="submit" disabled={blocked}>
+          {busy ? "Publishing" : repeats ? "Publish" : `Publish version ${versionLabel}`}
         </Button>
       </div>
       {error ? (

@@ -4,7 +4,8 @@ The steps the demo seed takes in one call, taken one route at a time as an integ
 the project and its people, the protocol, two file imports, the corpus, and a title and abstract
 stage. (Full texts are left to the end-to-end test: the documents tests expect an empty document
 table in the shared test database.) The worker runs the stage's judge jobs on the recorded answers; a worker
-whose judge is a different one refuses them before any model call.
+whose judge is a different one refuses them before any model call, and one whose judge is the same
+model under a newer prompt version judges with the prompt the stage was opened with.
 """
 
 from dataclasses import replace
@@ -17,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from kittum.api import AppContext, create_app
 from kittum.app import Judge, add_member, job_handlers, judge_config
-from kittum.app.demo import DATA, PROTOCOL, SENTINELS, demo_judge
+from kittum.app.demo import DATA, PROTOCOL, RECORDED_MODEL, SENTINELS, demo_judge
 from kittum.extraction import JOB_KIND as EXTRACTION_JOB
 from kittum.ledger import PostgresLedger
 from kittum.models import ModelRegistry
@@ -177,7 +178,30 @@ def test_a_project_from_nothing_to_an_open_stage(database: Database, tmp_path: P
     assert {f["status"] for f in failed} == {"failed"}
     assert "needs demo-recorded" in failed[0]["last_error"]
 
-    assert _run_jobs(ctx) == len(jobs)
+    # The demo judge opened the stage under judge.v2. A worker upgraded to judge.v3 with the same
+    # model judges it with the prompt it started with, and the prompt view shows that prompt.
+    assert ctx.judge is not None and ctx.judge.config.id == "demo-recorded@judge.v2"
+    upgraded = _context(
+        database,
+        tmp_path,
+        replace(ctx.judge, config=judge_config(RECORDED_MODEL, label="demo-recorded")),
+    )
+    assert upgraded.judge is not None and upgraded.judge.config.prompt_version == "judge.v3"
+    assert _run_jobs(upgraded) == len(jobs)
+    with database.transaction() as tx:
+        judged = tx.execute(
+            "select distinct judge_config_id, item_ref from verdict where project_id = %s", (pid,)
+        ).fetchall()
+    assert {j["judge_config_id"] for j in judged} == {"demo-recorded@judge.v2"}
+    prompt = ok(
+        client.get(
+            f"/api/projects/{pid}/screening/stages/{info['stage_id']}/prompt",
+            params={"item_ref": judged[0]["item_ref"]},
+            headers=as_lead,
+        )
+    )
+    assert "### Criterion POP (population)" in prompt["user"]
+    assert "Answer key:" not in prompt["user"]
     items = ok(
         client.get(
             f"/api/projects/{pid}/screening/queue", params=queue | {"limit": 50}, headers=reviewer
@@ -251,15 +275,13 @@ def test_a_project_from_nothing_to_an_open_stage(database: Database, tmp_path: P
 
     ledger = ok(client.get(f"/api/projects/{pid}/ledger/verify", headers=as_lead))
     assert ledger["ok"] and ledger["verify"]["ok"]
-    # Anyone else learns that the chain holds and how far, and not what is in it.
+    # Anyone else learns that the chain holds and how far, and not what is in it: the lead's keys
+    # are left out, not sent empty.
     for headers in (reviewer, as_auditor, {}):
         theirs = ok(client.get(f"/api/projects/{pid}/ledger/verify", headers=headers))
         assert theirs == {
             "ok": True,
             "checked_through_seq": ledger["checked_through_seq"],
-            "verify": None,
-            "events": None,
-            "by_type": None,
         }
     assert ledger["by_type"]["project.member_added"] == 6  # five people and a second role
     assert ledger["by_type"]["judge.verdict_recorded"] == 11

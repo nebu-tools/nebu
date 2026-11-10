@@ -3,8 +3,16 @@
 // then its hashes with the content behind them; check the chain and see which event fails which
 // check; look at the review as it was at an earlier event. The ledger contains every reviewer's
 // decisions, so the server answers the methods lead only.
-import { useRouteContext } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouteContext, useSearch } from "@tanstack/react-router";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { ReactNode } from "react";
 
 import type {
@@ -18,9 +26,14 @@ import type {
   TracedEvent,
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
-import { KeyHint } from "../../ui/Key.tsx";
+import { formatDateTime, formatTime } from "../../lib/format.ts";
+import { keyWords, modeLabel, revealLabel, sourceLabel } from "../../lib/labels.ts";
+import { Button } from "../../ui/Button.tsx";
+import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { LEAD_ONLY, useProject } from "../project.tsx";
+import { numberOf, shortLabel } from "../screening/criteria.ts";
+import type { NumberedCriterion } from "../screening/criteria.ts";
 import { ArtifactToggle, EventHashes, ModelCalls, short } from "./Evidence.tsx";
 import type { Caller } from "./Evidence.tsx";
 
@@ -32,24 +45,71 @@ const VIEWS: ReadonlyArray<readonly [View, string, string]> = [
   ["cutoff", "3", "Look back to an event"],
 ];
 
-/** The PRISMA counts a lead can open, in flow order, each with the `members` key behind it. */
-const BOXES: ReadonlyArray<readonly [string, string, number]> = [
-  ["records_identified", "Records identified", 0],
-  ["unique_records", "Records after duplicates removed", 1],
-  ["records_screened", "Records screened", 1],
-  ["records_excluded", "Records excluded", 2],
-  ["title_abstract:excluded_with_ai_involvement", "Excluded, the AI took part", 3],
-  ["records_awaiting_screening", "Records not yet screened", 2],
-  ["records_unresolved", "Records in conflict", 2],
-  ["reports_sought", "Reports sought for retrieval", 1],
-  ["reports_not_retrieved", "Reports not retrieved", 2],
-  ["reports_assessed", "Reports assessed for eligibility", 1],
-  ["reports_excluded", "Reports excluded", 2],
-  ["full_text:excluded_with_ai_involvement", "Excluded, the AI took part", 3],
-  ["reports_awaiting_classification", "Insufficient information", 2],
-  ["reports_included", "Reports included", 1],
-  ["studies_included", "Studies included", 1],
+const AI_INVOLVED =
+  "Excluded where the AI proposed the exclusion, its reading was shown before the final decision, or it sent the record to an extra screen.";
+
+/** A PRISMA count a lead can open, with the `members` key behind it; exits are its children. */
+interface Box {
+  readonly key: string;
+  readonly label: string;
+  readonly help?: string;
+  readonly children?: ReadonlyArray<Box>;
+}
+
+/** The PRISMA counts in flow order: the main steps, and under each the records that leave. */
+const TREE: ReadonlyArray<Box> = [
+  { key: "records_identified", label: "Records identified" },
+  { key: "unique_records", label: "Records after duplicates removed" },
+  {
+    key: "records_screened",
+    label: "Records screened",
+    children: [
+      {
+        key: "records_excluded",
+        label: "Excluded",
+        children: [
+          {
+            key: "title_abstract:excluded_with_ai_involvement",
+            label: "With the AI involved",
+            help: AI_INVOLVED,
+          },
+        ],
+      },
+      { key: "records_awaiting_screening", label: "Not yet screened" },
+      { key: "records_unresolved", label: "In conflict" },
+    ],
+  },
+  {
+    key: "reports_sought",
+    label: "Reports sought for retrieval",
+    children: [{ key: "reports_not_retrieved", label: "Not retrieved" }],
+  },
+  {
+    key: "reports_assessed",
+    label: "Reports assessed for eligibility",
+    children: [
+      {
+        key: "reports_excluded",
+        label: "Excluded",
+        children: [
+          {
+            key: "full_text:excluded_with_ai_involvement",
+            label: "With the AI involved",
+            help: AI_INVOLVED,
+          },
+        ],
+      },
+      { key: "reports_awaiting_classification", label: "Insufficient information" },
+    ],
+  },
+  { key: "reports_included", label: "Reports included" },
+  { key: "studies_included", label: "Studies included" },
 ];
+
+/** The tree in reading order, for stepping with `,` and `.`. */
+const flatten = (boxes: ReadonlyArray<Box>): Box[] =>
+  boxes.flatMap((b) => [b, ...flatten(b.children ?? [])]);
+const BOXES = flatten(TREE);
 
 const FLOW_ROWS: ReadonlyArray<readonly [keyof PrismaFlow & string, string]> = [
   ["records_identified", "Records identified"],
@@ -74,20 +134,25 @@ const CHECKS: Record<Finding["check"], string> = {
   checkpoint: "Signed checkpoint",
 };
 
+/** What a failed check means, in words a reader of the audit can act on. */
+const MEANS: Record<Finding["check"], string> = {
+  seq: "An event is missing or out of order.",
+  payload_hash: "Its content was changed after Kittum recorded it.",
+  prev_hash:
+    "It no longer links to the event before it, so events were removed, added, or rewritten.",
+  event_hash: "The event itself was changed after Kittum recorded it.",
+  checkpoint: "The chain no longer matches what a signed checkpoint recorded.",
+};
+
 const STAGES: Record<string, string> = {
   title_abstract: "Title and abstract",
   full_text: "Full text",
 };
 
-const when = (iso: string) =>
-  new Date(iso).toLocaleString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+const REPORT_NAMES: Record<string, string> = {
+  prisma: "PRISMA flow",
+  ai_disclosure: "AI disclosure",
+};
 
 /** A server reason as a sentence of its own. */
 const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}.`;
@@ -95,18 +160,42 @@ const sentence = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(
 const seconds = (from: string, to: string) =>
   Math.round((new Date(to).getTime() - new Date(from).getTime()) / 100) / 10;
 
+/** Where the chain breaks: the first event after the verified run, if the chain has one. */
+const breakOf = (audit: ChainAudit | null) =>
+  audit && !audit.ok && audit.verified_through_seq < audit.head_seq
+    ? audit.verified_through_seq + 1
+    : null;
+
+/** Checks whose failure has no single event to open: a gap in the sequence, a checkpoint. */
+const NOT_AN_EVENT: ReadonlySet<Finding["check"]> = new Set(["seq", "checkpoint"]);
+
 export function AuditScreen() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, seesLeadData, scopeLabel } = useProject();
+  const { project, me, seesLeadData, scopeLabel, criteriaFor } = useProject();
+  const words = useMemo(() => {
+    const all = [...criteriaFor("title_abstract", null), ...criteriaFor("full_text", null)];
+    return wordsFor(all.filter((c, i) => all.findIndex((x) => x.id === c.id) === i));
+  }, [criteriaFor]);
   const caller = useMemo(() => ({ projectId: project.id, as: me.actor_id }), [project.id, me]);
+  // From Progress: a PRISMA count to open.
+  const search = useSearch({ strict: false }) as { count?: string; scope?: string };
   const [view, setView] = useState<View>("trace");
   const [head, setHead] = useState<AsOf | null>(null);
+  // The review at the last verified event, when the chain breaks: counts that differ rest on
+  // events that cannot be verified.
+  const [verifiedThen, setVerifiedThen] = useState<AsOf | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [audit, setAudit] = useState<ChainAudit | null>(null);
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null);
   const [milestones, setMilestones] = useState<ReadonlyArray<Milestone>>([]);
   const [verifying, setVerifying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<RecordTrace | null>(null);
   const [cutoff, setCutoff] = useState<number | null>(null);
+  // An event read as stored, on the integrity view.
+  const [shown, setShown] = useState<TracedEvent | null>(null);
+  // The newest trace asked for wins, whichever answer comes back last.
+  const asked = useRef(0);
 
   const fail = (e: unknown, what: string) =>
     setError(e instanceof WorkbenchError ? e.message : `${what} failed.`);
@@ -115,6 +204,7 @@ export function AuditScreen() {
     setVerifying(true);
     try {
       setAudit(await run(workbench.auditLedger(caller)));
+      setCheckedAt(new Date());
       setError(null);
     } catch (e) {
       fail(e, "Verifying the ledger");
@@ -122,6 +212,26 @@ export function AuditScreen() {
       setVerifying(false);
     }
   }, [workbench, caller]);
+
+  const showEvent = useCallback(
+    async (seq: number) => {
+      setView("integrity");
+      try {
+        const page = await run(workbench.ledgerEvents({ ...caller, afterSeq: seq - 1, limit: 1 }));
+        setShown(page.events[0]?.seq === seq ? page.events[0] : null);
+        // The event opens inside its failed check: bring that row into view.
+        requestAnimationFrame(() => {
+          const row = document.querySelector<HTMLElement>(
+            `[data-testid="finding"][data-seq="${seq}"]`,
+          );
+          row?.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+      } catch (e) {
+        fail(e, "Reading the event");
+      }
+    },
+    [workbench, caller],
+  );
 
   useEffect(() => {
     if (!seesLeadData || !workbench.live) return;
@@ -136,21 +246,84 @@ export function AuditScreen() {
         setHead(now);
         setMilestones(named);
         setAudit(checked);
+        setCheckedAt(new Date());
+        // A broken chain opens on the event that fails, unless a count was asked for.
+        const at = breakOf(checked);
+        const failing = checked.findings.find((f) => f.seq === at);
+        if (at !== null && !search.count && failing && !NOT_AN_EVENT.has(failing.check)) {
+          void showEvent(at);
+        }
       },
       (e: unknown) => live && fail(e, "Loading the ledger"),
     );
     return () => {
       live = false;
     };
+    // Once per project and person; the search only picks the first view.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [workbench, caller, seesLeadData]);
 
+  useEffect(() => {
+    if (!audit || audit.ok || audit.verified_through_seq < 1) {
+      setVerifiedThen(null);
+      return;
+    }
+    let live = true;
+    run(workbench.asOf({ ...caller, cutoffSeq: audit.verified_through_seq })).then(
+      (a) => live && setVerifiedThen(a),
+      () => live && setVerifiedThen(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [workbench, caller, audit]);
+
+  /** Every event as the server reads it back, with the verification, as one JSON file. */
+  const exportLedger = async () => {
+    setExporting(true);
+    try {
+      const events: TracedEvent[] = [];
+      let after = 0;
+      for (;;) {
+        const page = await run(workbench.ledgerEvents({ ...caller, afterSeq: after, limit: 500 }));
+        events.push(...page.events);
+        if (page.next_after_seq == null || page.events.length === 0) break;
+        after = page.next_after_seq;
+      }
+      const file = JSON.stringify(
+        {
+          project_id: project.id,
+          exported_at: new Date().toISOString(),
+          verification: audit,
+          events,
+        },
+        null,
+        2,
+      );
+      const url = URL.createObjectURL(new Blob([file], { type: "application/json" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `kittum-ledger-${project.id}-event-${events.at(-1)?.seq ?? 0}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setError(null);
+    } catch (e) {
+      fail(e, "Exporting the ledger");
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const openTrace = useCallback(
-    async (ref: string) => {
+    async (ref: string, switchView = true) => {
+      const ask = ++asked.current;
       try {
-        setTrace(await run(workbench.trace({ ...caller, ref })));
-        setView("trace");
+        const traced = await run(workbench.trace({ ...caller, ref }));
+        if (ask !== asked.current) return;
+        setTrace(traced);
+        if (switchView) setView("trace");
       } catch (e) {
-        fail(e, "Tracing the record");
+        if (ask === asked.current) fail(e, "Tracing the record");
       }
     },
     [workbench, caller],
@@ -174,7 +347,7 @@ export function AuditScreen() {
     return (
       <Shell>
         <h1 className="text-xl font-semibold tracking-[-0.01em]">Audit</h1>
-        <p className="mt-4 max-w-[60ch] text-ink-2">
+        <p className="mt-4 max-w-[60ch] text-md text-ink-2">
           The ledger contains every reviewer&rsquo;s decisions and the AI&rsquo;s readings.{" "}
           {LEAD_ONLY}
         </p>
@@ -185,88 +358,212 @@ export function AuditScreen() {
   const highlight = new Set(view === "trace" ? (trace?.events.map((e) => e.seq) ?? []) : []);
   const findingAt = new Map<number, Finding>();
   for (const f of audit?.findings ?? []) if (!findingAt.has(f.seq)) findingAt.set(f.seq, f);
+  const signed = audit?.checkpoints.length ?? 0;
 
   return (
-    <div className="flex h-full flex-col bg-paper">
-      <header className="flex flex-none items-baseline gap-6 px-8 pt-6">
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">Audit</h1>
-        <nav aria-label="Audit views" className="flex gap-5 text-sm">
-          {VIEWS.map(([id, key, label]) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setView(id)}
-              aria-pressed={view === id}
-              className={`rounded-[3px] px-1 ${view === id ? "font-medium text-petrol" : ""}`}
+    <CriterionWords.Provider value={words}>
+      <RecordTitles.Provider value={head?.items ?? NO_ITEMS}>
+        <div className="flex h-full flex-col bg-paper">
+          <header className="flex flex-none flex-wrap items-start gap-x-6 gap-y-2 px-8 pt-6">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl font-semibold">Audit</h1>
+              <p className="mt-1 text-sm text-ink-2 tabular-nums">
+                {audit
+                  ? `${audit.events} events in the ledger, ${signed} signed ${signed === 1 ? "checkpoint" : "checkpoints"}${checkedAt ? `. Checked at ${formatTime(checkedAt)}` : ""}.`
+                  : verifying || !error
+                    ? "Checking the ledger."
+                    : ""}
+              </p>
+            </div>
+            {audit && !audit.ok ? null : (
+              <Button kind="secondary" disabled={exporting} onClick={() => void exportLedger()}>
+                {exporting ? "Exporting the ledger" : "Export the ledger"}
+              </Button>
+            )}
+            <Button
+              keys={["v"]}
+              disabled={verifying}
+              onClick={() => {
+                setView("integrity");
+                void verify();
+              }}
             >
-              <KeyHint keys={[key]} on={view === id}>
-                {label}
-              </KeyHint>
-            </button>
-          ))}
-        </nav>
-        <span className="ml-auto text-sm">
-          <KeyHint keys={["v"]}>Verify the chain again</KeyHint>
-        </span>
-      </header>
-      <ChainStrip
-        head={audit?.head_seq ?? head?.head_seq ?? 0}
-        audit={audit}
-        highlight={highlight}
-        cutoff={view === "cutoff" ? cutoff : null}
-        onPick={view === "cutoff" ? setCutoff : null}
-        verifying={verifying}
-      />
-      {error ? (
-        <p role="alert" className="flex-none px-8 pt-2 text-sm text-exclude">
-          {error}
-        </p>
-      ) : null}
-      <div className="min-h-0 flex-1">
-        {view === "trace" ? (
-          <TraceView
-            head={head}
-            trace={trace}
-            findings={findingAt}
-            onOpen={openTrace}
-            scopeLabel={scopeLabel}
-            caller={caller}
-          />
-        ) : view === "integrity" ? (
-          <IntegrityView
+              {verifying ? "Checking every event" : "Verify the chain again"}
+            </Button>
+          </header>
+          {audit && !audit.ok ? (
+            <BreakAlert
+              audit={audit}
+              checkedAt={checkedAt}
+              onOpen={(seq) => void showEvent(seq)}
+              opened={view === "integrity" ? (shown?.seq ?? null) : null}
+              onExport={() => void exportLedger()}
+              exporting={exporting}
+            />
+          ) : null}
+          <ChainStrip
+            head={audit?.head_seq ?? head?.head_seq ?? 0}
             audit={audit}
+            highlight={highlight}
+            cutoff={view === "cutoff" ? cutoff : null}
+            onPick={view === "cutoff" ? setCutoff : null}
             verifying={verifying}
-            onTrace={openTrace}
-            onSigned={() => void verify()}
-            caller={caller}
           />
-        ) : (
-          <CutoffView
-            head={head}
-            milestones={milestones}
-            cutoff={cutoff}
-            onCutoff={setCutoff}
-            scopeLabel={scopeLabel}
-            caller={caller}
-          />
-        )}
-      </div>
-    </div>
+          {error ? (
+            <p role="alert" className="flex-none px-8 pt-2 text-sm text-exclude">
+              {error}
+            </p>
+          ) : null}
+          <div role="tablist" aria-label="Audit views" className="flex flex-none gap-1 px-8 pt-3">
+            {VIEWS.map(([id, key, label]) => {
+              const on = view === id;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setView(id)}
+                  className={`-mb-px inline-flex items-center gap-2 border-b-2 px-3 py-2 text-md ${
+                    on
+                      ? "border-petrol font-medium text-ink"
+                      : "border-transparent text-ink-2 hover:text-ink"
+                  }`}
+                >
+                  <span>{label}</span>{" "}
+                  <span aria-hidden="true" className="opacity-70">
+                    <Key k={key} className="key-on-button" />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          <div role="tabpanel" className="min-h-0 flex-1 border-t border-rule bg-paper">
+            {view === "trace" ? (
+              <TraceView
+                head={head}
+                then={verifiedThen}
+                verifiedThrough={audit && !audit.ok ? audit.verified_through_seq : null}
+                initialCount={search.count ?? null}
+                initialScope={search.scope ?? null}
+                trace={trace}
+                findings={findingAt}
+                onOpen={openTrace}
+                scopeLabel={scopeLabel}
+                caller={caller}
+              />
+            ) : view === "integrity" ? (
+              <IntegrityView
+                audit={audit}
+                verifying={verifying}
+                shown={shown}
+                onShow={(seq) => void showEvent(seq)}
+                onTrace={openTrace}
+                onSigned={() => void verify()}
+                caller={caller}
+              />
+            ) : (
+              <CutoffView
+                head={head}
+                milestones={milestones}
+                cutoff={cutoff}
+                onCutoff={setCutoff}
+                scopeLabel={scopeLabel}
+                caller={caller}
+              />
+            )}
+          </div>
+        </div>
+      </RecordTitles.Provider>
+    </CriterionWords.Provider>
   );
 }
 
 function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="h-full overflow-y-auto bg-paper">
-      <div className="mx-auto max-w-[980px] px-10 pt-10 pb-16">{children}</div>
+      <div className="mx-auto max-w-[1680px] px-8 pt-8 pb-16">{children}</div>
     </div>
   );
 }
 
 /**
- * The whole chain on one line: a tick per event, a notch per signed checkpoint, the traced
- * record's events in petrol, a failing event in red. In the cutoff view a click picks the event,
- * and what came after it fades.
+ * The most serious state the review can be in: the ledger no longer matches its hashes. Says
+ * where it breaks, what that means, and opens the event.
+ */
+function BreakAlert({
+  audit,
+  checkedAt,
+  onOpen,
+  opened,
+  onExport,
+  exporting,
+}: {
+  audit: ChainAudit;
+  checkedAt: Date | null;
+  onOpen: (seq: number) => void;
+  /** The event open below the alert, if any: its button would open it again. */
+  opened: number | null;
+  onExport: () => void;
+  exporting: boolean;
+}) {
+  const at = breakOf(audit);
+  const finding =
+    audit.findings.find((f) => f.seq === at && f.check !== "checkpoint") ??
+    audit.findings.find((f) => f.check !== "checkpoint") ??
+    audit.findings[0] ??
+    null;
+  const seq = at ?? finding?.seq ?? null;
+  const others = audit.findings.length - (finding ? 1 : 0);
+  return (
+    <div
+      role="alert"
+      data-testid="chain-alert"
+      className="mx-8 mt-4 flex flex-none flex-wrap items-start gap-x-8 gap-y-3 rounded-[6px] border border-exclude/50 border-l-[6px] border-l-exclude bg-exclude-wash px-6 py-4"
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-lg font-semibold text-exclude">
+          {at !== null
+            ? `The chain breaks at event ${at}.`
+            : "A signed checkpoint does not match the ledger."}{" "}
+          {finding ? (
+            <span className="font-normal text-ink">
+              {MEANS[finding.check]}{" "}
+              <span className="text-ink-2">({CHECKS[finding.check].toLowerCase()} check)</span>
+            </span>
+          ) : null}
+        </p>
+        <p
+          className="mt-1 max-w-[110ch] text-md text-ink"
+          title={checkedAt ? `Checked at ${formatDateTime(checkedAt)}` : undefined}
+        >
+          {at !== null
+            ? "Every later event, and every count and report that rests on one, cannot be verified until this is explained."
+            : "Someone may have rewritten the chain after the checkpoint was signed."}
+          {others > 0 ? ` ${others} more failed ${others === 1 ? "check" : "checks"}.` : ""}
+        </p>
+      </div>
+      <div className="flex max-w-[26rem] flex-none flex-wrap items-center justify-end gap-x-2 gap-y-1">
+        <p className="w-full text-right text-sm text-ink-2">
+          Keep the database as it is and give the export to the person who runs the server.
+        </p>
+        {seq !== null && seq !== opened && finding && !NOT_AN_EVENT.has(finding.check) ? (
+          <Button kind="danger" onClick={() => onOpen(seq)}>
+            Open event {seq}
+          </Button>
+        ) : null}
+        <Button kind="secondary" disabled={exporting} onClick={onExport}>
+          {exporting ? "Exporting the ledger" : "Export the ledger"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The whole chain as one bar: the verified run, the event where it breaks, and what comes after
+ * and cannot be verified. Above the bar, a mark per event of the traced record and a notch per
+ * signed checkpoint. In the cutoff view a click picks the event, and what came after it fades.
  */
 function ChainStrip({
   head,
@@ -284,71 +581,81 @@ function ChainStrip({
   verifying: boolean;
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  if (head === 0) return <div className="h-[76px] flex-none" />;
+  if (head === 0) return <div className="h-[72px] flex-none" />;
   const x = (seq: number) => `${((seq - 0.5) / head) * 100}%`;
   const bad = new Set(
     (audit?.findings ?? []).filter((f) => f.check !== "checkpoint").map((f) => f.seq),
   );
-  const ticks: string[] = [];
+  const at = breakOf(audit);
   const lit: string[] = [];
-  for (let seq = 1; seq <= head; seq++) {
-    const at = seq - 0.5;
-    if (highlight.has(seq)) lit.push(`M${at} 2V26`);
-    else if (!bad.has(seq)) ticks.push(`M${at} 9V19`);
-  }
+  for (const seq of highlight) lit.push(`M${seq - 0.5} 0V10`);
   const seqAt = (clientX: number, rect: DOMRect) =>
     Math.min(head, Math.max(1, Math.ceil(((clientX - rect.left) / rect.width) * head)));
+  // A break is announced in the alert above; under the bar only the legend names it.
   const status = verifying
     ? "Checking every event."
-    : !audit
-      ? ""
-      : audit.ok
-        ? `Every event up to ${audit.verified_through_seq} of ${audit.head_seq} matches its hashes.`
-        : `The chain breaks at event ${audit.verified_through_seq + 1}. The events before it match their hashes.`;
+    : audit?.ok
+      ? `Every event up to ${audit.verified_through_seq} of ${audit.head_seq} matches its hashes.`
+      : "";
+  // The verified share of the bar, up to the event before the break.
+  const verified = audit ? (at !== null ? at - 1 : audit.verified_through_seq) : 0;
+  const hatch = {
+    background:
+      "repeating-linear-gradient(135deg, var(--exclude-wash) 0 5px, color-mix(in oklab, var(--exclude) 22%, transparent) 5px 7px)",
+  };
   return (
     <section aria-label="The ledger chain" className="flex-none px-8 pt-4 pb-1">
       <div
-        className={`relative h-7 ${onPick ? "cursor-crosshair" : ""}`}
+        className={`relative h-8 ${onPick ? "cursor-crosshair" : ""}`}
         data-testid="chain-strip"
         onMouseMove={(e) => setHover(seqAt(e.clientX, e.currentTarget.getBoundingClientRect()))}
         onMouseLeave={() => setHover(null)}
         onClick={(e) => onPick?.(seqAt(e.clientX, e.currentTarget.getBoundingClientRect()))}
       >
+        {/* The traced record's events, above the bar. */}
         <svg
-          className="absolute inset-0 h-full w-full"
-          viewBox={`0 0 ${head} 28`}
+          className="absolute inset-x-0 top-0 h-2.5 w-full"
+          viewBox={`0 0 ${head} 10`}
           preserveAspectRatio="none"
           aria-hidden="true"
         >
-          <path d={`M0 14H${head}`} stroke="var(--rule-strong)" vectorEffect="non-scaling-stroke" />
-          <path
-            d={ticks.join("")}
-            stroke="var(--rule-strong)"
-            strokeWidth="1"
-            vectorEffect="non-scaling-stroke"
-          />
           <path
             d={lit.join("")}
             stroke="var(--petrol)"
             strokeWidth="2"
             vectorEffect="non-scaling-stroke"
           />
+        </svg>
+        <div
+          className="absolute inset-x-0 top-3 h-3 overflow-hidden rounded-full bg-sheet-2 shadow-[inset_0_0_0_1px_var(--rule-strong)]"
+          aria-hidden="true"
+        >
+          {audit ? (
+            <>
+              <div
+                className="absolute inset-y-0 left-0 bg-include/75"
+                style={{ width: `${(verified / head) * 100}%` }}
+              />
+              {at !== null && at < head ? (
+                <div
+                  className="absolute inset-y-0 right-0"
+                  style={{ left: `${(at / head) * 100}%`, ...hatch }}
+                />
+              ) : null}
+            </>
+          ) : null}
           {cutoff !== null ? (
-            <rect
-              x={cutoff}
-              y="0"
-              width={head - cutoff}
-              height="28"
-              fill="var(--paper)"
-              opacity="0.72"
+            <div
+              className="absolute inset-y-0 right-0 bg-paper/75"
+              style={{ left: `${(cutoff / head) * 100}%` }}
             />
           ) : null}
-        </svg>
+        </div>
         {(audit?.checkpoints ?? []).map((c) => (
           <span
             key={c.checkpoint.id}
             title={`Checkpoint through event ${c.checkpoint.seq}, signed by key ${short(c.checkpoint.key_id)}`}
-            className={`absolute -top-1 h-9 w-[3px] -translate-x-1/2 rounded-[1px] ${
+            className={`absolute top-1.5 h-6 w-[3px] -translate-x-1/2 rounded-[1px] ${
               c.signature === "valid" && c.head_matches !== false ? "bg-petrol" : "bg-exclude"
             }`}
             style={{ left: x(c.checkpoint.seq) }}
@@ -359,36 +666,86 @@ function ChainStrip({
             key={seq}
             data-testid="strip-break"
             title={`Event ${seq} fails a check`}
-            className="absolute -top-1 h-9 w-[3px] -translate-x-1/2 bg-exclude"
+            className="absolute top-0 h-8 w-1 -translate-x-1/2 rounded-[1px] bg-exclude"
             style={{ left: x(seq) }}
           />
         ))}
         {cutoff !== null ? (
           <span
-            className="absolute -top-2 h-11 w-[2px] -translate-x-1/2 bg-ink"
+            className="absolute -top-1 h-10 w-[2px] -translate-x-1/2 bg-ink"
             style={{ left: x(cutoff) }}
           />
         ) : null}
+        {hover !== null ? (
+          <span
+            className="pointer-events-none absolute -top-6 -translate-x-1/2 rounded-[3px] bg-ink px-1.5 py-0.5 text-xs whitespace-nowrap text-sheet tabular-nums"
+            style={{ left: x(hover) }}
+          >
+            Event {hover}
+          </span>
+        ) : null}
       </div>
-      <div className="mt-1.5 flex items-baseline gap-4 text-xs text-ink-3 tabular-nums">
-        <span>Event 1</span>
+      <div className="mt-1 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm tabular-nums">
         <span
-          className={`flex-1 text-center ${audit && !audit.ok ? "font-medium text-exclude" : "text-ink-2"}`}
+          className="flex flex-wrap items-center gap-x-5 gap-y-1"
           data-testid="chain-status"
           aria-live="polite"
         >
-          {hover !== null ? `Event ${hover}` : status}
+          {status ? <span className="font-medium text-ink">{status}</span> : null}
+          {audit ? (
+            <span className="flex flex-wrap items-center gap-x-5 text-ink-2">
+              <Legend swatch={<span className="block h-2.5 w-4 rounded-full bg-include/75" />}>
+                {verified > 0 ? `Events 1 to ${verified} verified` : "No event verified"}
+              </Legend>
+              {at !== null ? (
+                <Legend swatch={<span className="block h-3.5 w-1 bg-exclude" />}>
+                  Fails its check
+                </Legend>
+              ) : null}
+              {at !== null && at < head ? (
+                <Legend swatch={<span className="block h-2.5 w-4 rounded-full" style={hatch} />}>
+                  Events {at + 1} to {head} not verified
+                </Legend>
+              ) : null}
+              {highlight.size > 0 ? (
+                <Legend swatch={<span className="block h-2.5 w-[2px] bg-petrol" />}>
+                  Events of the record you traced
+                </Legend>
+              ) : null}
+              {audit.checkpoints.length > 0 ? (
+                <Legend swatch={<span className="block h-3.5 w-[3px] bg-petrol" />}>
+                  Signed checkpoints
+                </Legend>
+              ) : null}
+            </span>
+          ) : null}
         </span>
-        <span>Event {head}</span>
+        <span className="ml-auto text-ink-2">Event {head} is the newest</span>
       </div>
     </section>
   );
 }
 
+function Legend({ swatch, children }: { swatch: ReactNode; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span aria-hidden="true">{swatch}</span>
+      {children}
+    </span>
+  );
+}
+
 // Trace a number.
+
+/** The count a lead most likely wants first: the included reports, else the furthest one. */
+const DEFAULT_BOXES = ["reports_included", "reports_assessed", "records_screened"];
 
 function TraceView({
   head,
+  then,
+  verifiedThrough,
+  initialCount,
+  initialScope,
   trace,
   findings,
   onOpen,
@@ -396,27 +753,64 @@ function TraceView({
   caller,
 }: {
   head: AsOf | null;
+  /** The review at the last verified event, when the chain breaks. */
+  then: AsOf | null;
+  verifiedThrough: number | null;
+  initialCount: string | null;
+  initialScope: string | null;
   trace: RecordTrace | null;
   findings: ReadonlyMap<number, Finding>;
-  onOpen: (ref: string) => Promise<void>;
+  onOpen: (ref: string, switchView?: boolean) => Promise<void>;
   scopeLabel: (scope: string) => string;
   caller: Caller;
 }) {
   const flows = head?.flows.filter((f) => f.records_identified > 0) ?? [];
-  const [scope, setScope] = useState<string | null>(null);
+  const [scope, setScope] = useState<string | null>(initialScope);
   const flow = flows.find((f) => f.scope_id === scope) ?? flows[0] ?? null;
-  const [box, setBox] = useState("reports_included");
+  const [picked, setPicked] = useState<string | null>(initialCount);
   const [index, setIndex] = useState(0);
+  const box =
+    picked ??
+    DEFAULT_BOXES.find((k) => (flow?.members[k]?.length ?? 0) > 0) ??
+    "records_identified";
   const members = flow?.members[box] ?? [];
-  const boxes = flow ? BOXES.filter(([key]) => key in flow.members) : [];
+  const boxes = flow ? BOXES.filter(({ key }) => key in flow.members) : [];
+  const label = BOXES.find((b) => b.key === box)?.label ?? "";
+  const before = flow
+    ? (then?.flows.find((f) => f.scope_id === flow.scope_id && f.topic_id === flow.topic_id) ??
+      null)
+    : null;
+  /** A count whose records changed after the last verified event rests on unverified events. */
+  const unverified = (key: string) => {
+    if (verifiedThrough === null || !flow || !then) return false;
+    const now = flow.members[key] ?? [];
+    const was = new Set(before?.members[key] ?? []);
+    return now.length !== was.size || now.some((ref) => !was.has(ref));
+  };
 
-  const pick = (i: number) => {
+  const pick = (i: number, switchView = true) => {
     const ref = members[i];
     if (ref === undefined) return;
     setIndex(i);
     const target = head?.items[ref]?.trace_ref;
-    if (target) void onOpen(target);
+    if (target) void onOpen(target, switchView);
   };
+  const choose = (key: string) => {
+    setPicked(key);
+    setIndex(0);
+  };
+
+  // The history pane is never empty: the first record of the count opens by itself.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (opened.current || trace !== null || !head || !flow) return;
+    const first = members.findIndex((ref) => head.items[ref]?.trace_ref);
+    if (first < 0) return;
+    opened.current = true;
+    pick(first, false);
+    // Once, when the review has loaded.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [head, flow, trace]);
 
   useKeys((event) => {
     if (event.key === "j" || event.key === "k") {
@@ -425,23 +819,83 @@ function TraceView({
       return true;
     }
     if (event.key === "." || event.key === ",") {
-      const at = boxes.findIndex(([key]) => key === box);
+      const at = boxes.findIndex(({ key }) => key === box);
       const next =
         boxes[Math.min(boxes.length - 1, Math.max(0, at + (event.key === "." ? 1 : -1)))];
-      if (next) {
-        setBox(next[0]);
-        setIndex(0);
-      }
+      if (next) choose(next.key);
       return true;
     }
     return false;
   });
 
-  if (!head) return <p className="px-8 pt-6 text-ink-2">Loading the review.</p>;
-  if (!flow) return <p className="px-8 pt-6 text-ink-2">No searches are recorded yet.</p>;
+  if (!head) return <p className="px-8 pt-6 text-md text-ink-2">Loading the review.</p>;
+  if (!flow) return <p className="px-8 pt-6 text-md text-ink-2">No searches are recorded yet.</p>;
+
+  const renderBoxes = (list: ReadonlyArray<Box>, depth: number): ReactNode => (
+    <ul className={depth > 0 ? "ml-3 border-l border-rule-strong pl-3" : ""}>
+      {list
+        .filter(({ key }) => key in flow.members)
+        .map((b) => {
+          const n = flow.members[b.key]?.length ?? 0;
+          const active = b.key === box;
+          return (
+            <li
+              key={b.key}
+              className={
+                depth > 0
+                  ? "relative before:absolute before:top-[1.05rem] before:-left-3 before:w-2.5 before:border-t before:border-rule-strong"
+                  : ""
+              }
+            >
+              <button
+                type="button"
+                data-testid={`box-${b.key}`}
+                aria-pressed={active}
+                onClick={() => choose(b.key)}
+                className={`flex w-full items-baseline gap-3 rounded-[4px] px-2 py-1.5 text-left ${
+                  active ? "bg-petrol-wash text-ink" : "hover:bg-sheet-2"
+                }`}
+              >
+                <span
+                  className={`min-w-0 flex-1 ${depth === 0 ? "text-md" : "text-sm text-ink-2"} ${active ? "font-medium text-ink" : ""}`}
+                >
+                  {b.help ? (
+                    <span
+                      className="cursor-help underline decoration-ink-3 decoration-dotted underline-offset-2"
+                      title={b.help}
+                    >
+                      {b.label}
+                    </span>
+                  ) : (
+                    b.label
+                  )}
+                </span>
+                {unverified(b.key) ? " " : null}
+                {unverified(b.key) ? (
+                  <span
+                    className="self-center rounded-full bg-exclude-wash px-1.5 text-2xs font-medium text-exclude"
+                    title={`Its records changed after event ${verifiedThrough}, the last one that verifies, so this count rests on events that cannot be verified.`}
+                    data-testid={`unverified-${b.key}`}
+                  >
+                    Unverified
+                  </span>
+                ) : null}
+                <span
+                  className={`tabular-nums ${depth === 0 ? "text-md font-semibold" : "text-sm"} ${n === 0 ? "text-ink-3" : ""}`}
+                >
+                  {n}
+                </span>
+              </button>
+              {b.children ? renderBoxes(b.children, depth + 1) : null}
+            </li>
+          );
+        })}
+    </ul>
+  );
+
   return (
-    <div className="grid h-full grid-cols-[17.5rem_19rem_minmax(0,1fr)] border-t border-rule">
-      <section aria-label="PRISMA flow" className="overflow-y-auto border-r border-rule px-5 py-4">
+    <div className="grid h-full grid-cols-[22rem_20rem_minmax(0,1fr)]">
+      <section aria-label="PRISMA flow" className="overflow-y-auto border-r border-rule px-4 py-4">
         {flows.length > 1 ? (
           <div className="mb-3 flex flex-wrap gap-2 text-sm">
             {flows.map((f) => (
@@ -450,56 +904,39 @@ function TraceView({
                 type="button"
                 aria-pressed={f.scope_id === flow.scope_id}
                 onClick={() => setScope(f.scope_id)}
-                className={`rounded-[3px] px-1.5 py-0.5 ${f.scope_id === flow.scope_id ? "bg-petrol-wash text-petrol" : "text-ink-2"}`}
+                className={`rounded-[4px] border px-2 py-0.5 ${f.scope_id === flow.scope_id ? "border-petrol bg-petrol-wash text-petrol" : "border-rule-strong text-ink-2"}`}
               >
                 {scopeLabel(f.scope_id)}
               </button>
             ))}
           </div>
         ) : null}
-        <p className="text-xs text-ink-3">
-          Every count is a list of records. Open one to see them.{" "}
+        <h2 className="px-2 text-sm font-semibold">PRISMA counts</h2>
+        <div className="mt-3">{renderBoxes(TREE, 0)}</div>
+        <p className="mt-4 px-2 text-xs">
           <KeyHint keys={[",", "."]}>Previous or next count</KeyHint>
         </p>
-        <ol className="mt-3">
-          {boxes.map(([key, label, depth]) => {
-            const n = flow.members[key]?.length ?? 0;
-            const active = key === box;
-            return (
-              <li key={key}>
-                <button
-                  type="button"
-                  data-testid={`box-${key}`}
-                  aria-pressed={active}
-                  onClick={() => {
-                    setBox(key);
-                    setIndex(0);
-                  }}
-                  className={`grid w-full grid-cols-[3rem_minmax(0,1fr)] items-baseline gap-x-3 border-l-2 py-1.5 pr-2 text-left ${
-                    active ? "border-petrol bg-sheet" : "border-transparent hover:bg-sheet"
-                  }`}
-                  style={{ paddingLeft: `${0.5 + depth * 0.6}rem` }}
-                >
-                  <span
-                    className={`text-right text-lg font-semibold tabular-nums ${n === 0 ? "text-ink-3" : ""}`}
-                  >
-                    {n}
-                  </span>
-                  <span className={`text-sm ${active ? "text-ink" : "text-ink-2"}`}>{label}</span>
-                </button>
-              </li>
-            );
-          })}
-        </ol>
       </section>
       <section
         aria-label="Records behind the count"
         className="overflow-y-auto border-r border-rule py-4"
       >
-        <p className="px-4 text-xs text-ink-3">
-          {members.length} {members.length === 1 ? "record" : "records"}.{" "}
-          <KeyHint keys={["j", "k"]}>Next, previous</KeyHint>
-        </p>
+        <div className="px-4">
+          <h2 className="text-md font-semibold">{label}</h2>
+          <p className="mt-0.5 flex items-center gap-3 text-sm text-ink-2">
+            <span className="tabular-nums">
+              {members.length} {members.length === 1 ? "record" : "records"}
+            </span>
+            {members.length > 1 ? (
+              <span className="text-xs">
+                <KeyHint keys={["j", "k"]}>Next, previous</KeyHint>
+              </span>
+            ) : null}
+          </p>
+        </div>
+        {members.length === 0 ? (
+          <p className="mt-3 px-4 text-sm text-ink-2">No record is in this count yet.</p>
+        ) : null}
         <ol className="mt-2">
           {members.map((ref, i) => {
             const item = head.items[ref];
@@ -512,15 +949,15 @@ function TraceView({
                   data-testid="member"
                   disabled={!item?.trace_ref}
                   onClick={() => pick(i)}
-                  className={`block w-full border-l-2 px-4 py-2 text-left text-sm ${
+                  className={`block w-full border-l-[3px] px-4 py-2 text-left text-sm ${
                     open
-                      ? "border-petrol bg-sheet text-ink"
-                      : "border-transparent text-ink-2 hover:bg-sheet"
+                      ? "border-petrol bg-petrol-wash text-ink"
+                      : "border-transparent text-ink hover:bg-sheet-2"
                   }`}
                 >
                   <span className="line-clamp-2">{item?.title ?? ref}</span>
                   {!item?.trace_ref ? (
-                    <span className="text-xs text-ink-3">
+                    <span className="text-sm text-ink-2">
                       A sentinel. It has no history of its own.
                     </span>
                   ) : null}
@@ -530,14 +967,17 @@ function TraceView({
           })}
         </ol>
       </section>
-      <section aria-label="Record history" className="overflow-y-auto px-8 py-5">
+      <section aria-label="Record history" className="overflow-y-auto px-6 py-4">
         {trace ? (
-          <Timeline trace={trace} findings={findings} caller={caller} />
+          // The record under inspection is the raised surface; the counts and the list stay flat.
+          <div className="rounded-[6px] bg-raised px-6 py-5 shadow-raised">
+            <Timeline trace={trace} findings={findings} caller={caller} />
+          </div>
         ) : (
-          <p className="max-w-[52ch] text-ink-2">
-            Pick a record to see every ledger event about it, from the searches that found it to the
-            values taken from its full text. Each event says what happened first. Its hashes come
-            after, and each opens to the content it covers.
+          <p className="max-w-[60ch] text-md text-ink-2">
+            {members.length === 0
+              ? "Pick a count with records to see their history."
+              : "Pick a record to see every ledger event about it, from the searches that found it to the values taken from its full text."}
           </p>
         )}
       </section>
@@ -554,6 +994,11 @@ function Timeline({
   findings: ReadonlyMap<number, Finding>;
   caller: Caller;
 }) {
+  const { protocol } = useProject();
+  const names = new Map(
+    (protocol?.protocol.topics ?? []).flatMap((t) => t.sources.map((s) => [s.id, s.name])),
+  );
+  const sourceName = (id: string) => names.get(id) ?? sourceLabel(id);
   const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
   const toggle = (seq: number) =>
     setOpen((now) => {
@@ -567,9 +1012,16 @@ function Timeline({
       <h2 className="max-w-[70ch] text-lg font-semibold" data-testid="trace-title">
         {trace.title}
       </h2>
-      <p className="mt-1 text-xs text-ink-3 tabular-nums">
+      <p
+        className="mt-1 text-sm text-ink-2"
+        title={
+          trace.report_id
+            ? `Report ${trace.report_id}${trace.study_id ? `, study ${trace.study_id}` : ""}`
+            : undefined
+        }
+      >
         {trace.report_id
-          ? `Report ${trace.report_id}${trace.study_id ? `, study ${trace.study_id}` : ""}`
+          ? `A report in the corpus${trace.study_id ? ", linked to a study" : ""}.`
           : "A search result that is not in the corpus yet. No identity revision includes it."}
       </p>
       <section className="mt-4" aria-label="Found by">
@@ -579,10 +1031,10 @@ function Timeline({
         <ul className="mt-1.5 grid gap-1 text-sm">
           {trace.occurrences.map((o) => (
             <li key={o.occurrence_id} className="flex flex-wrap items-baseline gap-x-3">
-              <span>{o.source}</span>
-              <span className="text-ink-3">record {o.provider_record_id}</span>
+              <span title={`Source ID: ${o.source}`}>{sourceName(o.source)}</span>
+              <span className="text-ink-2">record {o.provider_record_id}</span>
               {o.search_seq !== null ? (
-                <span className="text-ink-3">search at event {o.search_seq}</span>
+                <span className="text-ink-2">search at event {o.search_seq}</span>
               ) : null}
               <ArtifactToggle caller={caller} sha256={o.raw_hash} label="Raw response" />
             </li>
@@ -633,6 +1085,184 @@ function Timeline({
   );
 }
 
+/** A timestamp as the server stores it: ISO 8601 with a time. */
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * One fact of an event: a timestamp in the workbench's format, the stored value in its hover; a
+ * long value (a search query, a prompt) cut to two lines until it is opened.
+ */
+function FactValue({ label, value }: { label: string; value: string }) {
+  const [open, setOpen] = useState(false);
+  const words = useContext(CriterionWords);
+  const text = value.trim();
+  if (ISO_TIME.test(text) && !Number.isNaN(Date.parse(text))) {
+    return <span title={text}>{formatDateTime(text)}</span>;
+  }
+  // Quotes, comments, and queries are someone's own words: no criterion names go into them.
+  const shown = /evidence|quote|comment|query|strategy|record/i.test(label)
+    ? value
+    : words(value, label === "Criterion" ? "bare" : "text");
+  if (text.length <= 180 && text.split("\n").length <= 2) return <>{shown}</>;
+  return (
+    <>
+      <span className={open ? "block" : "line-clamp-2 block"}>{shown}</span>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="text-sm text-petrol underline decoration-petrol/40 underline-offset-2"
+      >
+        {open ? "Show less" : /query|strategy/i.test(label) ? "Show full query" : "Show all"}
+      </button>
+    </>
+  );
+}
+
+/** Fact labels the ledger writes in its own terms, in the reader's. */
+const FACT_LABELS: Record<string, string> = { Decision: "How it was decided" };
+
+/** An event that fails its check is read as what is stored now, not as what was decided. */
+const STORED_LABELS: Readonly<Record<string, string>> = {
+  Criterion: "Stored criterion reference",
+};
+
+/** A hash, readable and copyable. */
+function Hash({ value }: { value: string | null | undefined }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return <span>Nothing</span>;
+  return (
+    <span className="flex items-baseline gap-3">
+      <span className="min-w-0 font-mono text-sm break-all">{value}</span>
+      <button
+        type="button"
+        className="flex-none text-sm text-petrol hover:underline"
+        onClick={() => {
+          void navigator.clipboard?.writeText(value).then(() => setCopied(true));
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </span>
+  );
+}
+
+/** Values the ledger writes as keys ("second_opinion"), in words. */
+const WORDED = new Set(["Role"]);
+
+/** An event's facts: a criterion's ID becomes its permanent number and short name, its wording
+ * in the hover. */
+function Facts({
+  facts,
+  testId,
+  labels,
+}: {
+  facts: TracedEvent["facts"];
+  testId?: string;
+  /** Labels to read the facts under instead of the usual ones. */
+  labels?: Readonly<Record<string, string>> | undefined;
+}) {
+  const words = useContext(CriterionWords);
+  if (facts.length === 0) return null;
+  return (
+    <dl
+      className="mt-1.5 grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-0.5 text-sm"
+      data-testid={testId}
+    >
+      {facts.map((f, i) => (
+        <div key={`${f.label}-${i}`} className="contents">
+          <dt className="max-w-[16rem] text-ink-2">
+            {labels?.[f.label] ?? FACT_LABELS[f.label] ?? words(f.label, "label")}
+          </dt>
+          <dd className="min-w-0 break-words whitespace-pre-wrap">
+            {WORDED.has(f.label) ? (
+              keyWords(f.value)
+            ) : (
+              <FactValue label={f.label} value={f.value} />
+            )}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * The ledger names criteria by their IDs ("crit-inc-rct"). On screen each is "criterion 6
+ * (Randomised trial)", by its permanent number; the ID stays in the hover. A label that is an ID
+ * and the criterion's wording ("POP. Adults who smoke") keeps only the name.
+ */
+const wordsFor = (criteria: ReadonlyArray<NumberedCriterion>) => {
+  if (criteria.length === 0) return (text: string) => text as ReactNode;
+  const ids = [...new Set(criteria.map((c) => c.id))].sort((a, b) => b.length - a.length);
+  const escape = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`(?<![\\w-])(${ids.map(escape).join("|")})(?![\\w-])`, "g");
+  const name = (id: string, bare = false) => {
+    const c = criteria.find((x) => x.id === id);
+    if (!c) return id;
+    return bare
+      ? `${numberOf(criteria, id)} ${shortLabel(c)}`
+      : `criterion ${numberOf(criteria, id)} (${shortLabel(c)})`;
+  };
+  const included = new RegExp(
+    `^(.* included the record) on (${ids.map(escape).join("|")})(?![\\w-])`,
+  );
+  return (raw: string, mode: WordsMode = "text"): ReactNode => {
+    const label = mode === "label";
+    // An inclusion is not "on" a criterion: the criterion an include carries is shown as its own
+    // fact, so the summary only says what was decided.
+    const text = mode === "summary" ? raw.replace(included, "$1") : raw;
+    if (label) {
+      const whole = criteria.find((c) => text === c.id || text.startsWith(`${c.id}. `));
+      if (whole) {
+        return <span title={`${whole.id}: ${whole.text_en}`}>{keyWords(name(whole.id))}</span>;
+      }
+    }
+    const parts = text.split(pattern);
+    if (parts.length === 1) return text;
+    return parts.map((part, i) =>
+      i % 2 === 1 ? (
+        <span key={i} title={`Criterion ID ${part}`}>
+          {name(part, mode === "bare")}
+        </span>
+      ) : (
+        part
+      ),
+    );
+  };
+};
+
+const NO_ITEMS: AsOf["items"] = {};
+
+/** Every record's title by its reference, from the review at its head. */
+const RecordTitles = createContext<AsOf["items"]>(NO_ITEMS);
+
+/** An event type ("screening.decided") in words ("screening decided"); the type stays in the
+ * hover. */
+const typeWords = (type: string) => {
+  const [family = "", verb = ""] = type.split(".");
+  const noun = EVENT_NOUNS[verb];
+  return noun ? `${family.replace(/_/g, " ")} ${noun}` : type.replace(/[._]+/g, " ");
+};
+
+/** The past tense an event type ends in, as the noun a reader expects. */
+const EVENT_NOUNS: Record<string, string> = {
+  decided: "decision",
+  adjudicated: "adjudication",
+  undone: "undo",
+  attached: "attachment",
+  opened: "opening",
+  closed: "closing",
+  published: "publication",
+  signed: "signature",
+};
+
+/** How a text names criteria: in running text, a summary, a fact's label, or a value whose label
+ * already says "Criterion". */
+type WordsMode = "text" | "summary" | "label" | "bare";
+
+const CriterionWords = createContext<(text: string, mode?: WordsMode) => ReactNode>((text) => text);
+
 const KIND_LABEL: Record<TracedEvent["kind"], string> = {
   search: "Search",
   identity: "Identity",
@@ -663,6 +1293,7 @@ function EventRow({
   caller: Caller;
 }) {
   const broken = finding !== null;
+  const words = useContext(CriterionWords);
   return (
     <div
       className="grid grid-cols-[4rem_1.25rem_minmax(0,1fr)]"
@@ -692,11 +1323,11 @@ function EventRow({
           </span>
           <span className="min-w-0">
             <span className="block text-md leading-snug" data-testid="event-summary">
-              {e.summary}
+              {words(e.summary, "summary")}
             </span>
             <span className="mt-0.5 flex flex-wrap gap-x-4 text-xs text-ink-2">
               <span>{e.actor}</span>
-              <span className="tabular-nums">{when(e.recorded_at)}</span>
+              <span className="tabular-nums">{formatDateTime(e.recorded_at)}</span>
             </span>
           </span>
         </div>
@@ -706,19 +1337,7 @@ function EventRow({
               Fails the {CHECKS[finding.check].toLowerCase()} check. {sentence(finding.reason)}
             </p>
           ) : null}
-          {e.facts.length > 0 ? (
-            <dl
-              className="mt-1.5 grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-0.5 text-sm"
-              data-testid="event-facts"
-            >
-              {e.facts.map((f, i) => (
-                <div key={`${f.label}-${i}`} className="contents">
-                  <dt className="max-w-[16rem] text-ink-2">{f.label}</dt>
-                  <dd className="break-words whitespace-pre-wrap">{f.value}</dd>
-                </div>
-              ))}
-            </dl>
-          ) : null}
+          <Facts facts={e.facts} testId="event-facts" />
           {e.artifacts.length > 0 ? (
             <div className="mt-1.5 grid gap-1">
               {e.artifacts.map((a) => (
@@ -756,19 +1375,22 @@ function EventRow({
 function IntegrityView({
   audit,
   verifying,
+  shown,
+  onShow,
   onTrace,
   onSigned,
   caller,
 }: {
   audit: ChainAudit | null;
   verifying: boolean;
+  shown: TracedEvent | null;
+  onShow: (seq: number) => void;
   onTrace: (ref: string) => Promise<void>;
   onSigned: () => void;
   caller: Caller;
 }) {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
   const [notice, setNotice] = useState<string | null>(null);
-  const [shown, setShown] = useState<TracedEvent | null>(null);
 
   const sign = async () => {
     try {
@@ -777,14 +1399,6 @@ function IntegrityView({
       onSigned();
     } catch (e) {
       setNotice(e instanceof WorkbenchError ? e.message : "Signing failed.");
-    }
-  };
-  const show = async (seq: number) => {
-    try {
-      const page = await run(workbench.ledgerEvents({ ...caller, afterSeq: seq - 1, limit: 1 }));
-      setShown(page.events[0]?.seq === seq ? page.events[0] : null);
-    } catch (e) {
-      setNotice(e instanceof WorkbenchError ? e.message : "Kittum could not read the event.");
     }
   };
 
@@ -797,48 +1411,42 @@ function IntegrityView({
   });
 
   if (!audit)
-    return <p className="px-8 pt-6 text-ink-2">{verifying ? "Checking every event." : ""}</p>;
-  const shownRef = shown
-    ? ((shown.payload["item_ref"] ?? shown.payload["report_id"]) as string | undefined)
-    : undefined;
+    return (
+      <p className="px-8 pt-6 text-md text-ink-2">{verifying ? "Checking every event." : ""}</p>
+    );
+  const failed = audit.findings.length;
+  const at = breakOf(audit);
+  const shownApart = shown !== null && !audit.findings.some((f) => f.seq === shown.seq);
   return (
-    <div className="h-full overflow-y-auto border-t border-rule">
-      <div className="mx-auto max-w-[1080px] px-8 pt-6 pb-14">
-        <div className="flex items-baseline gap-6">
-          <h2
-            className={`text-xl font-semibold tracking-[-0.01em] ${audit.ok ? "" : "text-exclude"}`}
-            data-testid="integrity-verdict"
-          >
+    <div className="h-full overflow-y-auto">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,38rem)] items-start gap-x-12 px-8 pt-6 pb-14">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold" data-testid="integrity-verdict">
             {audit.ok
               ? `Every one of ${audit.events} events matches its hashes and links.`
-              : `The chain breaks at event ${audit.verified_through_seq + 1}.`}
+              : `${failed} failed ${failed === 1 ? "check" : "checks"}`}
           </h2>
-          <span className="ml-auto text-sm">
-            <KeyHint keys={["c"]}>Sign a checkpoint at the head</KeyHint>
-          </span>
-        </div>
-        <p className="mt-2 max-w-[78ch] text-sm text-ink-2">
-          Kittum hashes each event&rsquo;s payload again, then the event itself, and compares each
-          event with the one before it. A chain rewritten from some event onwards still links up.
-          Only a signed checkpoint shows that, because its key is kept apart from the database.
-          {verifying ? " Checking again now." : ""}
-        </p>
-        {notice ? (
-          <p className="mt-2 text-sm" aria-live="polite">
-            {notice}
+          <p className="mt-1 text-sm text-ink-2">
+            {verifying ? "Checking again now. " : ""}
+            <span
+              className="cursor-help underline decoration-dotted underline-offset-2"
+              title="Kittum hashes each event's payload again, then the event, and checks the link to the event before. A chain rewritten from some event onwards still links up; only a signed checkpoint shows that, because its key is kept apart from the database."
+            >
+              How the check works
+            </span>
           </p>
-        ) : null}
+          {notice ? (
+            <p className="mt-2 text-sm" aria-live="polite">
+              {notice}
+            </p>
+          ) : null}
 
-        {audit.findings.length > 0 ? (
-          <section className="mt-6" aria-label="Failed checks">
-            <h3 className="text-sm font-semibold text-ink-2">
-              {audit.findings.length} failed {audit.findings.length === 1 ? "check" : "checks"}
-            </h3>
-            <ol className="mt-2 border-t border-rule">
+          {failed > 0 ? (
+            <ol className="mt-4" aria-label="Failed checks">
               {audit.findings.map((f) => (
                 <li
                   key={`${f.seq}-${f.check}`}
-                  className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-5 border-b border-rule py-3"
+                  className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-5 py-3"
                   data-testid="finding"
                   data-seq={f.seq}
                   data-check={f.check}
@@ -846,143 +1454,194 @@ function IntegrityView({
                   <span className="text-right text-[1.6rem] leading-none font-semibold text-exclude tabular-nums">
                     {f.seq}
                   </span>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-md">
                       <span className="font-semibold">{CHECKS[f.check]}</span>
-                      {f.type ? <span className="text-ink-2">, {f.type}</span> : null}
+                      {f.type ? (
+                        <span className="text-ink-2" title={f.type}>
+                          {" "}
+                          check on {/^[aeiou]/i.test(typeWords(f.type)) ? "an" : "a"}{" "}
+                          {typeWords(f.type)}
+                        </span>
+                      ) : null}
                     </p>
-                    <p className="mt-0.5 text-sm text-ink-2">{sentence(f.reason)}</p>
+                    <p className="mt-0.5 text-md">{sentence(f.reason)}</p>
                     {f.stored || f.expected ? (
-                      <dl className="narrow mt-2 grid grid-cols-[8rem_minmax(0,1fr)] gap-x-4 text-xs tabular-nums">
+                      <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
                         <dt className="text-ink-2">Stored</dt>
-                        <dd className="break-all">{f.stored ?? "Nothing"}</dd>
+                        <dd className="min-w-0">
+                          <Hash value={f.stored} />
+                        </dd>
                         <dt className="text-ink-2">
                           {f.check === "checkpoint" ? "Signed" : "Recomputed"}
                         </dt>
-                        <dd className="break-all">{f.expected ?? "Nothing"}</dd>
+                        <dd className="min-w-0">
+                          <Hash value={f.expected} />
+                        </dd>
                       </dl>
                     ) : null}
-                    {f.check !== "checkpoint" && f.check !== "seq" ? (
-                      <button
-                        type="button"
-                        onClick={() => void show(f.seq)}
-                        className="mt-2 text-sm text-petrol underline decoration-petrol/40 underline-offset-2"
+                    {shown?.seq === f.seq ? (
+                      <ShownEvent event={shown} onTrace={onTrace} failing />
+                    ) : !NOT_AN_EVENT.has(f.check) ? (
+                      <Button
+                        kind="secondary"
+                        size="sm"
+                        className="mt-2"
+                        onClick={() => onShow(f.seq)}
                       >
                         Show event {f.seq} as stored
-                      </button>
+                      </Button>
                     ) : null}
                   </div>
                 </li>
               ))}
             </ol>
-          </section>
-        ) : null}
+          ) : null}
+          {shown && shownApart ? (
+            <ShownEvent event={shown} onTrace={onTrace} failing={false} />
+          ) : null}
+        </div>
 
-        {shown ? (
-          <section
-            className="mt-6 border-l-2 border-exclude pl-4"
-            aria-label={`Event ${shown.seq}`}
-            data-testid="shown-event"
-          >
-            <h3 className="text-md font-semibold">
-              Event {shown.seq}: {shown.summary}
-            </h3>
-            <p className="text-xs text-ink-2">
-              {shown.actor}, {when(shown.recorded_at)}
-            </p>
-            {shown.facts.length > 0 ? (
-              <dl className="mt-2 grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-4 gap-y-0.5 text-sm">
-                {shown.facts.map((f, i) => (
-                  <div key={`${f.label}-${i}`} className="contents">
-                    <dt className="max-w-[16rem] text-ink-2">{f.label}</dt>
-                    <dd className="break-words">{f.value}</dd>
-                  </div>
-                ))}
-              </dl>
+        <section aria-label="Checkpoints" className="rounded-[4px] bg-sheet-2 px-5 py-4">
+          <h3 className="text-md font-semibold">Signed checkpoints</h3>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            {at !== null ? (
+              <p className="text-sm text-ink-2">
+                Signing records the current head. It repairs nothing.
+              </p>
             ) : null}
-            {shownRef ? (
-              <button
-                type="button"
-                onClick={() => void onTrace(shownRef)}
-                className="mt-1 text-sm text-petrol underline decoration-petrol/40 underline-offset-2"
-              >
-                Trace the record it concerns
-              </button>
-            ) : null}
-            <p className="mt-3 text-xs text-ink-2">The payload as stored</p>
-            <pre className="mt-1 max-h-80 overflow-auto bg-sheet p-2 text-xs whitespace-pre-wrap">
-              {JSON.stringify(shown.payload, null, 2)}
-            </pre>
-          </section>
-        ) : null}
-
-        <section className="mt-8" aria-label="Checkpoints">
-          <h3 className="text-sm font-semibold text-ink-2">Signed checkpoints</h3>
+            <Button kind="secondary" size="sm" keys={["c"]} onClick={() => void sign()}>
+              Sign a checkpoint at the head
+            </Button>
+          </div>
           {audit.checkpoints.length === 0 ? (
-            <p className="mt-2 max-w-[70ch] text-sm text-ink-2">
-              No checkpoint is signed yet. A chain rewritten from some event onwards would still
-              pass every check. Sign a checkpoint now, or seal a bundle on Reports, which signs one
-              too.
+            <p className="mt-2 text-md text-ink-2">
+              No checkpoint is signed yet, so a chain rewritten from some event onwards would pass
+              every check. Sign one now, or seal a bundle on Reports.
             </p>
           ) : (
-            <table className="narrow mt-2 w-full text-sm tabular-nums" data-testid="checkpoints">
-              <thead className="text-left text-xs text-ink-3">
-                <tr className="border-b border-rule">
-                  <th className="py-1 font-normal">Through event</th>
-                  <th className="py-1 font-normal">Signed</th>
-                  <th className="py-1 font-normal">Key</th>
-                  <th className="py-1 font-normal">Signature</th>
-                  <th className="py-1 font-normal">Chain at that event</th>
-                </tr>
-              </thead>
-              <tbody>
-                {audit.checkpoints.map((c) => (
-                  <tr key={c.checkpoint.id} className="border-b border-rule">
-                    <td className="py-1.5 font-semibold">{c.checkpoint.seq}</td>
-                    <td>{when(c.checkpoint.created_at)}</td>
-                    <td title={c.checkpoint.key_id}>{short(c.checkpoint.key_id)}</td>
-                    <td
-                      className={
-                        c.signature === "valid"
-                          ? "text-include"
-                          : c.signature === "invalid"
-                            ? "text-exclude"
-                            : "text-ink-2"
-                      }
-                    >
-                      {
-                        {
-                          valid: "Valid",
-                          invalid: "Does not verify",
-                          unknown_key: "Signed by another key, not trusted",
-                          unchecked: "No key to check",
-                        }[c.signature]
-                      }
-                    </td>
-                    <td className={c.head_matches === false ? "text-exclude" : ""}>
-                      {c.head_matches === null
-                        ? "That event is missing"
-                        : c.head_matches
-                          ? `Matches ${short(c.checkpoint.head_hash, 8)}`
-                          : "Differs from what was signed"}
-                    </td>
+            <>
+              <table className="narrow mt-3 w-full text-sm tabular-nums" data-testid="checkpoints">
+                <thead className="text-left text-ink-2">
+                  <tr className="border-b border-rule">
+                    <th className="py-1 font-normal">Through event</th>
+                    <th className="py-1 font-normal">Signed</th>
+                    <th className="py-1 font-normal">Signature</th>
+                    <th className="py-1 font-normal">Stored head</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {audit.checkpoints.map((c) => (
+                    <tr key={c.checkpoint.id} className="border-b border-rule">
+                      <td className="py-1.5 font-semibold">{c.checkpoint.seq}</td>
+                      <td>{formatDateTime(c.checkpoint.created_at)}</td>
+                      <td
+                        title={`Key ${c.checkpoint.key_id}`}
+                        className={
+                          c.signature === "valid"
+                            ? "text-include"
+                            : c.signature === "invalid"
+                              ? "text-exclude"
+                              : "text-ink-2"
+                        }
+                      >
+                        {
+                          {
+                            valid: "Valid",
+                            invalid: "Does not verify",
+                            unknown_key: "Signed by another key, not trusted",
+                            unchecked: "No key to check",
+                          }[c.signature]
+                        }
+                      </td>
+                      <td
+                        className={c.head_matches === false ? "text-exclude" : ""}
+                        title={c.checkpoint.head_hash}
+                      >
+                        {c.head_matches === null
+                          ? "That event is missing"
+                          : c.head_matches
+                            ? "Matches the signed head"
+                            : "Differs from what was signed"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {at !== null &&
+              audit.checkpoints.some((c) => c.head_matches && c.checkpoint.seq >= at) ? (
+                <p className="mt-3 text-sm">
+                  A checkpoint signs the hash of the newest event when it is signed. These still
+                  match, so the links between events are as they were then. A change to one
+                  event&rsquo;s content leaves the links in place, so a matching head does not clear
+                  the failed check.
+                </p>
+              ) : null}
+            </>
           )}
-          {audit.trusted_key_id ? (
-            <p className="mt-2 text-xs text-ink-3">
-              Checked against the server&rsquo;s checkpoint key {short(audit.trusted_key_id)}.
-            </p>
-          ) : (
-            <p className="mt-2 text-xs text-ink-3">
-              The server has no checkpoint key, so Kittum cannot check signatures here.
-            </p>
-          )}
+          <p className="mt-3 text-sm text-ink-2">
+            {audit.trusted_key_id ? (
+              <>
+                Checked against the server&rsquo;s checkpoint key{" "}
+                <span className="narrow tabular-nums" title={audit.trusted_key_id}>
+                  {short(audit.trusted_key_id)}
+                </span>
+                .
+              </>
+            ) : (
+              "The server has no checkpoint key, so Kittum cannot check signatures here."
+            )}
+          </p>
         </section>
       </div>
     </div>
+  );
+}
+
+/** An event read back as the ledger stores it now. One that fails its check is labelled so: its
+ * content may not be what was recorded. */
+function ShownEvent({
+  event,
+  onTrace,
+  failing,
+}: {
+  event: TracedEvent;
+  onTrace: (ref: string) => Promise<void>;
+  failing: boolean;
+}) {
+  const words = useContext(CriterionWords);
+  const titles = useContext(RecordTitles);
+  const ref = (event.payload["item_ref"] ?? event.payload["report_id"]) as string | undefined;
+  const title = ref ? titles[ref]?.title : undefined;
+  return (
+    <section
+      className={`mt-3 rounded-[6px] bg-raised px-5 py-4 shadow-raised ${failing ? "border-l-4 border-l-exclude" : ""}`}
+      aria-label={`Event ${event.seq}`}
+      data-testid="shown-event"
+    >
+      <p className="text-sm text-ink-2">
+        {failing ? "Unverified: as stored now" : `Event ${event.seq} as stored`}
+      </p>
+      <h3 className="text-md font-semibold">{words(event.summary, "summary")}</h3>
+      <p className="text-sm text-ink-2">
+        {event.actor}, {formatDateTime(event.recorded_at)}
+      </p>
+      <Facts
+        facts={[...(title ? [{ label: "Record", value: title }] : []), ...event.facts]}
+        labels={failing ? STORED_LABELS : undefined}
+      />
+      {ref ? (
+        <Button kind="secondary" className="mt-3" onClick={() => void onTrace(ref)}>
+          Trace the record it concerns
+        </Button>
+      ) : null}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-sm text-petrol">Show the payload as stored</summary>
+        <pre className="mt-1 max-h-80 overflow-auto rounded-[4px] bg-sheet-2 p-3 text-xs whitespace-pre-wrap">
+          {JSON.stringify(event.payload, null, 2)}
+        </pre>
+      </details>
+    </section>
   );
 }
 
@@ -1094,7 +1753,7 @@ function CutoffView({
 
   const named = new Map(milestones.map((m) => [m.seq, m.label]));
   return (
-    <div className="grid h-full grid-cols-[21rem_minmax(0,1fr)] border-t border-rule">
+    <div className="grid h-full grid-cols-[24rem_minmax(0,1fr)]">
       <section
         aria-label="Pick an event"
         className="overflow-y-auto border-r border-rule px-5 py-4"
@@ -1115,15 +1774,15 @@ function CutoffView({
             inputMode="numeric"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
-            className="w-24 rounded-[3px] border border-rule-strong bg-sheet px-2 py-1 tabular-nums"
+            className="h-7 w-24 rounded-[4px] border border-rule-strong bg-paper px-2 tabular-nums"
           />
-          <button type="submit" className="rounded-[3px] bg-petrol px-2.5 py-1 text-petrol-ink">
+          <Button type="submit" kind="primary" size="sm">
             Look back
-          </button>
+          </Button>
         </form>
-        <p className="mt-2 text-xs text-ink-3">
-          Or click the chain, or pick a named event. <KeyHint keys={["j", "k"]}>Move</KeyHint>{" "}
-          <KeyHint keys={["Enter"]}>Pick</KeyHint>
+        <p className="mt-2 text-sm text-ink-2">Or click the chain, or pick a named event.</p>
+        <p className="mt-1 text-xs">
+          <KeyHint keys={["j", "k"]}>Move</KeyHint> <KeyHint keys={["Enter"]}>Pick</KeyHint>
         </p>
         <ol className="mt-3" aria-label="Named events">
           {milestones.map((m, i) => (
@@ -1136,12 +1795,12 @@ function CutoffView({
                   setCursor(i);
                   onCutoff(m.seq);
                 }}
-                className={`grid w-full grid-cols-[3.25rem_minmax(0,1fr)] gap-x-3 border-l-2 py-1.5 pr-2 text-left text-sm ${
+                className={`grid w-full grid-cols-[3.25rem_minmax(0,1fr)] gap-x-3 border-l-[3px] py-1.5 pr-2 text-left text-sm ${
                   cutoff === m.seq
-                    ? "border-petrol bg-sheet"
+                    ? "border-petrol bg-petrol-wash"
                     : i === cursor
-                      ? "border-rule-strong bg-sheet"
-                      : "border-transparent hover:bg-sheet"
+                      ? "border-rule-strong bg-sheet-2"
+                      : "border-transparent hover:bg-sheet-2"
                 }`}
               >
                 <span className="text-right font-semibold tabular-nums">{m.seq}</span>
@@ -1160,25 +1819,28 @@ function CutoffView({
           </p>
         ) : null}
         {!then || !head ? (
-          <p className="max-w-[56ch] text-ink-2">
-            Pick an event to see the PRISMA flow and the AI disclosure at that event, next to how
-            they look now.
+          <p className="max-w-[60ch] text-md text-ink-2">
+            Pick an event on the left, or click the chain above, to see the PRISMA flow and the AI
+            disclosure at that event, next to how they look now.
           </p>
         ) : (
           <AsOfReport then={then} now={head} named={named} scopeLabel={scopeLabel} />
         )}
         {then ? (
           <div className="mt-6 border-t border-rule pt-4">
-            <KeyHint keys={["p"]}>
+            <Button kind="primary" keys={["p"]} onClick={() => void keep()}>
               Render and keep the PRISMA flow and the AI disclosure at event {then.cutoff_seq}
-            </KeyHint>
+            </Button>
             {kept ? (
               <div className="mt-3" data-testid="kept-report">
                 <p className="text-sm">
                   Rendered at event {kept.seq} and recorded in the ledger:{" "}
                   {kept.reports.map((r) => (
-                    <span key={r.sha256} className="mr-3 text-ink-2 tabular-nums">
-                      {r.artifact.target} {short(r.sha256, 8)}
+                    <span key={r.sha256} className="mr-4">
+                      {REPORT_NAMES[r.artifact.target] ?? r.artifact.target}{" "}
+                      <span className="narrow text-xs text-ink-2 tabular-nums">
+                        ({r.artifact.target}, {short(r.sha256, 8)})
+                      </span>
                     </span>
                   ))}
                 </p>
@@ -1222,7 +1884,7 @@ function AsOfReport({
       </h2>
       <p className="text-sm text-ink-2">
         {then.cutoff_type
-          ? `${then.cutoff_type}, recorded ${when(then.cutoff_recorded_at ?? "")}. `
+          ? `${then.cutoff_type}, recorded ${formatDateTime(then.cutoff_recorded_at ?? "")}. `
           : ""}
         {then.head_seq - then.cutoff_seq} events came after it.
       </p>
@@ -1315,8 +1977,9 @@ function AsOfReport({
                 >
                   <td className="py-1.5">
                     {STAGES[s.stage] ?? s.stage}, {scopeLabel(s.scope_id)}
-                    <span className="block text-xs text-ink-3">
-                      {s.mode}, reveal {s.reveal.replace("_", " ")}
+                    <span className="block text-sm text-ink-2" title={`Mode ${s.mode}`}>
+                      {modeLabel(s.mode)}
+                      <span className="block">{revealLabel(s.reveal.replace(/^on_/, ""))}</span>
                     </span>
                   </td>
                   <td>{s.records}</td>

@@ -2,16 +2,24 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
 import { health } from "../data/api.ts";
+import type { ProjectSummary } from "../data/schema.ts";
 import { run } from "../data/workbench.ts";
-import { rememberReviewer } from "../screens/project.tsx";
+import { formatDate } from "../lib/format.ts";
+import { rememberedReviewer, rememberReviewer, ROLE_LABELS } from "../screens/project.tsx";
+import { QueueRows, SCREEN_PATH, useQueues } from "../screens/setup/queues.tsx";
+import type { Queue } from "../screens/setup/queues.tsx";
+import { Button } from "../ui/Button.tsx";
+import { EmptyState } from "../ui/Empty.tsx";
+import { Page } from "../ui/Page.tsx";
 import { failure, Field, FormDialog, TextInput } from "../ui/Form.tsx";
-import { Key, KeyHint } from "../ui/Key.tsx";
 import { useKeys } from "../ui/keys.ts";
 
 export const Route = createFileRoute("/")({
   loader: ({ context }) => run(context.workbench.projects()),
   component: Projects,
 });
+
+const STAGE_NAMES = { title_abstract: "Title and abstract", full_text: "Full text" } as const;
 
 function Projects() {
   const projects = Route.useLoaderData();
@@ -29,56 +37,45 @@ function Projects() {
     void navigate({ to: "/p/$projectId", params: { projectId: project.id } });
     return true;
   });
+  const create = workbench.live ? (
+    <Button kind="primary" keys={["c"]} onClick={() => setCreating(true)}>
+      Create a review
+    </Button>
+  ) : null;
+  const open = projects.filter((p) => p.stages.length > 0).length;
   return (
-    <div className="min-h-full bg-paper">
-      <div className="mx-auto max-w-[880px] px-8 pt-20 pb-12">
-        <p className="text-sm font-semibold text-petrol">Kittum</p>
-        <div className="mt-1 flex items-baseline gap-6">
-          <h1 className="text-xl font-semibold tracking-[-0.01em]">
-            {projects.length ? "Choose a review" : "Start a review"}
-          </h1>
-          {workbench.live ? (
-            <button
-              type="button"
-              onClick={() => setCreating(true)}
-              className="ml-auto rounded-[3px] px-1 py-0.5 hover:bg-sheet"
-            >
-              <KeyHint keys={["c"]}>Create a review</KeyHint>
-            </button>
-          ) : null}
-        </div>
-        <ol className="mt-8 border-y border-rule">
-          {projects.map((project, index) => (
-            <li key={project.id} className="border-b border-rule last:border-b-0">
-              <Link
-                to="/p/$projectId"
-                params={{ projectId: project.id }}
-                className="grid grid-cols-[28px_1fr_auto] items-baseline gap-x-4 px-2 py-3.5 hover:bg-sheet focus-visible:bg-sheet"
-              >
-                <Key k={String(index + 1)} />
-                <span>
-                  <span className="text-md font-semibold">{project.name}</span>
-                  <span className="ml-3 text-ink-2">
-                    {project.title ?? "No protocol published yet"}
-                  </span>
-                </span>
-                <span className="text-xs text-ink-3">
-                  {project.stages.length === 0
-                    ? "Not screening yet"
-                    : `${project.stages.length} ${project.stages.length === 1 ? "stage" : "stages"} open`}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ol>
+    <div className="flex h-full flex-col bg-paper">
+      <header className="flex h-10 flex-none items-center border-b border-rule bg-sheet px-4">
+        <span className="text-sm font-semibold tracking-[-0.01em] text-petrol">Kittum</span>
+      </header>
+      <main className="min-h-0 flex-1">
         {projects.length === 0 ? (
-          <p className="mt-6 max-w-[60ch] text-ink-2">
-            There are no reviews on this server yet. Create one with <Key k="c" />: you become its
-            methods lead and set it up step by step, from the people to the first screening stage.
-            For a complete example to explore, run <code>kittum demo seed</code>.
-          </p>
-        ) : null}
-        <ServerStatus />
+          <EmptyState title="No reviews yet" actions={create}>
+            Create a review to become its methods lead and set it up step by step, from the people
+            to the first screening stage. For a complete example, run{" "}
+            <code className="text-sm">kittum demo seed</code> on the server.
+          </EmptyState>
+        ) : (
+          <Page
+            title="Reviews"
+            summary={
+              <>
+                {`${projects.length} ${projects.length === 1 ? "review" : "reviews"} on this server, ${open} with screening open.`}
+                <span className="mt-0.5 block">
+                  Kittum has no sign-in: pick who you are, and this browser remembers it.
+                </span>
+              </>
+            }
+            actions={create}
+          >
+            {/* The list is the sheet on the desk: the one raised surface of the page. */}
+            <ol className="overflow-hidden rounded-[6px] bg-raised shadow-raised">
+              {projects.map((project) => (
+                <ProjectRow key={project.id} project={project} />
+              ))}
+            </ol>
+          </Page>
+        )}
         <CreateReview
           open={creating}
           onOpenChange={setCreating}
@@ -87,8 +84,135 @@ function Projects() {
             void navigate({ to: "/p/$projectId/setup", params: { projectId } });
           }}
         />
-      </div>
+      </main>
+      <ServerStatus />
     </div>
+  );
+}
+
+/** One review: its title once, who leads it and who you are in it, its open stage, and each
+ * screener's progress. A known screener gets their own queue and a Resume button; on a browser
+ * that does not know who is here, each screener's row offers to screen as them (there is no
+ * sign-in: each person picks their name); the lead sees the progress without actions. */
+function ProjectRow({ project }: { project: ProjectSummary }) {
+  const { workbench } = Route.useRouteContext();
+  const title = project.title ?? project.name;
+  const lead = project.members.find((m) => m.roles.includes("lead"));
+  const meId = rememberedReviewer(project.id);
+  const me = project.members.find((m) => m.actor_id === meId) ?? null;
+  const stages = project.stages;
+  const latest = stages.some((s) => s.stage === "full_text") ? "full_text" : "title_abstract";
+  const queues = useQueues(workbench, project);
+  const current = (queues ?? []).filter((q) => q.stage === latest);
+  const mine = me ? current.find((q) => q.actorId === me.actor_id) : undefined;
+  const leads = Boolean(me?.roles.includes("lead")) && !mine;
+  const shown = mine ? [mine] : current;
+  const reviewerCount = project.members.filter((m) => m.roles.includes("reviewer")).length;
+  // The team by role, beside the lead: the screeners listed on the right are some of them.
+  const team = (["reviewer", "auditor", "adjudicator"] as const)
+    .map((role) => {
+      const n = project.members.filter((m) => m.roles.includes(role)).length;
+      const name = ROLE_LABELS[role].toLowerCase();
+      return n ? `${n} ${n === 1 ? name : `${name}s`}` : null;
+    })
+    .filter(Boolean)
+    .join(", ");
+  return (
+    <li
+      className="grid grid-cols-[minmax(0,640px)_minmax(0,1fr)] gap-x-12 border-b border-rule px-6 py-5 last:border-b-0"
+      data-testid="review-row"
+    >
+      <div className="min-w-0">
+        <Link
+          to="/p/$projectId"
+          params={{ projectId: project.id }}
+          className="group inline-flex items-baseline gap-2 text-md font-semibold text-ink hover:text-petrol"
+          title={project.title && project.title !== project.name ? project.name : undefined}
+        >
+          <span className="group-hover:underline">{title}</span>
+          <span aria-hidden="true" className="text-ink-2 group-hover:text-petrol">
+            ›
+          </span>
+        </Link>
+        <p className="mt-1 text-sm text-ink-2">
+          {me
+            ? `Your role: ${me.roles.map((r) => ROLE_LABELS[r]).join(", ")}.`
+            : lead
+              ? `Led by ${lead.display_name}${team ? `, with ${team}` : ""}.`
+              : "No methods lead yet."}{" "}
+          {project.protocol
+            ? `Protocol version ${project.protocol.version_label}, started ${formatDate(project.created_at)}.`
+            : `No protocol yet, started ${formatDate(project.created_at)}.`}
+        </p>
+        <p className="mt-1.5 -ml-2 flex flex-wrap items-center gap-1">
+          {(
+            [
+              ["/p/$projectId/setup", "Workflow"],
+              ["/p/$projectId/protocol", "Protocol"],
+              ["/p/$projectId/progress", "Progress"],
+            ] as const
+          ).map(([to, name]) => (
+            <Link
+              key={to}
+              to={to}
+              params={{ projectId: project.id }}
+              className="inline-flex h-7 items-center rounded-[4px] px-2 text-xs font-medium text-petrol hover:bg-petrol-wash"
+            >
+              {name}
+            </Link>
+          ))}
+        </p>
+      </div>
+      <div className="min-w-0 text-sm">
+        {stages.length === 0 ? (
+          <p className="text-ink-2">
+            {project.protocol ? "Setting up; no screening stage is open yet." : "Setting up."}
+          </p>
+        ) : (
+          <>
+            <p className="font-medium">
+              {STAGE_NAMES[latest]} screening is open
+              {mine ? (
+                <span className="font-normal text-ink-2">; this is your queue.</span>
+              ) : current.length ? (
+                <span className="font-normal text-ink-2">
+                  {`; ${current.length} of ${reviewerCount} ${reviewerCount === 1 ? "reviewer screens" : "reviewers screen"} it.`}
+                </span>
+              ) : null}
+            </p>
+            {queues === null ? (
+              <p className="mt-1 text-ink-2">Counting the queues.</p>
+            ) : shown.length ? (
+              <div className="mt-1.5">
+                <QueueRows
+                  caption={`${STAGE_NAMES[latest]} queues`}
+                  queues={shown}
+                  {...(leads
+                    ? {}
+                    : {
+                        action: (q: Queue) =>
+                          q.remaining ? (
+                            <Link
+                              to={SCREEN_PATH[q.stage]}
+                              params={{ projectId: project.id }}
+                              onClick={() => rememberReviewer(project.id, q.actorId)}
+                              className={`inline-flex h-7 items-center rounded-[4px] border px-2.5 text-xs font-medium ${mine ? "border-petrol bg-petrol text-petrol-ink hover:brightness-110" : "border-rule-strong bg-sheet text-ink hover:border-ink-3"}`}
+                            >
+                              {mine ? "Resume screening" : `Screen as ${q.name}`}
+                            </Link>
+                          ) : q.screened ? (
+                            <span className="text-ink-2">Done</span>
+                          ) : null,
+                      })}
+                />
+              </div>
+            ) : (
+              <p className="mt-1 text-ink-2">No records assigned yet.</p>
+            )}
+          </>
+        )}
+      </div>
+    </li>
   );
 }
 
@@ -177,7 +301,7 @@ function ServerStatus() {
     };
   }, [workbench]);
   return (
-    <footer className="mt-10 flex gap-4 text-xs text-ink-3">
+    <footer className="flex flex-none gap-4 border-t border-rule px-4 py-2 text-2xs text-ink-3">
       <span>{status ?? "Checking the server."}</span>
       <span>
         AGPL-3.0-or-later.{" "}

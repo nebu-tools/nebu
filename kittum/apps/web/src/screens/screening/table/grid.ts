@@ -8,9 +8,16 @@ export const EMPTY = "(empty)";
 
 export interface Column<R> {
   readonly id: string;
+  /** The column's full name: menus, hovers, the export's cover sheet, and screen readers. */
   readonly header: string;
+  /** A shorter name for the header cell of a narrow column ("Pool" for "In the known pool"). */
+  readonly short?: string;
   /** Default width in pixels. */
   readonly width: number;
+  /** A share of the room left over when the columns are narrower than the grid. */
+  readonly grow?: number;
+  /** An icon column: its header shows the short name, its ▾ menu only on hover or when on. */
+  readonly compact?: boolean;
   /** What the cell says, and what "text contains" and sorting read. */
   readonly text: (row: R) => string;
   /** The values the filter checklist offers; a cell may hold several (publication types). */

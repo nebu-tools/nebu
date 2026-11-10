@@ -8,11 +8,10 @@ import { useRef, useState } from "react";
 import type { Criterion, DecisionImportPreview, ImportRow } from "../../../data/schema.ts";
 import { run, WorkbenchError } from "../../../data/workbench.ts";
 import type { Caller, Workbench } from "../../../data/workbench.ts";
+import { formatDateTime } from "../../../lib/format.ts";
+import { Button } from "../../../ui/Button.tsx";
 import { OUTCOMES } from "../../../ui/Status.tsx";
 import { numbered } from "../criteria.ts";
-
-const BUTTON =
-  "h-6 flex-none rounded-[2px] border border-rule-strong bg-sheet px-2 whitespace-nowrap hover:bg-sheet-2 disabled:text-ink-3";
 
 const REFUSALS: Record<NonNullable<ImportRow["refusal"]>, string> = {
   unknown_ref: "Unknown Ref",
@@ -26,14 +25,6 @@ const REFUSALS: Record<NonNullable<ImportRow["refusal"]>, string> = {
   second_opinion: "Second opinion",
   withdrawn: "Withdrawn",
 };
-
-const when = (iso: string) =>
-  new Date(iso).toLocaleString("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 
 const says = (row: ImportRow, criteria: ReadonlyArray<Criterion>) => {
   const d = row.decision;
@@ -128,15 +119,14 @@ export function ImportDecisions({
   const rows = p ? [...p.changes, ...p.refused] : [];
   return (
     <>
-      <button
-        type="button"
-        className={BUTTON}
+      <Button
+        size="sm"
         onClick={() => input.current?.click()}
         disabled={busy}
         title="Bring back decisions from your working export, edited in a spreadsheet"
       >
         Import decisions
-      </button>
+      </Button>
       <input
         ref={input}
         type="file"
@@ -156,7 +146,7 @@ export function ImportDecisions({
       />
       {file ? (
         <section
-          className="absolute top-full right-0 z-20 mt-px flex max-h-[60vh] w-[min(760px,100%)] flex-col border border-rule-strong bg-sheet text-xs shadow-[0_8px_24px_rgb(0_0_0/0.16)]"
+          className="absolute top-full right-8 z-20 mt-px flex max-h-[60vh] w-[min(860px,100%)] flex-col rounded-[4px] border border-rule-strong bg-sheet text-sm shadow-[0_8px_24px_rgb(0_0_0/0.16)]"
           aria-label="Import decisions"
           data-testid="import-panel"
           // The table's keys pause while the panel is open, so Enter presses its buttons.
@@ -165,8 +155,9 @@ export function ImportDecisions({
           <header className="flex items-baseline gap-2 border-b border-rule px-3 py-2">
             <span className="font-semibold text-ink">{file.name}</span>
             {preview ? (
-              <span className="text-ink-3">
-                exported by {preview.exported_by}, {when(preview.exported_at)} · {preview.rows} rows
+              <span className="text-ink-2">
+                exported by {preview.exported_by}, {formatDateTime(preview.exported_at)} ·{" "}
+                {preview.rows} rows
               </span>
             ) : null}
             <button
@@ -178,7 +169,7 @@ export function ImportDecisions({
               Close
             </button>
           </header>
-          {busy && !preview ? <p className="px-3 py-2 text-ink-3">Reading the file…</p> : null}
+          {busy && !preview ? <p className="px-3 py-2 text-ink-2">Reading the file…</p> : null}
           {p ? (
             <>
               <p className="flex gap-4 px-3 py-2" data-testid="import-counts">
@@ -204,14 +195,14 @@ export function ImportDecisions({
                     <tbody>
                       {rows.map((r) => (
                         <tr key={`${r.row}-${r.ref}`} className="h-6 align-top">
-                          <td className="border-b border-rule px-2 py-0.5 text-ink-3 tabular-nums">
+                          <td className="border-b border-rule px-2 py-0.5 text-ink-2 tabular-nums">
                             {r.row}
                           </td>
                           <td
                             className="max-w-[260px] truncate border-b border-rule px-2 py-0.5"
                             title={r.title ?? r.ref}
                           >
-                            {r.title ?? <span className="text-ink-3">{r.ref || "No Ref"}</span>}
+                            {r.title ?? <span className="text-ink-2">{r.ref || "No Ref"}</span>}
                           </td>
                           <td
                             className="max-w-[200px] truncate border-b border-rule px-2 py-0.5"
@@ -239,16 +230,16 @@ export function ImportDecisions({
           ) : null}
           <footer className="flex items-center gap-3 px-3 py-2">
             {p ? (
-              <button
-                type="button"
-                className={`${BUTTON} font-semibold`}
+              <Button
+                kind="primary"
+                size="sm"
                 onClick={() => void apply()}
                 disabled={busy || p.changes.length === 0}
               >
                 {busy
                   ? "Importing…"
                   : `Apply ${p.changes.length} ${p.changes.length === 1 ? "decision" : "decisions"}`}
-              </button>
+              </Button>
             ) : null}
             {error ? (
               <>
@@ -256,18 +247,13 @@ export function ImportDecisions({
                   {error}
                 </span>
                 {preview ? (
-                  <button
-                    type="button"
-                    className={BUTTON}
-                    onClick={() => void look(file)}
-                    disabled={busy}
-                  >
+                  <Button size="sm" onClick={() => void look(file)} disabled={busy}>
                     Preview again
-                  </button>
+                  </Button>
                 ) : null}
               </>
             ) : (
-              <span className="text-ink-3">
+              <span className="text-ink-2">
                 Nothing is recorded until Apply. Kittum records that you imported the file, not who
                 filled in each row, and keeps no timing for these decisions.
               </span>

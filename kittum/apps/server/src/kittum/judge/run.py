@@ -14,6 +14,8 @@ from kittum.judge.verify import injection_suspected, verify
 from kittum.models import cut_off, split_reasoning
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from pydantic import BaseModel
 
     from kittum.judge.prompt import CriterionAnswer
@@ -85,6 +87,7 @@ def run_judge(
     config: JudgeConfig,
     backend: LlmBackend,
     instructions: JudgeInstructions | None = None,
+    numbers: Mapping[str, int] | None = None,
 ) -> JudgeRun:
     chosen = applicable(criteria, scope_id, item)
     if not chosen:
@@ -94,7 +97,9 @@ def run_judge(
     answers: dict[str, CriterionAnswer] | None = None
     stopped: str | None = None
     for n in range(config.max_attempts):
-        request = build_request(item, chosen, config, attempt=n, instructions=instructions)
+        request = build_request(
+            item, chosen, config, attempt=n, instructions=instructions, numbers=numbers
+        )
         completion = backend.complete(request)
         stopped = cut_off(request, completion)
         if stopped:

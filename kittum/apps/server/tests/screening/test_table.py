@@ -186,6 +186,12 @@ def test_table_blinds_reviewers_and_exports_what_each_may_see(
     lead_colitis = by_ref[world.record(TITLES["colitis"]).item_ref]
     assert lead_colitis["outcome"] == "conflict"
     assert lead_colitis["ai_excludes"] is True and lead_colitis["ai_not_met"] == ["POP"]
+    # The AI includes the varenicline trial, but its checked reading of the intervention is
+    # unclear: the lead's table says so, apart from the clear includes.
+    lead_varenicline = by_ref[world.record(TITLES["varenicline"]).item_ref]
+    assert lead_varenicline["ai_proposal"]["outcome"] == "include"
+    assert lead_varenicline["ai_unclear"] == ["INT"]
+    assert by_ref[world.record(TITLES["patch"]).item_ref]["ai_unclear"] == []
 
     # B's working export: B's rows only, the cover says what it is, and it is in the ledger.
     response = export(b)

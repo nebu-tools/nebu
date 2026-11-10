@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 import yaml
 
-from kittum.judge import PROMPT_VERSION, CriterionVerdict, JudgeConfig, ScreeningItem, judge
+from kittum.judge import JUDGE_V2, CriterionVerdict, JudgeConfig, ScreeningItem, judge
 from kittum.models.testing import RecordedBackend
 from kittum.protocol import Criterion
 
@@ -21,7 +21,8 @@ GOLD = json.loads((Path(__file__).parent / "fixtures" / "demo_gold.json").read_t
 PROTOCOL = yaml.safe_load((Path(__file__).parents[4] / GOLD["protocol"]).read_text())
 (TOPIC,) = (t for t in PROTOCOL["search_topics"] if t["id"] == GOLD["scope"])
 CRITERIA = tuple(Criterion.model_validate(c) for c in TOPIC["criteria"])
-CONFIG = JudgeConfig(id="gold", model_id="gold", prompt_version=PROMPT_VERSION)
+# judge.v2: the recorded answers are the models' answers to the judge.v2 prompt.
+CONFIG = JudgeConfig(id="gold", model_id="gold", prompt_version=JUDGE_V2)
 GLM, QWEN = "glm-5.3-flash", "qwen3.5:4b"
 
 
