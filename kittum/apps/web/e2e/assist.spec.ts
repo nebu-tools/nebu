@@ -180,10 +180,11 @@ test("a lead drafts with the model, sees what it wrote, steps back, restores, an
   });
 
   await test.step("the lead publishes revision 3, and the ledger names what the model wrote", async () => {
+    await page.getByRole("button", { name: /^History/ }).click(); // the history opens as a list
     await rail.filter({ hasText: "Changes accepted" }).click();
     await expect(page.getByText("Revision 3 of 4")).toBeVisible();
-    await side.getByLabel("Reason").fill("First version, drafted with the assistant");
-    await side.getByRole("button", { name: "Publish revision 3" }).click();
+    await side.getByLabel(/^Reason/).fill("First version, drafted with the assistant");
+    await side.getByRole("button", { name: /^Publish version/ }).click();
     await expect(page.getByTestId("protocol-notice")).toContainText(
       "from revision 3. The ledger records your approval and the",
     );
@@ -278,7 +279,11 @@ test("a lead writes the protocol by hand in the form, counts a query, and edits 
     await expect(rail.first()).toContainText("Written by hand");
     await expect(rail.first().getByTestId("author")).toContainText("Morgan Lee");
     await expect(form.getByTestId("ai-mark")).toHaveCount(0);
-    await expect(side.getByTestId("written-count")).toHaveText("A person wrote every field.");
+    // Written by hand, with no field from a model: the provenance says so once.
+    await expect(side.getByTestId("provenance")).toContainText(
+      "Morgan Lee wrote this revision by hand.",
+    );
+    await expect(side.getByTestId("written-count")).toHaveCount(0);
     await shoot(page, "08-form-saved");
   });
 

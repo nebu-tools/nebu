@@ -205,7 +205,7 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     await editor.press("Control+Enter");
     await expect(page.getByTestId("protocol-check")).toContainText("No problems found");
     await expect(page.getByTestId("protocol-check")).toContainText("The first version");
-    await page.getByLabel("Reason").fill("The protocol as approved by the steering group.");
+    await page.getByLabel(/^Reason/).fill("The protocol as approved by the steering group.");
     await page.getByRole("button", { name: "Publish this version" }).click();
     await expect(page.getByTestId("protocol-notice")).toHaveText(
       "Published version 0.3. The ledger records your approval.",
@@ -244,7 +244,7 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
       /^version_label0\.30\.4$/,
       /^search_topics\[TRIALS\]\.criteria\[POP\]\.text\.enAdults \(18 years or older\) who smoke tobacco\.Adults \(18 years or older\) who smoke tobacco daily or occasionally\.$/,
     ]);
-    await page.getByLabel("Reason").fill("Occasional smokers are eligible too.");
+    await page.getByLabel(/^Reason/).fill("Occasional smokers are eligible too.");
     await page.getByRole("button", { name: "Publish this version" }).click();
     await expect(page.getByTestId("protocol-notice")).toContainText("Published version 0.4");
   });
@@ -252,7 +252,7 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
   await test.step("the lead imports the three searches from their export files", async () => {
     await page.keyboard.press("g");
     await page.keyboard.press("s");
-    await expect(page.getByRole("heading", { name: "Searches" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Searches", exact: true })).toBeVisible();
     for (const search of SEARCHES) {
       await page.keyboard.press("i");
       const dialog = page.getByRole("dialog", { name: "Import a search file" });
@@ -277,9 +277,15 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     await expect(page.getByText("The corpus is not built yet.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Build the corpus" })).toBeEnabled();
     await page.keyboard.press("b");
-    await expect(page.getByTestId("corpus-count")).toHaveText(
-      "The searches returned 30 records. None is a duplicate yet. That leaves 30 reports in 30 studies.",
-    );
+    // The corpus strip: 30 records from the searches − 0 duplicates = 30 reports in 30 studies.
+    for (const [id, figure] of [
+      ["corpus-records", "30"],
+      ["corpus-duplicates", "0"],
+      ["corpus-reports", "30"],
+      ["corpus-studies", "30"],
+    ] as const) {
+      await expect(page.getByTestId(id)).toHaveText(figure);
+    }
     // The PubMed and CENTRAL records of one trial share a DOI: proposed, left for the lead.
     await expect(page.getByTestId("proposal").first()).toContainText("Duplicate records");
     // Building it queued its enrichment; the worker fills it from the recorded open sources.
@@ -287,6 +293,9 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
       "Enriched 30 records after the corpus was built",
       { timeout: 60_000 },
     );
+    // With every source answering, the enrichment folds to its summary line; open its table.
+    const enrichment = page.getByRole("button", { name: "Enrichment from the open sources" });
+    if ((await enrichment.getAttribute("aria-expanded")) === "false") await enrichment.click();
     for (const source of ["openalex", "europepmc", "crossref", "unpaywall", "pubtator"]) {
       const cells = await page
         .locator(`[data-testid=source-row][data-source=${source}] td`)
@@ -301,8 +310,8 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     await page.keyboard.press("g");
     await page.keyboard.press("u");
     projectId = /\/p\/([^/]+)\//.exec(page.url())?.[1] ?? "";
-    await expect(step(page, "Corpus")).toHaveAttribute("data-state", "done");
-    await expect(step(page, "Corpus")).toContainText(
+    await expect(step(page, "Studies")).toHaveAttribute("data-state", "done");
+    await expect(step(page, "Studies")).toContainText(
       "30 records identified, 0 duplicates removed so far",
     );
     const form = page.getByRole("form", { name: "Open a screening stage" });
@@ -320,7 +329,8 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     await expect(page.getByTestId("setup-notice")).toContainText(
       "Title and abstract screening is open for",
     );
-    await expect(step(page, "Title and abstract screening")).toHaveAttribute("data-state", "done");
+    // Open is not finished: the step is in progress until every record is decided.
+    await expect(step(page, "Title and abstract")).toHaveAttribute("data-state", "active");
   });
 
   // The same review through `kittum project`, from the same files.
@@ -405,7 +415,7 @@ test("a lead sets up a review from nothing in the browser, as the CLI would", as
     await page.keyboard.press("g");
     await page.keyboard.press("t");
     await expect(page.getByTestId("record-title")).toBeVisible({ timeout: 60_000 });
-    await expect(page.getByText("0 screened, 31 left")).toBeVisible();
+    await expect(page.getByText("0 of 31 screened")).toBeVisible();
   });
 
   await test.step("a reviewer who has decided nothing receives none of the setup's data", async () => {

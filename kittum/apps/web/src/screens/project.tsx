@@ -112,14 +112,30 @@ function compute(state: ProjectState) {
   const adjudicatedStages = state.project.stages.filter((s) =>
     s.adjudicators.includes(me.actor_id),
   );
-  const scopeLabel = (scopeId: string) => scopes.find((s) => s.id === scopeId)?.label ?? scopeId;
+  // A question's short label where the protocol gives one; the full question otherwise.
+  const questions = state.protocol?.protocol.questions ?? [];
+  const scopeLabel = (scopeId: string) =>
+    questions.find((q) => q.id === scopeId)?.short_label?.trim() ||
+    (scopes.find((s) => s.id === scopeId)?.label ?? scopeId);
   /** The criteria decided at `stage` in a scope, in key order. */
-  const criteriaFor = (stage: Stage, scopeId: string | null): Criterion[] =>
-    topics
-      .flatMap((t) => t.criteria)
-      .filter(
-        (c) => c.decidable_at.includes(stage) && (!scopeId || c.applies_to.includes(scopeId)),
-      );
+  // Each criterion with its permanent number: its place in its search topic, from 1.
+  const criteriaFor = (
+    stage: Stage,
+    scopeId: string | null,
+  ): Array<Criterion & { readonly number?: number }> =>
+    // A criterion applies to a scope when it names the scope or the whole search topic, as the
+    // server's screening rules read it.
+    topics.flatMap((t) =>
+      t.criteria
+        .map((c, i) => ({ ...c, number: i + 1 }))
+        .filter(
+          (c) =>
+            c.decidable_at.includes(stage) &&
+            (!scopeId ||
+              c.applies_to.includes(scopeId) ||
+              (c.applies_to.includes(t.id) && t.scopes.some((s) => s.id === scopeId))),
+        ),
+    );
   return {
     ...state,
     labels,

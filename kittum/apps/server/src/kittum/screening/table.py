@@ -18,12 +18,13 @@ not a block. A complete topic's
 reviewer never learns which records are known includes, as they are what sentinels are made of.
 """
 
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from kittum.core import Id, Record
-from kittum.corpus import known_pool_refs
+from kittum.corpus import known_pool_refs, latest_revision, reports
 from kittum.judge import CriterionVerdict
 from kittum.people import members
 from kittum.protocol import (
@@ -107,6 +108,9 @@ class TableRow(Record):
     """The AI's verified reading, for the lead."""
     ai_not_met: tuple[str, ...] = ()
     """Criteria the AI's verified reading answered `not_met`, for the lead."""
+    ai_unclear: tuple[str, ...] = ()
+    """Criteria the AI's verified reading answered `unclear`, for the lead: an include the AI
+    proposes with one of these is not a clear include."""
     flags: tuple[ItemFlag, ...] = ()
     """Sentinel, audit sample, or extra screen. Lead's table only."""
     in_known_pool: bool | None = None
@@ -131,6 +135,8 @@ class ScreeningTable(Record):
     reveal: str
     protocol_hash: str
     """The protocol version the stage reads with now; a re-judge moves it."""
+    protocol_version_label: str | None = None
+    """That version's label ("1.0"), so the lead's table can say which version the AI read."""
     rows: tuple[TableRow, ...]
     known_includes: KnownIncludes | None = None
     """How many known includes the rows hold and how many the AI proposes to exclude, where the
@@ -175,12 +181,14 @@ def screening_table(
         raise NotAssigned(
             f"actor {viewer_id} neither screens this stage nor is a methods lead who sees it"
         )
+    spelled = _spelled_authors(tx, project_id)
+    rows = [_respelled(r, spelled.get(r.ref)) for r in rows]
     # Known includes: the topic's reference set and its known pool (the papers the team has).
     shown = view == "lead" or documentation == "working"
     pool = known_pool_refs(tx, project_id, row["topic_id"]) if shown else None
     known_includes = None
+    protocol = get_version(tx, project_id, row["protocol_version_id"]).version.protocol
     if shown:
-        protocol = get_version(tx, project_id, row["protocol_version_id"]).version.protocol
         topic = topic_for(protocol, row["scope_id"], row["topic_id"])
         known = known_include_refs(topic.reference_set, {r.ref: r.facts for r in rows})
         pooled = {r.ref for r in rows if pool is not None and r.ref in pool}
@@ -212,6 +220,7 @@ def screening_table(
         documentation=documentation,
         reveal=row["reveal"],
         protocol_hash=row["protocol_hash"],
+        protocol_version_label=protocol.version_label,
         rows=tuple(rows),
         known_includes=known_includes,
     )
@@ -222,6 +231,41 @@ class _Row:
     ref: str  # the item reference, kept on the server
     facts: RecordFacts
     row: TableRow
+
+
+def _folded(authors: tuple[str, ...]) -> tuple[str, ...]:
+    """Author names without accents or case, to tell one spelling of a list from another."""
+    return tuple(
+        "".join(c for c in unicodedata.normalize("NFKD", a) if not unicodedata.combining(c))
+        .casefold()
+        .strip()
+        for a in authors
+    )
+
+
+def _spelled_authors(tx: Tx, project_id: Id) -> dict[str, tuple[str, ...]]:
+    """Each report's author list as its records spell it with the most accents ("López-Durán"
+    where one export wrote "Lopez-Duran"), as the corpus and studies screens show it."""
+    revision = latest_revision(tx, project_id)
+    if revision is None:
+        return {}
+    out: dict[str, tuple[str, ...]] = {}
+    for report in reports(tx, project_id, revision.id):
+        lists = [tuple(r.authors) for r in report.records if r.authors]
+        if lists:
+            out[str(report.report_id)] = max(
+                lists, key=lambda a: sum(not c.isascii() for c in "".join(a))
+            )
+    return out
+
+
+def _respelled(row: _Row, spelled: tuple[str, ...] | None) -> _Row:
+    """The row with the accented spelling of its authors, where it names the same people."""
+    if not spelled or tuple(row.row.authors) == spelled:
+        return row
+    if _folded(tuple(row.row.authors)) != _folded(spelled):
+        return row
+    return _Row(row.ref, row.facts, row.row.model_copy(update={"authors": spelled}))
 
 
 def _reading(raw: dict[str, Any] | None, flags: list[str] | None = None) -> Reading | None:
@@ -355,6 +399,9 @@ def _lead_rows(
                     ai_excludes=i["excludes"],
                     ai_not_met=tuple(
                         c["criterion_id"] for c in i["criteria"] or () if c["status"] == "not_met"
+                    ),
+                    ai_unclear=tuple(
+                        c["criterion_id"] for c in i["criteria"] or () if c["status"] == "unclear"
                     ),
                     flags=tuple(flags),
                     ai_proposal=proposal(

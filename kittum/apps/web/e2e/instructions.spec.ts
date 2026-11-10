@@ -108,7 +108,7 @@ test("screening instructions: the prompt, bulk decisions, the bench, and a re-ju
     });
     await rows.nth(1).click();
     await rows.nth(3).click({ modifiers: ["Shift"] });
-    await expect(page.getByTestId("bulk-count")).toHaveText("3 marked · 3 to decide");
+    await expect(page.getByTestId("bulk-count")).toHaveText("3 selected · 3 to decide");
     await shoot(page, "instructions-2-marked");
     await page.keyboard.press("Shift+I");
     await expect(page.getByText(/^Included 3 records, one decision each/)).toBeVisible();
@@ -136,18 +136,48 @@ test("screening instructions: the prompt, bulk decisions, the bench, and a re-ju
     await expect(page.getByRole("row").nth(1)).toBeVisible({ timeout: 30_000 });
     await page.getByRole("row").nth(1).click();
     await page.keyboard.press("a");
-    await expect(page.getByTestId("bulk-count")).toContainText("marked");
+    await expect(page.getByTestId("bulk-count")).toContainText("selected");
     await shoot(page, "instructions-3-all-marked");
-    await page.getByRole("button", { name: /^Accept the AI's proposals/ }).click();
-    await expect(page.getByText(/^Gave the AI's proposals to \d+ records/)).toBeVisible();
+    // One group of proposals gets its named action, several the general one; both accept them.
+    await page
+      .getByRole("button", { name: /^Accept the AI's proposals|, as the AI proposes$/ })
+      .click();
+    await expect(
+      page.getByText(
+        /^(Gave the AI's proposals to|Included|Excluded on .+?) \d+ records?, one decision each/,
+      ),
+    ).toBeVisible();
+    // The AI's unsure proposals are left for Sam to decide: an exclusion whose quote Kittum did
+    // not find, or an include with a criterion the AI reads as unclear. Every other record now
+    // has a decision.
+    const after = (await (
+      await page.request.get(`/api/projects/${pid}/screening/table`, {
+        params: { scope_id: "nrt-vs-control", stage: "title_abstract" },
+        headers: { "X-Kittum-Reviewer": sam },
+      })
+    ).json()) as {
+      rows: Array<{
+        ai_proposal: { outcome: string; verified?: boolean } | null;
+        ai?: { criteria: Array<{ status: string }> } | null;
+        decisions: Array<{ state: string }>;
+      }>;
+    };
+    const open = after.rows.filter((r) => r.decisions[0]?.state !== "decided");
+    const unsure = (r: (typeof open)[number]) =>
+      r.ai_proposal?.verified === false ||
+      (r.ai_proposal?.outcome === "include" &&
+        (r.ai?.criteria ?? []).some((c) => c.status === "unclear"));
+    expect(open.every(unsure)).toBe(true);
     const total = await page.getByTestId("row-count").textContent();
     const [all] = /^\d+/.exec(total ?? "") ?? [];
-    await expect(page.getByTestId("row-count")).toContainText(`${all} decided`);
+    await expect(page.getByTestId("row-count")).toContainText(
+      `${Number(all) - open.length} decided`,
+    );
   });
 
   await test.step("the lead makes the judge decisive, with guidance, inside the full prompt", async () => {
     await page.goto(`/p/${pid}/protocol?as=${lead.lead}`);
-    await expect(page.getByTestId("documentation")).toContainText("Working.");
+    await expect(page.getByTestId("documentation")).toContainText("Working documentation");
     await page.keyboard.press("v");
     await page.getByRole("button", { name: /^Start from the published version/ }).click();
     const instructions = page.getByTestId("instructions");
@@ -176,15 +206,18 @@ test("screening instructions: the prompt, bulk decisions, the bench, and a re-ju
       .getByRole("button", { name: /^Save as revision/ })
       .first()
       .click();
-    await page.getByLabel("Reason").fill("A decisive judge, tried on the bench.");
-    await page.getByRole("button", { name: /^Publish revision/ }).click();
+    await page.getByLabel(/^Reason/).fill("A decisive judge, tried on the bench.");
+    await page.getByRole("button", { name: /^Publish version/ }).click();
     await expect(page.getByTestId("protocol-notice")).toContainText("Published version");
 
     await page.goto(`/p/${pid}/screening/table?as=${lead.lead}`);
+    // The table says which version the AI read, and asks before it re-judges.
     const rejudge = page.getByRole("button", { name: /^Re-judge with version/ });
     await expect(rejudge).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("outdated")).toContainText("The AI proposals here come from");
     await shoot(page, "instructions-6-lead-table");
     await rejudge.click();
+    await page.getByRole("button", { name: /^Re-judge \d+ records?$/ }).click();
     await expect(page.getByText(/^The AI reads the stage again with version/)).toBeVisible();
 
     const disclosure = async () => {

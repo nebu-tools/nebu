@@ -1,37 +1,40 @@
-// Full-text retrieval (DESIGN.md, "Full text"). The methods lead sees every report with its
-// outcome at title and abstract, has a worker walk the open-access waterfall for the reports
-// sought (every attempt listed under its report), retries the sources that failed, uploads the
-// PDFs open access did not give (one at a time or a folder at once), exports the reports still
-// without a PDF for whoever can send them, and adds the full-text sentinels that full-text queues
-// get unmarked. The list is the lead's alone: it names every record, and a reviewer who saw it
-// could tell sentinels.
-import { LegendList } from "@legendapp/list/react";
-import type { LegendListRef } from "@legendapp/list/react";
-import { useRouteContext } from "@tanstack/react-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Full-text retrieval (DESIGN.md, "Full text"). The methods lead sees one row per report with its
+// final state (a PDF, none, or a registry record with no article yet) and its citation with the
+// identifiers as links; has a worker walk the open-access waterfall for the reports sought (every attempt kept under the report's retrieval history), retries the sources that
+// failed, uploads the PDFs open access did not give (one at a time or a folder at once), exports
+// the reports still without a PDF for whoever can send them, and adds the full-text sentinels
+// that full-text queues get unmarked. The list is the lead's alone: it names every record, and a
+// reviewer who saw it could tell sentinels.
+import { Menu } from "@base-ui/react/menu";
+import { Link, useRouteContext } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import type {
   AttemptView,
   EnrichmentRun,
   HeldUpload,
+  MissingReport,
   OpenAccessRun,
   ReportRetrieval,
   RetrievalItem,
   RetryPreview,
 } from "../../data/schema.ts";
 import { run } from "../../data/workbench.ts";
-import {
-  Button,
-  failure,
-  Field,
-  FileInput,
-  FormDialog,
-  Select,
-  TextInput,
-} from "../../ui/Form.tsx";
-import { KeyHint } from "../../ui/Key.tsx";
+import { formatDate, formatDateTime } from "../../lib/format.ts";
+import { Button } from "../../ui/Button.tsx";
+import { EmptyState } from "../../ui/Empty.tsx";
+import { failure, Field, FileInput, FormDialog, Select, TextInput } from "../../ui/Form.tsx";
+import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
+import { Page } from "../../ui/Page.tsx";
+import { Help } from "../../ui/Help.tsx";
+import { Panel } from "../../ui/Panel.tsx";
 import { usePoll } from "../../ui/poll.ts";
+import { ACCEPTED, Mark, NOT_DONE, WAITS } from "../../ui/Status.tsx";
+import type { Term } from "../../ui/Status.tsx";
+import { isRegistryOnly, registryUrl, studyLabel } from "../../lib/labels.ts";
+import { useStudyNames } from "../appraisal/studyNames.ts";
 import { LEAD_ONLY, plural, useProject } from "../project.tsx";
 import { failureLine, runActive, sourceName } from "../studies/Enrichment.tsx";
 
@@ -48,16 +51,71 @@ const sought = (item: RetrievalItem) =>
 /** "1 report", "3 reports". */
 const count = (word: string, n: number) => `${n} ${n === 1 ? word : plural(word)}`;
 
+/** "A", "A and B", "A, B and C". */
+const andList = (words: ReadonlyArray<string>) =>
+  words.length < 2 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`;
+
+/** One spelling for Creative Commons licences: "cc by" and "cc-by-4.0" as "CC BY", "CC BY 4.0". */
+const licenceLabel = (licence: string) => {
+  const text = licence.trim();
+  if (!/^cc[\s_-]?(by|0|zero)\b/i.test(text)) return text;
+  return text
+    .toUpperCase()
+    .replace(/_/g, "-")
+    .replace(/^CC[\s-]?(?=BY)/, "CC ")
+    .replace(/-(\d)/, " $1")
+    .replace(/\s+/g, " ");
+};
+
 const NO_FAILURES: RetryPreview = { occurrences: 0, reports: 0, sources: [] };
+
+/** The tabs, and "untried": the reports open access has not tried, reached from the run line. */
+type View = "articles" | "registry" | "has" | "all" | "untried";
+
+const VIEWS: ReadonlyArray<{ id: View; label: string; hint: string }> = [
+  {
+    id: "articles",
+    label: "Need a PDF",
+    hint: "Articles without a PDF: fetch or upload them.",
+  },
+  {
+    id: "registry",
+    label: "Registry records",
+    hint: "Trial registry records with no article yet. Upload one if the trial's results appear.",
+  },
+  { id: "has", label: "Has PDF", hint: "Reports with a PDF attached." },
+  { id: "all", label: "All", hint: "Every report in the list." },
+];
+
+const viewOf = (item: RetrievalItem): "articles" | "registry" | "has" =>
+  item.full_text ? "has" : isRegistryOnly(item) ? "registry" : "articles";
+
+/** Without a PDF, and not in the latest open-access run (or there was none). */
+const untried = (item: RetrievalItem, retrievals: ReadonlyMap<string, ReportRetrieval>) =>
+  !item.full_text && !retrievals.has(item.report_id);
+
+const inView = (
+  view: View,
+  item: RetrievalItem,
+  retrievals: ReadonlyMap<string, ReportRetrieval>,
+) => view === "all" || (view === "untried" ? untried(item, retrievals) : viewOf(item) === view);
+
+/** When a report was last tried: the run's time, or null when the run was an earlier one. */
+type Tried = { readonly at: string | null };
 
 export function RetrievalScreen() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, seesLeadData, labels } = useProject();
+  const { project, me, seesLeadData, labels, scopes } = useProject();
+  const studyNames = useStudyNames();
   const [items, setItems] = useState<ReadonlyArray<RetrievalItem> | null>(null);
+  const [citations, setCitations] = useState<ReadonlyMap<string, MissingReport>>(new Map());
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState(false);
+  // The work first: the articles still without a PDF.
+  const [view, setView] = useState<View>("articles");
   const [selected, setSelected] = useState(0);
-  const [uploading, setUploading] = useState(false);
+  const [opened, setOpened] = useState<ReadonlySet<string>>(new Set());
+  const [uploadFor, setUploadFor] = useState<RetrievalItem | null>(null);
   const [uploadingMany, setUploadingMany] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [addingSentinel, setAddingSentinel] = useState(false);
@@ -67,7 +125,6 @@ export function RetrievalScreen() {
   const [failed, setFailed] = useState<RetryPreview>(NO_FAILURES);
   const [held, setHeld] = useState<ReadonlyArray<HeldUpload>>([]);
   const [busy, setBusy] = useState(false);
-  const list = useRef<LegendListRef>(null);
 
   const caller = useMemo(() => ({ projectId: project.id, as: me.actor_id }), [project.id, me]);
   const load = useCallback(
@@ -78,13 +135,17 @@ export function RetrievalScreen() {
         run(workbench.enrichment(caller)),
         run(workbench.retryPreview(caller)),
         run(workbench.heldUploads(caller)),
+        // Authors and PMIDs of the reports without a PDF, for the citation; the list works
+        // without them.
+        run(workbench.missingFullTexts(caller)).catch(() => [] as ReadonlyArray<MissingReport>),
       ]).then(
-        ([found, latest, enriched, preview, waiting]) => {
+        ([found, latest, enriched, preview, waiting, missingReports]) => {
           setItems(found);
           setOpenAccess(latest);
           setEnrichment(enriched);
           setFailed(preview);
           setHeld(waiting);
+          setCitations(new Map(missingReports.map((m) => [m.report_id, m])));
         },
         (e) => setError(failure(e, "Kittum could not load the reports.")),
       ),
@@ -106,6 +167,15 @@ export function RetrievalScreen() {
       ),
     [openAccess],
   );
+  const tried = useMemo(() => {
+    const at = openAccess ? (openAccess.finished_at ?? openAccess.requested_at) : null;
+    return new Map<string, Tried>([
+      ...(openAccess?.earlier ?? []).map((r) => [r.report_id, { at: null }] as const),
+      ...(openAccess?.reports ?? [])
+        .filter((r) => r.outcome)
+        .map((r) => [r.report_id, { at }] as const),
+    ]);
+  }, [openAccess]);
 
   const act = async (what: () => Promise<string | null>, fallback: string) => {
     setBusy(true);
@@ -138,20 +208,65 @@ export function RetrievalScreen() {
     }, "Kittum could not start the retry.");
 
   const screened = (items ?? []).some((i) => Object.keys(i.outcomes).length > 0);
-  const shown = useMemo(
+  // The reports in question: those sought, or every report with f (or before any screening).
+  const pool = useMemo(
     () => (items ?? []).filter((i) => all || !screened || sought(i)),
     [items, all, screened],
   );
-  const current = shown[Math.min(selected, shown.length - 1)];
-  const retrieved = shown.filter((i) => i.full_text).length;
+  // Reports open access has not tried yet come first, right under the button that tries them;
+  // the rest keep their order. j and k walk the rows in this order.
+  const shown = useMemo(() => {
+    const inThisView = pool.filter((i) => inView(view, i, byReport));
+    return [
+      ...inThisView.filter((i) => untried(i, byReport)),
+      ...inThisView.filter((i) => !untried(i, byReport)),
+    ];
+  }, [pool, view, byReport]);
+  const current = shown.length ? shown[Math.min(selected, shown.length - 1)] : undefined;
+  const retrieved = pool.filter((i) => i.full_text).length;
+  const viewCounts: Record<View, number> = {
+    articles: 0,
+    registry: 0,
+    has: 0,
+    all: pool.length,
+    untried: pool.filter((i) => untried(i, byReport)).length,
+  };
+  for (const i of pool) viewCounts[viewOf(i)] += 1;
   const missing = (items ?? []).filter((i) => (screened ? sought(i) : true) && !i.full_text);
+  // Reports without a PDF that the last open-access run did not check: added since, or skipped.
+  const unchecked = openAccess ? viewCounts.untried : 0;
   const canFetch = screened && !busy && !working;
   const canRetry = failed.sources.length > 0 && !busy && !working;
+  // The outcome at title and abstract earns a column only where it differs between rows: every
+  // report sought is included by definition.
+  const outcomeKey = (i: RetrievalItem) =>
+    Object.entries(i.outcomes)
+      .map(([scope, stages]) => `${scope}:${stages["title_abstract"] ?? ""}`)
+      .sort()
+      .join("|");
+  const showOutcome = new Set(shown.map(outcomeKey)).size > 1;
+  const columns = showOutcome ? COLUMNS_WITH_OUTCOME : COLUMNS;
+
+  const chooseView = (next: View) => {
+    setView(next);
+    setSelected(0);
+  };
+  const toggleHistory = (ref: string) =>
+    setOpened((now) => {
+      const next = new Set(now);
+      if (!next.delete(ref)) next.add(ref);
+      return next;
+    });
+  const upload = (item: RetrievalItem) => {
+    if (item.full_text) setNotice("This report has a PDF already.");
+    else setUploadFor(item);
+  };
 
   useEffect(() => {
-    if (shown.length)
-      void list.current?.scrollIndexIntoView({ index: Math.min(selected, shown.length - 1) });
-  }, [selected, shown.length]);
+    document
+      .querySelector('[data-testid="retrieval-row"][aria-current="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [selected, view, all]);
 
   useKeys((event) => {
     if (!items) return false;
@@ -164,13 +279,16 @@ export function RetrievalScreen() {
       case "ArrowUp":
         setSelected((i) => Math.max(i - 1, 0));
         return true;
+      case "Enter":
+        // A focused button or link keeps its own Enter.
+        if (event.target instanceof HTMLButtonElement || event.target instanceof HTMLAnchorElement)
+          return false;
+        if (!current || !byReport.has(current.report_id)) return false;
+        toggleHistory(current.item_ref);
+        return true;
       case "u":
         if (!current) return false;
-        if (current.full_text) {
-          setNotice("This report has a PDF already.");
-          return true;
-        }
-        setUploading(true);
+        upload(current);
         return true;
       case "b":
         setUploadingMany(true);
@@ -185,7 +303,7 @@ export function RetrievalScreen() {
       case "o":
         if (!screened) return false;
         if (working) {
-          setNotice("Kittum is still fetching. Each report lists its attempts as they happen.");
+          setNotice("Kittum is still fetching. Each report keeps its attempts as they happen.");
           return true;
         }
         void fetchOpenAccess();
@@ -206,142 +324,304 @@ export function RetrievalScreen() {
 
   if (!seesLeadData) {
     return (
-      <Shell>
-        <h1 className="text-xl font-semibold tracking-[-0.01em]">Retrieval</h1>
-        <p className="mt-4 max-w-[60ch] text-ink-2" data-testid="lead-only">
+      <Page kind="data" title="Retrieval">
+        <p className="max-w-[70ch] text-ink-2" data-testid="lead-only">
           {LEAD_ONLY}
         </p>
-      </Shell>
+      </Page>
     );
   }
 
+  const which = screened && !all ? "reports sought" : plural(labels.report).toLowerCase();
+  const skipped = openAccess?.skipped ?? [];
+
   return (
-    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)_auto] bg-paper">
-      <header className="mx-auto w-full max-w-[1180px] px-10 pt-8 pb-4">
-        <div className="flex items-baseline gap-6">
-          <h1 className="text-xl font-semibold tracking-[-0.01em]">Retrieval</h1>
-          <span className="text-sm text-ink-2" data-testid="retrieval-counts">
-            {items
-              ? `${retrieved} of ${shown.length} ${screened && !all ? "reports sought" : plural(labels.report).toLowerCase()} have a PDF`
-              : ""}
-          </span>
-          <span className="ml-auto flex flex-wrap gap-x-5 text-sm">
-            <KeyHint keys={["j", "k"]}>Move</KeyHint>
-            <KeyHint keys={["u"]} muted={!current || Boolean(current.full_text)}>
-              Upload its PDF
-            </KeyHint>
-            <KeyHint keys={["b"]}>Upload many PDFs</KeyHint>
-            <KeyHint keys={["s"]}>Add a full-text sentinel</KeyHint>
-            {screened ? (
-              <KeyHint keys={["f"]}>{all ? "Only those sought" : "Every report"}</KeyHint>
-            ) : null}
-          </span>
-        </div>
-        <p className="mt-2 max-w-[80ch] text-sm text-ink-2">
-          {!project.protocol
-            ? "Publish the protocol and build the corpus first."
-            : screened
-              ? `${all ? "These are all reports in the corpus." : "These are the reports included at title and abstract in at least one scope."} Full-text screening opens on a report once it has a PDF.`
-              : "No stage is screened yet, so the list shows every report in the corpus. A PDF you attach now waits until its report passes title and abstract."}
-        </p>
-        {screened ? (
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-            <Button primary keys="o" disabled={!canFetch} onClick={() => void fetchOpenAccess()}>
-              {runActive(openAccess) ? "Fetching open-access PDFs" : "Fetch open-access PDFs"}
-            </Button>
+    <Page
+      kind="data"
+      title="Retrieval"
+      summary={
+        !project.protocol ? (
+          "Publish the protocol and build the corpus first."
+        ) : items ? (
+          <>
             <span
-              className="max-w-[80ch] text-sm text-ink-2"
-              data-testid="open-access-status"
-              aria-live="polite"
+              data-testid="retrieval-counts"
+              title={
+                screened
+                  ? "Reports sought are those included at title and abstract in at least one scope. Full-text screening opens on a report once it has a PDF."
+                  : undefined
+              }
             >
-              {openAccess
-                ? openAccessLine(openAccess)
-                : "Kittum tries Europe PMC, PubMed Central, Unpaywall, OpenAlex, the publisher, medRxiv and bioRxiv, arXiv, Semantic Scholar, and CORE, in that order."}
+              {`${retrieved} of ${pool.length} ${which} have a PDF`}
             </span>
-          </div>
-        ) : null}
-        {(openAccess?.skipped ?? []).length > 0 ? (
-          <p className="mt-1 text-sm text-ink-2" data-testid="skipped-sources">
-            {(openAccess?.skipped ?? [])
-              .map((s) => `Kittum skipped ${sourceName(s.source)} because ${s.reason}.`)
-              .join(" ")}
-          </p>
-        ) : null}
-        <Failures
-          failed={failed}
-          enrichment={enrichment}
-          canRetry={canRetry}
-          onRetry={() => void retry()}
-        />
-        {screened && items && missing.length > 0 ? (
-          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
-            <Button keys="e" onClick={() => setExporting(true)}>
-              Export the reports without a PDF
-            </Button>
-            <span className="text-sm text-ink-2" data-testid="missing-count">
-              {`${count("report", missing.length)} sought ${missing.length === 1 ? "has" : "have"} no PDF. Send the list to whoever can get the PDFs, then upload them with b.`}
-            </span>
-          </div>
-        ) : null}
-        {error || notice ? (
-          <p
-            role={error ? "alert" : "status"}
-            className={`mt-2 text-sm ${error ? "text-exclude" : ""}`}
-            data-testid="retrieval-notice"
-          >
-            {error ?? notice}
-          </p>
-        ) : null}
-        {held.length > 0 ? (
-          <Held
-            held={held}
-            items={items ?? []}
-            onDone={(message) => {
-              setNotice(message);
-              void load();
-            }}
-            onError={(message) => setError(message)}
-          />
-        ) : null}
-      </header>
-      <section
-        aria-label="Reports"
-        className="mx-auto min-h-0 w-full max-w-[1180px] border-t border-rule-strong px-10"
-      >
-        {items === null ? (
-          <p className="pt-4 text-ink-3">{project.protocol ? "Loading the reports." : ""}</p>
-        ) : shown.length === 0 ? (
-          <p className="pt-4 text-ink-2">
-            {screened
-              ? "No report is included at title and abstract yet. Press f to see every report."
-              : "The corpus has no reports yet."}
-          </p>
-        ) : (
-          <LegendList
-            ref={list}
-            data={shown}
-            extraData={current?.item_ref}
-            keyExtractor={(item) => item.item_ref}
-            estimatedItemSize={64}
-            style={{ height: "100%" }}
-            renderItem={({ item, index }) => (
-              <Row
-                item={item}
-                retrieval={byReport.get(item.report_id)}
-                selected={item.item_ref === current?.item_ref}
-                onSelect={() => setSelected(index)}
-              />
+            {screened ? null : (
+              <>
+                {" "}
+                <Help text="No stage is screened yet, so the list shows every report. A PDF attached now waits for title and abstract." />
+              </>
             )}
-          />
-        )}
-      </section>
-      <footer className="h-6" />
-      {current && uploading ? (
-        <UploadFullText
-          item={current}
-          onClose={() => setUploading(false)}
+          </>
+        ) : null
+      }
+      actions={
+        <>
+          <Button keys={["b"]} onClick={() => setUploadingMany(true)}>
+            Upload many PDFs
+          </Button>
+          <More onSentinel={() => setAddingSentinel(true)} />
+        </>
+      }
+    >
+      {screened ? (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <Button
+            kind="primary"
+            keys={["o"]}
+            disabled={!canFetch}
+            onClick={() => void fetchOpenAccess()}
+          >
+            {runActive(openAccess) ? "Fetching open-access PDFs" : "Fetch open-access PDFs"}
+          </Button>
+          <Help text="Fetch tries every report sought without a PDF, the new ones and those that failed before: Europe PMC, PubMed Central, Unpaywall, OpenAlex, the publisher, medRxiv and bioRxiv, arXiv, Semantic Scholar, and CORE, in that order." />
+          <p className="text-sm text-ink-2">
+            {openAccess ? (
+              <span>
+                {`${runActive(openAccess) ? "Open-access run, started" : "Last open-access run,"} ${formatDateTime(openAccess.finished_at ?? openAccess.requested_at)}:`}{" "}
+              </span>
+            ) : null}
+            <span data-testid="open-access-status" aria-live="polite">
+              {openAccess ? openAccessLine(openAccess) : "Open access not fetched yet."}
+            </span>
+          </p>
+          {unchecked > 0 && !runActive(openAccess) ? (
+            <button
+              type="button"
+              data-testid="unchecked-count"
+              aria-pressed={view === "untried"}
+              onClick={() => chooseView(view === "untried" ? "articles" : "untried")}
+              className="text-sm font-medium text-petrol underline-offset-2 hover:underline"
+            >
+              {view === "untried"
+                ? "Show every report that needs a PDF"
+                : `Show the ${count("new report", unchecked)} not tried yet`}
+            </button>
+          ) : null}
+          {skipped.length > 0 ? (
+            <details className="text-sm text-ink-2">
+              <summary className="cursor-pointer text-ink-2 hover:text-ink">
+                Source diagnostics
+              </summary>
+              <p className="mt-1">
+                <Skipped skipped={skipped} />
+              </p>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+      <Failures
+        failed={failed}
+        enrichment={enrichment}
+        canRetry={canRetry}
+        onRetry={() => void retry()}
+      />
+      {error || notice ? (
+        <p
+          role={error ? "alert" : "status"}
+          className={`mt-3 text-sm ${error ? "text-exclude" : "text-ink"}`}
+          data-testid="retrieval-notice"
+        >
+          {error ?? notice}
+        </p>
+      ) : null}
+      {held.length > 0 ? (
+        <Held
+          held={held}
+          items={items ?? []}
           onDone={(message) => {
-            setUploading(false);
+            setNotice(message);
+            void load();
+          }}
+          onError={(message) => setError(message)}
+        />
+      ) : null}
+      <Panel className="mt-5">
+        {items && pool.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <div
+              role="group"
+              aria-label="Show"
+              className="flex rounded-[4px] border border-rule-strong bg-sheet p-0.5"
+            >
+              {VIEWS.map((v) => (
+                <button
+                  key={v.id}
+                  type="button"
+                  aria-pressed={view === v.id}
+                  title={v.hint}
+                  onClick={() => chooseView(v.id)}
+                  className={`inline-flex h-7 items-center gap-1.5 rounded-[3px] px-3 text-sm ${
+                    view === v.id
+                      ? "bg-petrol-wash font-medium text-petrol"
+                      : "text-ink-2 hover:text-ink"
+                  }`}
+                >
+                  {v.label}{" "}
+                  <span
+                    className="tabular-nums"
+                    data-testid={
+                      v.id === "articles"
+                        ? "missing-count"
+                        : v.id === "registry"
+                          ? "registry-count"
+                          : undefined
+                    }
+                  >
+                    {viewCounts[v.id]}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {view === "untried" ? (
+              <span className="inline-flex h-7 items-center gap-2 rounded-[3px] bg-petrol-wash px-3 text-sm font-medium text-petrol">
+                {`Not tried yet ${viewCounts.untried}`}
+                <button
+                  type="button"
+                  aria-label="Show every report that needs a PDF"
+                  className="text-ink-2 hover:text-ink"
+                  onClick={() => chooseView("articles")}
+                >
+                  ×
+                </button>
+              </span>
+            ) : null}
+            {screened ? (
+              <Button
+                kind="quiet"
+                size="sm"
+                keys={["f"]}
+                onClick={() => {
+                  setAll((a) => !a);
+                  setSelected(0);
+                }}
+              >
+                {all ? "Only reports sought" : "Include reports not sought"}
+              </Button>
+            ) : null}
+            <span className="ml-auto flex items-center gap-4">
+              {shown.length > 1 ? <KeyHint keys={["j", "k"]}>Move between reports</KeyHint> : null}
+              {screened && missing.length > 0 ? (
+                <Button size="sm" keys={["e"]} onClick={() => setExporting(true)}>
+                  Export the reports without a PDF
+                </Button>
+              ) : null}
+            </span>
+          </div>
+        ) : null}
+        <section aria-label="Reports" className="mt-3">
+          {items === null ? (
+            <p className="pt-4 text-ink-2">{project.protocol ? "Loading the reports." : ""}</p>
+          ) : pool.length === 0 ? (
+            <EmptyState
+              title={screened ? "No report is sought yet" : "The corpus has no reports yet"}
+              testId="retrieval-view-empty"
+              actions={
+                screened ? (
+                  <Button
+                    kind="quiet"
+                    keys={["f"]}
+                    onClick={() => {
+                      setAll(true);
+                      setSelected(0);
+                    }}
+                  >
+                    Show every report in the corpus
+                  </Button>
+                ) : null
+              }
+            >
+              {screened
+                ? "Kittum seeks the full text of a report once it is included at title and abstract."
+                : "Build the corpus from the searches first."}
+            </EmptyState>
+          ) : shown.length === 0 ? (
+            <EmptyState
+              title={
+                view === "articles"
+                  ? `Every article among the ${which} has a PDF`
+                  : view === "untried"
+                    ? "Open access has tried every report"
+                    : view === "registry"
+                      ? "No registry record is waiting for an article"
+                      : "No report has a PDF yet"
+              }
+              testId="retrieval-view-empty"
+              figures={[
+                ["With a PDF", viewCounts.has],
+                ["Articles without one", viewCounts.articles],
+                ["Registry records", viewCounts.registry],
+              ]}
+              actions={
+                <>
+                  {view !== "has" && screened ? (
+                    <Link
+                      to="/p/$projectId/screening/full-text"
+                      params={{ projectId: project.id }}
+                      className="rounded-[4px] border border-rule-strong bg-sheet px-3 py-1.5 text-sm hover:bg-sheet-2"
+                    >
+                      Go to full-text screening
+                    </Link>
+                  ) : null}
+                  <Button kind="quiet" onClick={() => chooseView("all")}>
+                    Show all {pool.length}
+                  </Button>
+                </>
+              }
+            >
+              {view === "has"
+                ? "Fetch open-access PDFs or upload them; they show here once attached."
+                : "Nothing is left to fetch or upload in this list."}
+            </EmptyState>
+          ) : (
+            <div>
+              <div
+                className={`${columns} border-y border-rule-strong bg-sheet-2 py-2 pr-3 pl-4 text-xs font-medium text-ink-2`}
+                aria-hidden="true"
+              >
+                <span>{labels.report}</span>
+                {showOutcome ? <span>Title and abstract</span> : null}
+                <span>PDF status</span>
+                <span>Last tried</span>
+                <span />
+              </div>
+              {shown.map((item, index) => (
+                <Row
+                  key={item.item_ref}
+                  item={item}
+                  citation={citations.get(item.report_id)}
+                  study={studyNames.get(item.report_id)}
+                  brief={view === "articles" || view === "registry" || view === "untried"}
+                  retrieval={byReport.get(item.report_id)}
+                  tried={tried.get(item.report_id)}
+                  selected={item.item_ref === current?.item_ref}
+                  open={opened.has(item.item_ref)}
+                  columns={columns}
+                  showOutcome={showOutcome}
+                  multipleScopes={scopes.length > 1}
+                  onSelect={() => setSelected(index)}
+                  onUpload={() => upload(item)}
+                  onHistory={() => toggleHistory(item.item_ref)}
+                />
+              ))}
+            </div>
+          )}
+        </section>
+      </Panel>
+      {uploadFor ? (
+        <UploadFullText
+          item={uploadFor}
+          onClose={() => setUploadFor(null)}
+          onDone={(message) => {
+            setUploadFor(null);
             setNotice(message);
             void load();
           }}
@@ -375,15 +655,86 @@ export function RetrievalScreen() {
           setNotice(message);
         }}
       />
-    </div>
+    </Page>
   );
 }
 
-function Shell({ children }: { children: React.ReactNode }) {
+/** The report, its full text, when it was last tried, and its actions; the outcome at title and
+ * abstract only where it differs between rows. */
+const COLUMNS = "grid grid-cols-[minmax(0,1fr)_15rem_7rem_17rem] items-start gap-x-5";
+const COLUMNS_WITH_OUTCOME =
+  "grid grid-cols-[minmax(0,1fr)_10rem_15rem_7rem_17rem] items-start gap-x-5";
+
+/** A separator between facts on one line, with real spaces so the text reads right when copied. */
+function Dot() {
   return (
-    <section className="h-full overflow-y-auto bg-paper">
-      <div className="mx-auto max-w-[980px] px-10 pt-10 pb-16">{children}</div>
-    </section>
+    <span className="text-ink-3" aria-hidden="true">
+      {" · "}
+    </span>
+  );
+}
+
+/** The rarer actions, each with a line on what it is for. */
+function More({ onSentinel }: { onSentinel: () => void }) {
+  return (
+    <Menu.Root>
+      <Menu.Trigger
+        aria-label="More actions"
+        className="inline-flex h-8 items-center gap-1.5 rounded-[4px] border border-rule-strong bg-sheet px-3 text-sm font-medium hover:bg-sheet-2 data-[popup-open]:bg-sheet-2"
+      >
+        More
+        <svg width="9" height="6" viewBox="0 0 9 6" aria-hidden="true">
+          <path d="M1 1l3.5 3.5L8 1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+        </svg>
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner sideOffset={6} align="end" className="z-20">
+          <Menu.Popup className="w-[360px] rounded-[4px] border border-rule-strong bg-sheet py-1 shadow-[0_8px_24px_rgb(0_0_0/0.14)] outline-none">
+            <Menu.Item
+              onClick={onSentinel}
+              className="block cursor-default px-3 py-2 data-[highlighted]:bg-sheet-2"
+            >
+              <span className="flex items-center justify-between gap-3 text-sm font-medium">
+                Add a full-text sentinel
+                <Key k="s" />
+              </span>
+              <span className="mt-0.5 block text-sm text-ink-2">
+                A report whose outcome you know, put in every full-text queue to check the
+                reviewers.
+              </span>
+            </Menu.Item>
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
+  );
+}
+
+/** Sources the run passed over, with the remedy; the server settings that would enable them on
+ * hover. */
+function Skipped({ skipped }: { skipped: NonNullable<OpenAccessRun["skipped"]> }) {
+  const noKey = skipped.filter((s) => /\bkey\b/i.test(s.reason));
+  const other = skipped.filter((s) => !noKey.includes(s));
+  const settings = skipped.flatMap((s) => /\(([A-Z][A-Z0-9_]+)\)/.exec(s.reason)?.[1] ?? []);
+  const parts = [
+    noKey.length
+      ? `${andList(noKey.map((s) => sourceName(s.source)))} ${noKey.length === 1 ? "was" : "were"} skipped: no API key. Ask your server administrator to add ${noKey.length === 1 ? "it" : "the keys"}.`
+      : null,
+    ...other.map(
+      (s) => `${sourceName(s.source)} was skipped: ${s.reason.replace(/\s*\([A-Z0-9_]+\)/g, "")}.`,
+    ),
+  ].filter(Boolean);
+  return (
+    <span
+      data-testid="skipped-sources"
+      title={
+        settings.length
+          ? `To use ${noKey.length === 1 ? "it" : "them"}, the server admin sets ${andList(settings)}.`
+          : undefined
+      }
+    >
+      {parts.join(" ")}
+    </span>
   );
 }
 
@@ -408,13 +759,30 @@ function Failures({
     );
   }
   if (failed.sources.length === 0) return null;
+  const affected = [
+    failed.occurrences ? count("record", failed.occurrences) : null,
+    failed.reports ? count("report", failed.reports) : null,
+  ]
+    .filter(Boolean)
+    .join(" and ");
+  const summary = affected
+    ? `${affected[0]!.toUpperCase()}${affected.slice(1)} could not be read from ${failed.sources.length === 1 ? "it" : "them"}.`
+    : "Open for the reasons.";
   return (
-    <section
-      aria-label="Sources that failed"
-      data-testid="retry"
-      className="mt-4 flex max-w-[1000px] items-start gap-5 border-l-[3px] border-exclude bg-exclude-wash py-2.5 pr-4 pl-4"
+    <Panel
+      level="recessed"
+      className="mt-4"
+      testId="retry"
+      fold="closed"
+      title={`${andList(failed.sources.map((f) => sourceName(f.source)))} failed`}
+      summary={summary}
+      actions={
+        <Button size="sm" keys={["r"]} disabled={!canRetry} onClick={onRetry}>
+          Retry failed sources
+        </Button>
+      }
     >
-      <ul className="grid min-w-0 flex-1 gap-1 text-sm">
+      <ul aria-label="Sources that failed" className="grid gap-1 text-sm">
         {failed.sources.map((s) => {
           const counts = [
             s.records ? count("record", s.records) : null,
@@ -429,10 +797,7 @@ function Failures({
           );
         })}
       </ul>
-      <Button primary keys="r" disabled={!canRetry} onClick={onRetry} className="shrink-0">
-        Retry failed sources
-      </Button>
-    </section>
+    </Panel>
   );
 }
 
@@ -445,6 +810,8 @@ const OUTCOME_LINE: Record<string, string> = {
 
 const serverTrouble = (status: number | null | undefined) =>
   status != null && (status >= 500 || status === 429);
+
+const refused = (a: AttemptView) => a.outcome === "http_error" && !serverTrouble(a.status);
 
 const ATTEMPT: Record<string, (a: AttemptView) => string> = {
   acquired: () => "Fetched",
@@ -464,43 +831,75 @@ function openAccessLine(r: OpenAccessRun) {
   const reports = count("report", r.reports.length);
   const again = r.trigger === "retry" ? "again " : "";
   if (r.status === "queued")
-    return `Waiting for a worker to try ${reports} ${again}.`.replace(" .", ".");
-  if (r.status === "running") return `Tried ${tried} of ${reports} ${again}so far.`;
+    return `Waiting for a worker to check ${reports} ${again}.`.replace(" .", ".");
+  if (r.status === "running") return `Checked ${tried} of ${reports} ${again}so far.`;
   if (r.status === "failed") return `Stopped after ${tried} of ${reports}. ${r.error ?? ""}`.trim();
   const got = r.reports.filter((x) => x.outcome === "acquired").length;
-  return `Fetched ${got} of ${reports}${r.trigger === "retry" ? " on the retry" : ""}. The others need a PDF from you.`;
+  return `${reports} checked ${again}, ${got} fetched.`.replace(" ,", ",");
 }
 
-function Attempts({ retrieval }: { retrieval: ReportRetrieval }) {
+/** Why a report sought has no PDF, in a few words, for its row. */
+function missingReason(retrieval: ReportRetrieval | undefined): {
+  text: string;
+  refused: boolean;
+} {
+  if (!retrieval) return { text: "Open access not tried", refused: false };
+  if (!retrieval.outcome) return { text: "Waiting its turn", refused: false };
+  const refusals = retrieval.attempts.filter(refused);
+  if (retrieval.outcome === "not_acquired" && refusals.length > 0) {
+    const by = andList([...new Set(refusals.map((a) => sourceName(a.source)))]);
+    return { text: `Refused by ${by}`, refused: true };
+  }
+  if (retrieval.outcome === "no_location") return { text: "No open copy found", refused: false };
+  return { text: "No source gave a usable PDF", refused: false };
+}
+
+function History({
+  retrieval,
+  open,
+  id,
+}: {
+  retrieval: ReportRetrieval;
+  open: boolean;
+  id: string;
+}) {
   return (
     <div
-      className="col-span-3 mt-1.5"
+      id={id}
+      hidden={!open}
+      className="mb-3 ml-4 mr-3 rounded-[4px] bg-paper px-4 py-3"
       data-testid="open-access"
       data-outcome={retrieval.outcome ?? "pending"}
     >
-      <p className={`text-xs ${retrieval.outcome === "acquired" ? "text-include" : "text-ink-2"}`}>
+      <p className={`text-sm ${retrieval.outcome === "acquired" ? "text-include" : "text-ink-2"}`}>
         {retrieval.outcome ? OUTCOME_LINE[retrieval.outcome] : "Waiting its turn."}
       </p>
       {retrieval.attempts.length > 0 ? (
-        <table
-          aria-label="Open-access attempts"
-          className="mt-1 w-full max-w-[56rem] table-fixed text-xs"
-        >
+        <table aria-label="Open-access attempts" className="mt-2 w-full max-w-[72rem] text-sm">
+          <thead className="sr-only">
+            <tr>
+              <th>Step</th>
+              <th>Source</th>
+              <th>Address</th>
+              <th>Result</th>
+              <th>Licence</th>
+            </tr>
+          </thead>
           <tbody>
             {retrieval.attempts.map((a, i) => (
               <tr
                 key={`${i}-${a.url}`}
                 data-testid="attempt"
                 data-kind={a.kind}
-                className="text-ink-2"
+                className="border-t border-rule text-ink-2 first:border-t-0"
               >
-                <td className="w-6 py-0.5 text-ink-3 tabular-nums">{i + 1}</td>
-                <td className="w-36 py-0.5">{sourceName(a.source)}</td>
-                <td className="py-0.5">
+                <td className="w-8 py-1 text-ink-3 tabular-nums">{i + 1}</td>
+                <td className="w-40 py-1 text-ink">{sourceName(a.source)}</td>
+                <td className="py-1">
                   <span title={a.url}>{a.kind === "lookup" ? `Asked ${a.host}` : a.host}</span>
                 </td>
                 <td
-                  className={`w-52 py-0.5 ${
+                  className={`w-56 py-1 ${
                     a.outcome === "acquired"
                       ? "font-medium text-include"
                       : a.outcome === "found" || a.outcome === "known" || a.outcome === "none"
@@ -511,8 +910,12 @@ function Attempts({ retrieval }: { retrieval: ReportRetrieval }) {
                 >
                   {(ATTEMPT[a.outcome] ?? (() => a.outcome))(a)}
                 </td>
-                <td className="w-32 py-0.5 text-right">
-                  {a.kind === "lookup" ? "" : (a.licence ?? "No licence stated")}
+                <td className="w-40 py-1 text-right">
+                  {a.kind === "lookup"
+                    ? ""
+                    : a.licence
+                      ? licenceLabel(a.licence)
+                      : "No licence stated"}
                 </td>
               </tr>
             ))}
@@ -520,7 +923,7 @@ function Attempts({ retrieval }: { retrieval: ReportRetrieval }) {
         </table>
       ) : null}
       {(retrieval.carried ?? []).length > 0 ? (
-        <p className="mt-1 text-xs text-ink-3" data-testid="carried">
+        <p className="mt-2 text-sm text-ink-2" data-testid="carried">
           {`Not asked again, because an earlier run settled it: ${(retrieval.carried ?? [])
             .map(
               (a) =>
@@ -533,79 +936,295 @@ function Attempts({ retrieval }: { retrieval: ReportRetrieval }) {
   );
 }
 
-function Row({
+// No PDF is work not done yet: the neutral circle, whatever the reason.
+// Not tried yet (or waiting its turn): the empty circle. Tried and failed: it waits for a person
+// to upload the PDF, so the amber mark, with the reason in words beside it.
+const NO_PDF: Term = { ...NOT_DONE, label: "No PDF" };
+const OPEN_ACCESS_FAILED: Term = { ...WAITS, label: "Open access failed: upload the PDF" };
+const REGISTRY_ENTRY: Term = { ...NOT_DONE, label: "Registry record, no article yet" };
+
+/** A report's full-text state in words. */
+function FullTextState({
   item,
   retrieval,
-  selected,
-  onSelect,
+  brief,
 }: {
   item: RetrievalItem;
   retrieval: ReportRetrieval | undefined;
+  /** In a tab that already says the state (Article PDF needed, Registry only): only the reason. */
+  brief: boolean;
+}) {
+  const registry = !item.full_text && isRegistryOnly(item);
+  const reason = item.full_text || registry ? null : missingReason(retrieval);
+  const term = item.full_text
+    ? ACCEPTED
+    : registry
+      ? REGISTRY_ENTRY
+      : retrieval?.outcome
+        ? OPEN_ACCESS_FAILED
+        : NO_PDF;
+  if (brief && !item.full_text) {
+    return (
+      <div className="flex min-w-0 items-start gap-2 text-sm">
+        <span className="mt-0.5">
+          <Mark term={term} />
+        </span>
+        <p data-testid="full-text-status" className="min-w-0 text-ink-2">
+          <span className="sr-only">{`${term.label}: `}</span>
+          {reason ? reason.text : "No article yet"}
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-0 items-start gap-2 text-sm">
+      <span className="mt-0.5">
+        <Mark term={term} />
+      </span>
+      <div className="min-w-0">
+        <p
+          data-testid="full-text-status"
+          className={item.full_text ? "text-include" : registry ? "text-ink-2" : "text-ink"}
+        >
+          {item.full_text ? (
+            <>
+              PDF, {item.full_text.page_count ?? "?"} pages
+              <span className="block text-ink-2">
+                {item.full_text.licence
+                  ? licenceLabel(item.full_text.licence)
+                  : "No licence recorded"}
+                {retrieval?.outcome === "acquired" && retrieval.source
+                  ? `, from ${sourceName(retrieval.source)}`
+                  : ""}
+              </span>
+            </>
+          ) : registry ? (
+            "Registry record, no article yet"
+          ) : (
+            "No PDF"
+          )}
+        </p>
+        {reason ? <p className="text-ink-2">{reason.text}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+// Identifiers are links, but quiet ones: they must not compete with the titles.
+const link = "text-ink-2 underline-offset-2 hover:text-ink hover:underline";
+
+/** A link out of Kittum that leaves the row's selection alone. */
+function Out({ href, children, title }: { href: string; children: ReactNode; title?: string }) {
+  return (
+    <a
+      className={link}
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      title={title}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {children}
+    </a>
+  );
+}
+
+/** The report's citation in one line: authors (where Kittum has them), journal and year, and
+ * each identifier as a link to where it resolves. */
+function CitationLine({
+  item,
+  citation,
+  study,
+}: {
+  item: RetrievalItem;
+  citation: MissingReport | undefined;
+  /** The study's name from the corpus ("López-Durán 2025"), where it names the authors. */
+  study: string | undefined;
+}) {
+  const name = study ?? studyLabel(citation?.authors, item.year) ?? null;
+  // The journal without its subtitle ("Nicotine & tobacco research : official journal of …").
+  const journal = item.journal?.split(/\s+:\s+/)[0]?.trim() || null;
+  const pmid = citation?.pmid ?? null;
+  const parts: ReactNode[] = [
+    name ? (
+      <span key="name" className="text-ink">
+        {name}
+      </span>
+    ) : null,
+    journal || (!name && item.year) ? (
+      <span key="journal" title={item.journal ?? undefined}>
+        {[journal, name ? null : item.year].filter(Boolean).join(" ")}
+      </span>
+    ) : null,
+    item.doi ? (
+      <span key="doi">
+        DOI <Out href={`https://doi.org/${item.doi}`}>{item.doi}</Out>
+      </span>
+    ) : null,
+    pmid ? (
+      <span key="pmid">
+        PubMed <Out href={`https://pubmed.ncbi.nlm.nih.gov/${pmid}/`}>{pmid}</Out>
+      </span>
+    ) : null,
+    ...item.registry_ids.map((id) => {
+      const url = registryUrl(id);
+      return url ? (
+        <Out key={id} href={url} title="The trial's registry entry">
+          {id}
+        </Out>
+      ) : (
+        <span key={id} title="Another identifier the record gives">
+          {id}
+        </span>
+      );
+    }),
+  ].filter(Boolean);
+  return (
+    <p className="narrow mt-0.5 text-sm text-ink-2">
+      {parts.length
+        ? parts.map((part, i) => (
+            <span key={i}>
+              {i > 0 ? <Dot /> : null}
+              {part}
+            </span>
+          ))
+        : "No journal or identifier recorded"}
+    </p>
+  );
+}
+
+function Row({
+  item,
+  citation,
+  study,
+  brief,
+  retrieval,
+  tried,
+  selected,
+  open,
+  columns,
+  showOutcome,
+  multipleScopes,
+  onSelect,
+  onUpload,
+  onHistory,
+}: {
+  item: RetrievalItem;
+  citation: MissingReport | undefined;
+  study: string | undefined;
+  brief: boolean;
+  retrieval: ReportRetrieval | undefined;
+  tried: Tried | undefined;
   selected: boolean;
+  open: boolean;
+  columns: string;
+  showOutcome: boolean;
+  multipleScopes: boolean;
   onSelect: () => void;
+  onUpload: () => void;
+  onHistory: () => void;
 }) {
   const { scopeLabel } = useProject();
-  const facts = [item.journal, item.year].filter(Boolean).join(" ");
-  const ids = [item.doi, ...item.registry_ids].filter(Boolean).join(", ");
+  const registry = !item.full_text && isRegistryOnly(item);
+  const historyId = `history-${item.item_ref}`;
+  const tries = retrieval ? retrieval.attempts.length : 0;
   return (
     <article
       onClick={onSelect}
       aria-current={selected || undefined}
       data-testid="retrieval-row"
-      className={`grid grid-cols-[minmax(0,1fr)_14rem_11rem] items-baseline gap-x-5 border-b border-rule py-2.5 pr-3 pl-4 ${
-        selected ? "bg-sheet shadow-[inset_3px_0_0_var(--petrol)]" : ""
+      className={`border-b border-rule ${
+        selected ? "bg-petrol-wash/40 shadow-[inset_4px_0_0_var(--petrol)]" : "hover:bg-sheet/60"
       }`}
     >
-      <div className="min-w-0">
-        <h2 className="truncate font-medium" title={item.title}>
-          {item.title}
-        </h2>
-        <p className="narrow truncate text-xs text-ink-3">
-          {[facts, ids].filter(Boolean).join(", ") || "No journal or identifier recorded"}
+      <div className={`${columns} py-2.5 pr-3 pl-4`}>
+        <div className="min-w-0">
+          <h2 className="line-clamp-2 font-medium" title={item.title}>
+            {item.title}
+          </h2>
+          <CitationLine item={item} citation={citation} study={study} />
+        </div>
+        {showOutcome ? (
+          <p className="min-w-0 text-sm">
+            {Object.entries(item.outcomes).length === 0 ? (
+              <span className="text-ink-2">Not screened yet</span>
+            ) : (
+              Object.entries(item.outcomes).map(([scope, stages]) => {
+                const outcome = stages["title_abstract"];
+                const shown = outcome ? OUTCOME[outcome] : null;
+                return (
+                  <span key={scope} className="block" title={scopeLabel(scope)}>
+                    {multipleScopes ? (
+                      <span className="text-ink-2">{`${scopeLabel(scope)}: `}</span>
+                    ) : null}
+                    <span className={shown?.className ?? "text-ink-2"}>
+                      {shown?.label ?? "Being screened"}
+                    </span>
+                  </span>
+                );
+              })
+            )}
+          </p>
+        ) : null}
+        <FullTextState item={item} retrieval={retrieval} brief={brief} />
+        <p
+          className="text-sm text-ink-2 tabular-nums"
+          data-testid="last-tried"
+          title={tried?.at ? formatDateTime(tried.at) : undefined}
+        >
+          {tried ? (
+            tried.at ? (
+              formatDate(tried.at)
+            ) : (
+              "Earlier run"
+            )
+          ) : (
+            // The status says "Open access not tried" already.
+            <>
+              <span aria-hidden="true">—</span>
+              <span className="sr-only">Not tried</span>
+            </>
+          )}
         </p>
-      </div>
-      <p className="narrow text-xs">
-        {Object.entries(item.outcomes).length === 0 ? (
-          <span className="text-ink-3">Not screened yet</span>
-        ) : (
-          Object.entries(item.outcomes).map(([scope, stages]) => {
-            const outcome = stages["title_abstract"];
-            const shown = outcome ? OUTCOME[outcome] : null;
-            return (
-              <span key={scope} className="block">
-                <span className="text-ink-3">{scopeLabel(scope)}: </span>
-                <span className={shown?.className ?? "text-ink-2"}>
-                  {shown?.label ?? "Being screened"}
-                </span>
-              </span>
-            );
-          })
-        )}
-      </p>
-      <p className="narrow text-xs" data-testid="full-text-status">
-        {item.full_text ? (
-          <span className="text-include">
-            PDF, {item.full_text.page_count ?? "?"} pages
-            <span className="block text-ink-3">
-              {item.full_text.licence ?? "No licence recorded"}
-              {retrieval?.outcome === "acquired" && retrieval.source
-                ? `, from ${sourceName(retrieval.source)}`
-                : ""}
-            </span>
+        <div className="flex items-center justify-end gap-1.5">
+          {item.full_text ? null : (
+            <Button
+              size="sm"
+              kind={registry ? "quiet" : "secondary"}
+              keys={selected ? ["u"] : []}
+              onClick={onUpload}
+            >
+              Upload PDF
+            </Button>
+          )}
+          {/* The History slot keeps its width on every row, so the Upload buttons line up. */}
+          <span className="flex w-[9.5rem] flex-none justify-start">
+            {retrieval ? (
+              <Button
+                kind="quiet"
+                size="sm"
+                aria-expanded={open}
+                aria-controls={historyId}
+                aria-label={`${open ? "Hide" : "Show"} retrieval history`}
+                keys={selected ? ["Enter"] : []}
+                onClick={onHistory}
+                title={`Retrieval history: ${count("attempt", tries)}`}
+              >
+                {open ? "Hide history" : "History"}
+              </Button>
+            ) : null}
           </span>
-        ) : (
-          <span className="text-ink-3">No PDF</span>
-        )}
-      </p>
+        </div>
+      </div>
       {item.wrong_document ? (
-        <p className="col-span-3 mt-1.5 text-xs text-unclear" data-testid="wrong-document">
+        <p className="-mt-1 pr-3 pb-2.5 pl-4 text-sm text-unclear" data-testid="wrong-document">
           {`${item.wrong_document.reviewer} said the earlier PDF was the wrong document.`}
           {item.wrong_document.note ? (
             <span className="text-ink-2">{` Their note: "${item.wrong_document.note}"`}</span>
           ) : null}
         </p>
       ) : null}
-      {retrieval ? <Attempts retrieval={retrieval} /> : null}
+      {retrieval ? <History retrieval={retrieval} open={open} id={historyId} /> : null}
     </article>
   );
 }
@@ -623,11 +1242,14 @@ function Held({
   onError: (message: string) => void;
 }) {
   return (
-    <section aria-labelledby="held-heading" className="mt-4" data-testid="held-uploads">
-      <h2 id="held-heading" className="text-sm font-semibold">
-        {count("PDF", held.length)} to assign by hand
-      </h2>
-      <ul className="mt-1.5 grid gap-1.5">
+    <Panel
+      level="recessed"
+      className="mt-4"
+      testId="held-uploads"
+      title={`${count("PDF", held.length)} to assign by hand`}
+      summary="Kittum could not match these uploads to a report. Pick each one's report, or discard it."
+    >
+      <ul className="grid gap-1.5">
         {held.map((upload) => (
           <HeldRow
             key={upload.upload_id}
@@ -638,7 +1260,7 @@ function Held({
           />
         ))}
       </ul>
-    </section>
+    </Panel>
   );
 }
 

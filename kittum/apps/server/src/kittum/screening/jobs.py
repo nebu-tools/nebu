@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING, Protocol
 from kittum.runs import JobOutput, PermanentJobError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from kittum.core import Id
     from kittum.db import Tx
     from kittum.judge import ScreeningItem, Verdict
     from kittum.protocol import Criterion, JudgeInstructions
     from kittum.runs import Handler, Job, JobContext, Transactions
-    from kittum.screening.service import Screening
+    from kittum.screening.service import JudgeWork, Screening
 
 _COMMANDS = uuid.UUID("0e7b6f43-58a4-4d55-9a8c-6a43d9c0f0c1")
 
@@ -38,7 +38,21 @@ class JudgeRunner(Protocol):
         criteria: tuple[Criterion, ...],
         protocol_hash: str,
         instructions: JudgeInstructions,
+        numbers: Mapping[str, int],
     ) -> list[Verdict]: ...
+
+
+def _run(runner: JudgeRunner, tx: Tx, project_id: Id, work: JudgeWork) -> list[Verdict]:
+    return runner(
+        tx,
+        work.items,
+        project_id=project_id,
+        scope_id=work.info.scope_id,
+        criteria=work.criteria,
+        protocol_hash=work.protocol_hash,
+        instructions=work.instructions,
+        numbers=work.numbers,
+    )
 
 
 def judge_handler(
@@ -58,18 +72,9 @@ def judge_handler(
         project_id = job.spec.project_id
         stage_id = uuid.UUID(job.spec.payload["stage_id"])
         with db.transaction() as tx:
-            info, items, criteria, instructions = screening.judge_items(
-                tx, project_id, stage_id, job.spec.payload["item_refs"]
-            )
-            verdicts = runner(
-                tx,
-                items,
-                project_id=project_id,
-                scope_id=info.scope_id,
-                criteria=criteria,
-                protocol_hash=info.protocol_hash,
-                instructions=instructions,
-            )
+            work = screening.judge_items(tx, project_id, stage_id, job.spec.payload["item_refs"])
+            verdicts = _run(runner, tx, project_id, work)
+        info = work.info
         wrong = {v.judge_config_id for v in verdicts} - {info.judge_config_id}
         if wrong:
             raise PermanentJobError(
@@ -104,18 +109,9 @@ def bench_handler(
         project_id = job.spec.project_id
         bench_id = uuid.UUID(job.spec.payload["bench_id"])
         with db.transaction() as tx:
-            info, items, criteria, instructions, protocol_hash = screening.bench_items(
-                tx, project_id, bench_id
-            )
-            verdicts = runner(
-                tx,
-                items,
-                project_id=project_id,
-                scope_id=info.scope_id,
-                criteria=criteria,
-                protocol_hash=protocol_hash,
-                instructions=instructions,
-            )
+            work = screening.bench_items(tx, project_id, bench_id)
+            verdicts = _run(runner, tx, project_id, work)
+        info = work.info
         wrong = {v.judge_config_id for v in verdicts} - {info.judge_config_id}
         if wrong:
             raise PermanentJobError(

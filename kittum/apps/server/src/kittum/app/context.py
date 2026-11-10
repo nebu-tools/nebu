@@ -13,7 +13,7 @@ screening judge, extraction runs, enrichment runs, and open-access retrieval.
 import functools
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlsplit
 from uuid import UUID
@@ -33,7 +33,7 @@ from kittum.gateway import (
     default_policies,
     user_agent,
 )
-from kittum.judge import PROMPT_VERSION, JudgeConfig, judge_many
+from kittum.judge import JUDGE_V2, PROMPT_VERSION, JudgeConfig, judge_many, load_config
 from kittum.ledger import PostgresLedger
 from kittum.models import (
     REPLAY_PREFIX,
@@ -89,6 +89,21 @@ class Judge:
         """The model's actor row, created on first use."""
         return ensure_actor(tx, self.actor_ref, "model")
 
+    def with_config(self, tx: Tx, config_id: str) -> Judge | None:
+        """This judge under the registered config `config_id`, if that is the same judge under
+        another prompt version (`<label>@<version>` with this config's label, and this recipe);
+        else None. A stage opened before the current prompt version names the older config, and
+        keeps being judged with the prompt it started with."""
+        if config_id == self.config.id:
+            return self
+        label, _, _ = self.config.id.rpartition("@")
+        if not label or config_id.rpartition("@")[0] != label:
+            return None
+        found = load_config(tx, config_id)
+        if found is None or found.model_id != self.recipe.id:
+            return None
+        return replace(self, config=found)
+
     def runner(self, *, actor_id: Id, ledger: Ledger, store: ArtifactStore, clock: Clock):
         """A `kittum.screening.JudgeRunner`. A laptop model server answers one call at a time."""
         runner: JudgeRunner = functools.partial(
@@ -115,13 +130,21 @@ def ensure_actor(tx: Tx, identity_ref: str, kind: str) -> Id:
     return row["id"]
 
 
-def judge_config(recipe_id: str, *, label: str | None = None) -> JudgeConfig:
-    """The judge config for a recipe and the current prompt version."""
+def judge_config(
+    recipe_id: str, *, label: str | None = None, prompt_version: str = PROMPT_VERSION
+) -> JudgeConfig:
+    """The judge config for a recipe and a prompt version, the one new configs use by default.
+    The version is part of the ID, so a new version is a new config beside the old ones."""
     return JudgeConfig(
-        id=f"{label or recipe_id}@{PROMPT_VERSION}",
+        id=f"{label or recipe_id}@{prompt_version}",
         model_id=recipe_id,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
     )
+
+
+JUDGE_PROMPT_ROLE = "judge_prompt"
+"""The recordings' note of the prompt version the live judge sent (`LlmRecordings.set_role`). A
+recording without it predates `judge.v3`, so it holds `judge.v2` requests."""
 
 
 RECORDING_SECRET_LENGTH = 12
@@ -252,9 +275,19 @@ def build_judge(
         raise ConfigurationError(
             f"KITTUM_JUDGE_MODEL is {recipe_id}, but no KITTUM_LLM_ENDPOINTS entry serves it"
         )
+    version = PROMPT_VERSION
+    if settings.llm_replay:
+        # Replayed answers are keyed by the exact request, so the replay sends the prompt version
+        # the live run sent.
+        version = LlmRecordings(settings.llm_replay).role(JUDGE_PROMPT_ROLE) or JUDGE_V2
     if settings.llm_record:
         LlmRecordings(settings.llm_record).set_role("judge", recipe_id)
-    return Judge(config=judge_config(recipe_id), recipe=backend.recipe, backend=backend)
+        LlmRecordings(settings.llm_record).set_role(JUDGE_PROMPT_ROLE, version)
+    return Judge(
+        config=judge_config(recipe_id, prompt_version=version),
+        recipe=backend.recipe,
+        backend=backend,
+    )
 
 
 def build_gateway(
@@ -378,25 +411,38 @@ def _judge_jobs(ctx: AppContext, kind: str = JUDGE_JOB) -> Handler | None:
     if ctx.judge is None:
         log.warning("no judge is configured, so this worker runs no %s jobs", kind)
         return None
-    with ctx.db.transaction() as tx:
-        actor_id = ctx.judge.actor(tx)
-    runner = ctx.judge.runner(
-        actor_id=actor_id, ledger=ctx.require_ledger(), store=ctx.artifacts, clock=ctx.clock
-    )
+    judge = ctx.judge
     screening = ctx.screening()
     make = bench_handler if kind == BENCH_JOB else judge_handler
-    inner = make(ctx.db, screening, runner, actor_id=actor_id)
-    config_id = ctx.judge.config.id
+    inners: dict[str, Handler] = {}
+
+    def inner(config_judge: Judge) -> Handler:
+        found = inners.get(config_judge.config.id)
+        if found is None:
+            with ctx.db.transaction() as tx:
+                actor_id = config_judge.actor(tx)
+            runner = config_judge.runner(
+                actor_id=actor_id, ledger=ctx.require_ledger(), store=ctx.artifacts, clock=ctx.clock
+            )
+            found = inners[config_judge.config.id] = make(
+                ctx.db, screening, runner, actor_id=actor_id
+            )
+        return found
+
+    inner(judge)  # the worker's own judge has its actor before the first job
 
     def handle(job: Job, job_ctx: JobContext) -> JobOutput:
         # A stage names its judge; refuse before any model call rather than judge with another.
+        # The same recipe under an older prompt version is the same judge: it reads on with the
+        # prompt the stage started with.
         with ctx.db.transaction() as tx:
             info = screening.stage(tx, job.spec.project_id, UUID(job.spec.payload["stage_id"]))
-        if info.judge_config_id != config_id:
+            config_judge = judge.with_config(tx, info.judge_config_id)
+        if config_judge is None:
             raise PermanentJobError(
-                f"this worker runs judge {config_id}; the stage needs {info.judge_config_id}"
+                f"this worker runs judge {judge.config.id}; the stage needs {info.judge_config_id}"
             )
-        return inner(job, job_ctx)
+        return inner(config_judge)(job, job_ctx)
 
     return handle
 

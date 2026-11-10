@@ -4,7 +4,8 @@ import { useRouteContext, useRouter } from "@tanstack/react-router";
 import { useState } from "react";
 
 import { run } from "../../data/workbench.ts";
-import { Button, failure } from "../../ui/Form.tsx";
+import { Button } from "../../ui/Button.tsx";
+import { failure } from "../../ui/Form.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { plural, useProject } from "../project.tsx";
 
@@ -44,14 +45,14 @@ export function BuildCorpus({
   });
 
   return (
-    <div className="mt-4 max-w-[64ch]">
+    <div className="max-w-[64ch]">
       <p className="text-md text-ink-2">
         {ready
           ? `Kittum merges the ${searches} ${searches === 1 ? "search" : "searches"} into records and ${plural(labels.study).toLowerCase()}. It proposes records with the same DOI or PMID as one record, and records with the same trial ID as one ${labels.study.toLowerCase()}. You confirm each link afterwards. Build the corpus once every search is in, because Kittum cannot add a later search to it yet.`
           : "Run or import the searches first. Kittum builds the corpus from them."}
       </p>
       <div className="mt-4 flex items-center gap-4">
-        <Button primary keys="b" disabled={!ready || busy} onClick={() => void build()}>
+        <Button kind="primary" keys={["b"]} disabled={!ready || busy} onClick={() => void build()}>
           {busy ? "Building the corpus" : "Build the corpus"}
         </Button>
       </div>

@@ -88,7 +88,7 @@ describe("title and abstract queue", () => {
     await press("u");
 
     await expectTitle("REACHIN");
-    await expect.element(page.getByText("10 screened, 18 left")).toBeVisible();
+    await expect.element(page.getByText("10 of 28 screened")).toBeVisible();
 
     const finals = new Map(
       app.workbench.decisions

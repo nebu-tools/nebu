@@ -823,7 +823,12 @@ def test_a_recorded_assistant_replays_with_the_recipe_it_used_not_the_judges(
     assert replayed["model"]["endpoint"] == "replay of http://glm.test/v1"
 
     meta = json.loads((path / "meta.json").read_text())
-    assert meta["roles"] == {"judge": "qwen3.8-27b-bf16", "assist": "glm-5.3-flash"}
+    # The judge's prompt version is noted too, so a replay sends the requests the run recorded.
+    assert meta["roles"] == {
+        "judge": "qwen3.8-27b-bf16",
+        "judge_prompt": "judge.v3",
+        "assist": "glm-5.3-flash",
+    }
     del meta["roles"]["assist"]
     (path / "meta.json").write_text(json.dumps(meta))
     with pytest.raises(ConfigurationError, match="which recipe the protocol assistant used"):

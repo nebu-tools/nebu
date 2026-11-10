@@ -4,6 +4,7 @@
 // as an anchor on the layer, and a decision cites it by ID. The risk-of-bias screen gathers
 // quotes per signalling question the same way, starting from the quotes already saved.
 import { useCallback, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import type { Anchor, Box, Criterion, CriterionStatus } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
@@ -110,23 +111,26 @@ export function useEvidence<C extends { readonly id: string } = Criterion>({
     setNotice(null);
   };
 
-  const adopt = async () => {
+  /** Adopts a selection, else `mention` if given, else the current mention. */
+  const adopt = async (mention?: Anchor) => {
     if (!criterion) return;
-    const source = selection
-      ? {
-          key: `selection-${selection.start}-${selection.end}`,
-          quote: selection.quote,
-          start: selection.start,
-          boxes: selection.boxes,
-        }
-      : currentMention
+    const chosen = mention ?? currentMention;
+    const source =
+      selection && !mention
         ? {
-            key: currentMention.id,
-            quote: currentMention.quote.exact,
-            start: currentMention.start,
-            boxes: currentMention.boxes,
+            key: `selection-${selection.start}-${selection.end}`,
+            quote: selection.quote,
+            start: selection.start,
+            boxes: selection.boxes,
           }
-        : null;
+        : chosen
+          ? {
+              key: chosen.id,
+              quote: chosen.quote.exact,
+              start: chosen.start,
+              boxes: chosen.boxes,
+            }
+          : null;
     if (!source) {
       setNotice("Go to a mention with . first, or select text on the page.");
       return;
@@ -163,7 +167,7 @@ export function useEvidence<C extends { readonly id: string } = Criterion>({
     } finally {
       setBusy(false);
     }
-    if (selection) {
+    if (selection && !mention) {
       window.getSelection()?.removeAllRanges();
       setSelection(null);
     }
@@ -187,18 +191,33 @@ export function useEvidence<C extends { readonly id: string } = Criterion>({
   };
 }
 
-/** The active criterion's mentions, and spans selected on the page, with what is adopted. */
+/** The active criterion's mentions, and spans selected on the page, with what is adopted. With
+ * `limit`, only the first few show (and the current and adopted ones), the rest behind a link. */
 export function Mentions({
   mentions,
   cursor,
   adopted,
   selections,
+  limit,
+  label = "Mentions in document order",
+  footer,
+  onSelect,
+  onAdopt,
 }: {
   mentions: ReadonlyArray<Anchor>;
   cursor: number;
   adopted: ReadonlySet<string>;
   selections: ReadonlyArray<Evidence>;
+  limit?: number;
+  label?: string;
+  /** Replaces the count and key line under the list. */
+  footer?: ReactNode;
+  /** A click on a mention makes it the current one. */
+  onSelect?: (index: number) => void;
+  /** Adopts a mention straight from its row ("Use as evidence"). */
+  onAdopt?: (index: number) => void;
 }) {
+  const [all, setAll] = useState(false);
   if (mentions.length === 0 && selections.length === 0) {
     return (
       <p className="mt-2 text-xs text-ink-3">
@@ -208,8 +227,16 @@ export function Mentions({
     );
   }
   return (
-    <ol className="mt-2.5 grid gap-1" aria-label="Mentions in document order">
+    <ol className="mt-2.5 grid gap-1" aria-label={label}>
       {mentions.map((mention, index) => {
+        if (
+          limit !== undefined &&
+          !all &&
+          index >= limit &&
+          index !== cursor &&
+          !adopted.has(mention.id)
+        )
+          return null;
         const page = mention.boxes[0]?.page ?? 0;
         const current = index === cursor;
         return (
@@ -217,9 +244,11 @@ export function Mentions({
             key={mention.id}
             aria-current={current || undefined}
             data-testid="mention"
-            className={`grid grid-cols-[2.6rem_minmax(0,1fr)_auto] items-baseline gap-2 rounded-[2px] py-1 pr-2 pl-2 text-xs ${current ? "evidence-item" : ""}`}
+            onClick={onSelect ? () => onSelect(index) : undefined}
+            title={onSelect && !current ? "Show this passage" : undefined}
+            className={`group grid grid-cols-[2.6rem_minmax(0,1fr)_auto] items-baseline gap-2 rounded-[2px] py-1 pr-2 pl-2 text-sm ${current ? "evidence-item" : onSelect ? "cursor-pointer hover:bg-sheet-2" : ""}`}
           >
-            <span className="text-ink-3">p. {page}</span>
+            <span className="text-ink-2">p. {page}</span>
             <span className="line-clamp-2 text-ink-2">
               {tail(mention.quote.prefix)}
               <span className="font-medium text-ink">
@@ -227,27 +256,59 @@ export function Mentions({
               </span>
               {head(mention.quote.suffix)}
             </span>
-            {adopted.has(mention.id) ? <Mark term={ADOPTED} /> : <span />}
+            {adopted.has(mention.id) ? (
+              <Mark term={ADOPTED} />
+            ) : onAdopt ? (
+              <button
+                type="button"
+                className={`rounded-[4px] px-2 text-sm text-petrol hover:bg-petrol-wash ${current ? "" : "opacity-0 group-hover:opacity-100 focus:opacity-100"}`}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onAdopt(index);
+                }}
+              >
+                Use as evidence
+              </button>
+            ) : (
+              <span />
+            )}
           </li>
         );
       })}
       {selections.map((selection) => (
         <li
           key={selection.id}
-          className="grid grid-cols-[2.6rem_minmax(0,1fr)_auto] gap-2 py-1 pr-2 pl-2 text-xs"
+          className="grid grid-cols-[2.6rem_minmax(0,1fr)_auto] gap-2 py-1 pr-2 pl-2 text-sm"
         >
-          <span className="text-ink-3">p. {selection.boxes[0]?.page}</span>
+          <span className="text-ink-2">p. {selection.boxes[0]?.page}</span>
           <span className="line-clamp-2 font-medium">{selection.quote.replace(/\s+/g, " ")}</span>
           <Mark term={ADOPTED} />
         </li>
       ))}
-      <li className="mt-1 flex gap-3 text-2xs text-ink-3">
+      {limit !== undefined && mentions.length > limit ? (
+        <li>
+          <button
+            type="button"
+            className="py-1 pl-2 text-sm text-petrol hover:underline"
+            aria-expanded={all}
+            onClick={() => setAll((on) => !on)}
+          >
+            {all ? "Show fewer" : `Show ${mentions.length - limit} more`}
+          </button>
+        </li>
+      ) : null}
+      <li className="mt-1 flex items-center gap-3 text-sm text-ink-2">
         <span>
-          {cursor < 0 ? "–" : cursor + 1} of {mentions.length}
+          {cursor < 0
+            ? `${mentions.length} ${mentions.length === 1 ? "mention" : "mentions"}`
+            : `${cursor + 1} of ${mentions.length}`}
         </span>
-        <span>
-          <Key k="," /> <Key k="." /> to go through them, <Key k="Enter" /> to adopt
-        </span>
+        {footer ?? (
+          <span>
+            <Key k="," /> <Key k="." /> to go through them, <Key k="Enter" /> to adopt
+          </span>
+        )}
       </li>
     </ol>
   );

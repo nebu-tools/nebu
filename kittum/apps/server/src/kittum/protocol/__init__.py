@@ -8,7 +8,8 @@ decision. Exclusion reasons are criterion IDs.
     publish(tx, project_id, stored.id, approver_id, ledger=ledger)   # frozen, ledger event
 
 Criteria render as the question a reviewer answers (`render_question`) and as the prompt
-fragment the AI judge answers with a verbatim quote (`render_prompt`). `diff` compares versions.
+fragment the AI judge answers with a verbatim quote (`render_prompt` for `judge.v2`;
+`render_prompt_rules` and `render_prompt_criterion` for `judge.v3`). `diff` compares versions.
 `kittum.protocol.testing.InMemoryProtocolStore` stands in for the Postgres store.
 
 The core schema is domain-neutral. A protocol may name a `profile` that adds vocabularies,
@@ -69,7 +70,14 @@ from kittum.protocol.profile import (
     register_profile,
     registered_profiles,
 )
-from kittum.protocol.render import AnswerKey, CriterionQuestion, render_prompt, render_question
+from kittum.protocol.render import (
+    AnswerKey,
+    CriterionQuestion,
+    render_prompt,
+    render_prompt_criterion,
+    render_prompt_rules,
+    render_question,
+)
 from kittum.protocol.store import (
     PUBLISHED_EVENT,
     Attribution,
@@ -145,6 +153,8 @@ __all__ = [
     "register_profile",
     "registered_profiles",
     "render_prompt",
+    "render_prompt_criterion",
+    "render_prompt_rules",
     "render_question",
     "save_draft",
     "strategy_dialect",

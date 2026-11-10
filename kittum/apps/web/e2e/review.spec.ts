@@ -85,7 +85,9 @@ const expectBlind = async (
 
 const POP = ["e", "1"];
 const INT = ["e", "2"];
-const DESIGN = ["e", "3"];
+// Criteria keep their protocol numbers on every screen: DESIGN is criterion 5 of the protocol,
+// though title and abstract shows only POP, INT, and DESIGN.
+const DESIGN = ["e", "5"];
 
 // Title prefix to the keys every screener presses; the e-cigarette trial is the one conflict.
 const PLAN: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
@@ -147,7 +149,7 @@ const screenQueue = async (
 ) => {
   const title = page.getByTestId("record-title");
   const banner = page.getByTestId("ai-reveal");
-  const finished = page.getByRole("heading", { name: "Queue finished" });
+  const finished = page.getByRole("heading", { name: "Your title and abstract queue is done" });
   // The record on screen now, or null between records and while the AI is still reading: never
   // wait for a title that may not come back.
   const titleNow = async () =>
@@ -200,7 +202,7 @@ const screenQueue = async (
  */
 const screenFullTexts = async (page: Page) => {
   const heading = page.getByRole("complementary", { name: "Criteria" }).getByRole("heading");
-  const finished = page.getByRole("heading", { name: "Full texts finished" });
+  const finished = page.getByRole("heading", { name: "Your available full-text queue is done" });
   const notice = page.getByTestId("fulltext-notice");
   const reveal = page.getByTestId("ai-reveal");
   const seen: Array<{ title: string; revealed: boolean }> = [];
@@ -267,7 +269,9 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
 
     // The server agrees: after a reload there is nothing left in A's queue.
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Queue finished" })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Your title and abstract queue is done" }),
+    ).toBeVisible();
     await page.context().close();
   });
 
@@ -331,7 +335,7 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
     await page.keyboard.press("q");
     await expect(quote).toBeInViewport();
     await page.keyboard.press("Space");
-    await expect(page.getByRole("heading", { name: "No open conflicts" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No conflicts assigned to you" })).toBeVisible();
     await page.context().close();
   });
 
@@ -352,6 +356,7 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
     await expect(page.getByTestId("title_abstract-rescreens")).toContainText("0 waiting");
     // Blind provisional decisions: A and B disagree on one of 29 records (8 against 7 included).
     const pe = (8 * 7 + 21 * 22) / 29 ** 2;
+    await page.getByRole("button", { name: /Agreement and missed records/ }).click();
     await expect(page.getByTestId("kappa").first()).toHaveText(
       ((28 / 29 - pe) / (1 - pe)).toFixed(2),
     );
@@ -412,7 +417,7 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
     );
     // 29 reports in 29 studies, until the paper and its registry entry became one study.
     await expect(page.getByTestId("flow-studies")).toHaveText("28");
-    await expect(page.getByTestId("ledger")).toContainText("Ledger verified");
+    await expect(page.getByTestId("ledger-mark")).toContainText("Ledger verified");
     await page.context().close();
 
     const verified = execFileSync("uv", ["run", "kittum", "ledger", "verify", project_id], {
@@ -440,14 +445,21 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
     ] as const) {
       await expect(flow.getByTestId(`prisma-${count}`), count).toHaveText(String(value));
     }
-    // The diagram fills the page width, so its labels read at the default zoom; a click
-    // enlarges it, and it downloads as SVG.
+    // The diagram opens fitted to the screen, so its last box shows; "Full width" draws it as
+    // wide as the page, so its labels read at the default zoom; a click enlarges it, and it
+    // downloads as SVG.
     const diagram = flow.getByTestId("prisma-diagram");
     await expect(diagram).toBeVisible();
-    expect((await diagram.boundingBox())?.width ?? 0).toBeGreaterThan(1000);
+    const fitted = await diagram.boundingBox();
+    expect(fitted?.height ?? 0).toBeLessThanOrEqual(900);
+    await flow.getByRole("button", { name: "Full width" }).click();
+    // As wide as the figure's sheet allows: wider than fitted, most of the 1440px window.
+    await expect
+      .poll(async () => (await diagram.boundingBox())?.width ?? 0)
+      .toBeGreaterThan(Math.max(fitted?.width ?? 0, 900));
     // Inlined, so its labels use the workbench's font rather than a system fallback.
     await expect(diagram.locator("text").first()).toHaveCSS("font-family", /IBM Plex Sans/);
-    await expect(flow.getByRole("link", { name: "Download as SVG" })).toHaveAttribute(
+    await expect(flow.getByRole("link", { name: "Download SVG" })).toHaveAttribute(
       "download",
       "prisma-nrt-vs-control.svg",
     );
@@ -458,14 +470,22 @@ test("a review from search to full text, blind, audited, adjudicated, and verifi
     await page.keyboard.press("Escape");
     await expect(large).toHaveCount(0);
 
-    // The AI-use disclosure: agreement as raw counts with kappa over all of them, and the
-    // prompts the judge sent.
+    // The AI-use disclosure: in mode M1 every first decision is blind, and it says so; agreement
+    // as raw counts with kappa over all of them, and the prompts the judge sent.
     await page.keyboard.press("a");
     const disclosure = page.getByTestId("disclosure");
-    await expect(disclosure.getByTestId("disclosure-agreement").first()).toContainText(
-      /Agreed on \d+ of 29 records\. Kappa .*, both over all 29\./,
+    await expect(disclosure.getByTestId("disclosure-summary")).toContainText(
+      "Every first decision was made blind",
     );
+    const agreement = disclosure.getByTestId("disclosure-agreement").first();
+    await expect(agreement).toContainText(/\d+ of 29 \(\d+%\)/);
+    await expect(agreement.getByTestId("kappa")).toHaveText(/^(-?\d\.\d\d|Not defined)$/);
+    await agreement.getByRole("button").click();
+    await expect(disclosure.getByRole("table", { name: / against / })).toBeVisible();
+    await expect(disclosure).toContainText("Kappa and PABAK cover all 29, agreed or not.");
     await expect(disclosure).not.toContainText("AI alone");
+    // The prompts are folded: open the group, then one prompt.
+    await disclosure.getByTestId("disclosure-prompts").locator("summary").first().click();
     const card = disclosure.getByTestId("prompt-card").first();
     await card.locator("summary").click();
     await expect(card).toContainText("You screen records for a systematic literature review.");

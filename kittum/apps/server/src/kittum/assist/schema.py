@@ -9,7 +9,8 @@ protocol it must compile to.
 - A mapping (`LocalizedText`, `{en: ..., de: ...}`) has no fixed keys, which strict decoding
   cannot express, so it becomes a list of `{key, value}` pairs.
 - `extensions` are left out: a profile's typed fields are the lead's to write. So is a
-  criterion's `short_label`, a display aid for the screening strip, and a topic's `judge`
+  criterion's `short_label`, a display aid for the screening strip, its `exclusion_reason` for
+  the flow diagram, and a topic's `judge`
   instructions, which the lead tunes on the test bench (and recorded drafts replay).
 
 `from_strict` turns an answer back into the protocol's own shape: pairs into mappings, and a null
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 _DROP = frozenset({"default", "title"})
-OMITTED = frozenset({"extensions", "short_label", "judge"})
+OMITTED = frozenset({"extensions", "short_label", "exclusion_reason", "judge"})
 
 
 def strict_schema(model: type[BaseModel]) -> dict[str, Any]:

@@ -12,6 +12,7 @@ from collections import Counter
 from typing import Annotated
 
 from fastapi import APIRouter, Header
+from pydantic import Field
 
 from kittum.api import Context  # noqa: TC001 - FastAPI resolves it at runtime
 from kittum.core import Id, Record
@@ -26,12 +27,13 @@ class LedgerSummary(Record):
     checked_through_seq: int | None = None
     """Always for the methods lead; for anyone else only while the chain holds, since on a broken
     chain it points at the event that broke it."""
-    verify: VerifyReport | None = None
+    verify: VerifyReport | None = Field(default=None, exclude_if=lambda v: v is None)
     """The full report, for the methods lead only."""
-    events: int | None = None
+    events: int | None = Field(default=None, exclude_if=lambda v: v is None)
     """For the methods lead only."""
-    by_type: dict[str, int] | None = None
-    """Event counts by type, for the methods lead only."""
+    by_type: dict[str, int] | None = Field(default=None, exclude_if=lambda v: v is None)
+    """Event counts by type, for the methods lead only. The lead-only keys are left out of
+    anyone else's answer, not sent empty."""
 
 
 @router.get("/verify", operation_id="verifyProjectLedger")

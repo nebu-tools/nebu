@@ -111,7 +111,7 @@ test("one reason per full-text decision, the AI's reading after it, and a wrong 
     for (const id of [sam, jun, rita]) {
       const page = await open(id, "screening/title-abstract");
       const title = page.getByTestId("record-title");
-      const finished = page.getByRole("heading", { name: "Queue finished" });
+      const finished = page.getByRole("heading", { name: "Your title and abstract queue is done" });
       const banner = page.getByTestId("ai-reveal");
       for (;;) {
         await expect(title.or(finished)).toBeVisible({ timeout: 60_000 });
@@ -182,7 +182,7 @@ test("one reason per full-text decision, the AI's reading after it, and a wrong 
   const heading = (page: Page) =>
     page.getByRole("complementary", { name: "Criteria" }).getByRole("heading", { level: 1 });
   const nextFullText = async (page: Page) => {
-    const finished = page.getByRole("heading", { name: "Full texts finished" });
+    const finished = page.getByRole("heading", { name: "Your available full-text queue is done" });
     await expect(heading(page).or(finished)).toBeVisible({ timeout: 60_000 });
     return (await finished.isVisible()) ? null : ((await heading(page).textContent()) ?? "");
   };
@@ -231,7 +231,9 @@ test("one reason per full-text decision, the AI's reading after it, and a wrong 
         await expect(notice).toContainText("Excluded on 1 Population");
       }
       await expect(
-        heading(page).or(page.getByRole("heading", { name: "Full texts finished" })),
+        heading(page).or(
+          page.getByRole("heading", { name: "Your available full-text queue is done" }),
+        ),
       ).not.toHaveText(title);
     }
     expect(seen.some((t) => t.startsWith(COHORT))).toBe(true);
@@ -242,6 +244,8 @@ test("one reason per full-text decision, the AI's reading after it, and a wrong 
     expect((await ref(COHORT)).full_text).toBeNull();
     expect((await ref(TRIAL)).full_text).not.toBeNull();
     await lead.reload();
+    // The cohort study is a registry record: it is listed under Registry only, and under All.
+    await lead.getByRole("button", { name: /^All \d/ }).click();
     const missing = lead.getByTestId("retrieval-row").filter({ hasText: COHORT });
     await expect(missing).toBeVisible();
     await expect(missing.getByTestId("wrong-document")).toHaveText(
@@ -271,7 +275,9 @@ test("one reason per full-text decision, the AI's reading after it, and a wrong 
       if (await reveal.isVisible()) await page.keyboard.press("Space");
       await expect(notice).toContainText("Excluded on 1 Population");
       await expect(
-        heading(page).or(page.getByRole("heading", { name: "Full texts finished" })),
+        heading(page).or(
+          page.getByRole("heading", { name: "Your available full-text queue is done" }),
+        ),
       ).not.toHaveText(title);
     }
     expect(seen.some((t) => t.startsWith(COHORT))).toBe(false);

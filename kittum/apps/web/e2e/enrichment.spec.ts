@@ -116,6 +116,9 @@ test("a lead enriches the corpus from the open sources and fetches open-access f
       timeout: 60_000,
     });
     await expect(status).toContainText("1 record is retracted.");
+    // With every source answering, the enrichment folds to its summary line; open its table.
+    const table = lead.getByRole("button", { name: "Enrichment from the open sources" });
+    if ((await table.getAttribute("aria-expanded")) === "false") await table.click();
     // Three records have a DOI; the registry entry has nothing to look up.
     const counts = (source: string) =>
       lead.locator(`[data-testid=source-row][data-source=${source}] td`).allInnerTexts();
@@ -216,22 +219,31 @@ test("a lead enriches the corpus from the open sources and fetches open-access f
 
     await lead.keyboard.press("o");
     await expect(lead.getByTestId("open-access-status")).toHaveText(
-      "Fetched 1 of 3 reports. The others need a PDF from you.",
-      { timeout: 60_000 },
+      "3 reports checked, 1 fetched.",
+      {
+        timeout: 60_000,
+      },
     );
     await expect(counts).toHaveText("2 of 4 reports sought have a PDF");
-    // Semantic Scholar and CORE need a key, which the stack does not have.
-    await expect(lead.getByTestId("skipped-sources")).toHaveText(
-      "Kittum skipped Semantic Scholar because no Semantic Scholar key is set" +
-        " (KITTUM_SEMANTIC_SCHOLAR_API_KEY). Kittum skipped CORE because no CORE key is set" +
-        " (KITTUM_CORE_API_KEY).",
+    // Semantic Scholar and CORE need a key, which the stack does not have. The settings that
+    // would enable them are named on hover only.
+    const skipped = lead.getByTestId("skipped-sources");
+    await expect(skipped).toHaveText(
+      "Semantic Scholar and CORE were skipped: no API key. Ask your server administrator to add the keys.",
     );
+    await expect(skipped).toHaveAttribute(
+      "title",
+      "To use them, the server admin sets KITTUM_SEMANTIC_SCHOLAR_API_KEY and KITTUM_CORE_API_KEY.",
+    );
+    // The list opens on the reports without a PDF; the fetched and uploaded ones are under All.
+    await expect(retrievalRow(LESOTHO)).toHaveCount(0);
+    await lead.getByRole("button", { name: /^All \d/ }).click();
 
     // Europe PMC's PDF link is refused; PubMed Central, asked next, names its CC BY copy, which
     // is fetched.
     const lesotho = retrievalRow(LESOTHO);
     await expect(lesotho.getByTestId("attempt")).toHaveText([
-      /^1Europe PMCeuropepmc\.orgRefused, HTTP 403cc by$/,
+      /^1Europe PMCeuropepmc\.orgRefused, HTTP 403CC BY$/,
       /^2PubMed CentralAsked pmc-oa-opendata\.s3\.amazonaws\.comNamed 1 file$/,
       /^3PubMed Centralpmc-oa-opendata\.s3\.amazonaws\.comFetchedCC BY$/,
     ]);
@@ -257,7 +269,10 @@ test("a lead enriches the corpus from the open sources and fetches open-access f
   });
 
   await test.step("the lead exports the reports without a PDF, then uploads a folder", async () => {
-    await expect(lead.getByTestId("missing-count")).toContainText("2 reports sought have no PDF");
+    await expect(lead.getByTestId("missing-count")).toHaveText("1");
+    // The tabs count the articles that need a PDF and, apart, the registry record, which has
+    // no article to fetch.
+    await expect(lead.getByTestId("registry-count")).toHaveText("1");
     await lead.keyboard.press("e");
     const exporting = lead.getByRole("dialog", { name: "Export the reports without a PDF" });
     const download = lead.waitForEvent("download");
@@ -306,7 +321,8 @@ test("a lead enriches the corpus from the open sources and fetches open-access f
     await expect(lead.getByTestId("retrieval-counts")).toHaveText(
       "3 of 4 reports sought have a PDF",
     );
-    await expect(lead.getByTestId("missing-count")).toContainText("1 report sought has no PDF");
+    await expect(lead.getByTestId("missing-count")).toHaveText("1");
+    await expect(lead.getByTestId("registry-count")).toHaveText("0");
   });
 
   await test.step("a reviewer learns none of it", async () => {

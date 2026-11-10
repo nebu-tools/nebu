@@ -14,6 +14,7 @@ from kittum.judge import (
     CriterionVerdict,
     ScreeningItem,
     Verdict,
+    config_prompt_version,
     instructions_hash,
     rendered_prompt,
 )
@@ -37,6 +38,7 @@ from kittum.screening.rules import (
     ai_rank,
     conflict_kinds,
     criteria_for,
+    criterion_numbers,
     default_seed,
     highlights,
     known_include_refs,
@@ -139,6 +141,19 @@ def _event(project_id: Id, type: str, actor_id: Id, payload: dict[str, Any]) -> 
 
 def _json(value: Any) -> Any:
     return value.model_dump(mode="json") if value is not None else None
+
+
+class JudgeWork(NamedTuple):
+    """What a judge or bench job sends to `kittum.judge`: the stage, the items, the scope's
+    criteria with their permanent numbers in the topic, the topic's instructions, and the
+    protocol version's content hash, all under one protocol version."""
+
+    info: StageInfo
+    items: list[ScreeningItem]
+    criteria: tuple[Criterion, ...]
+    numbers: dict[str, int]
+    instructions: JudgeInstructions
+    protocol_hash: str
 
 
 class _Item(NamedTuple):
@@ -573,15 +588,19 @@ class Screening:
 
     def judge_items(
         self, tx: Tx, project_id: Id, stage_id: Id, item_refs: Sequence[str]
-    ) -> tuple[StageInfo, list[ScreeningItem], tuple[Criterion, ...], JudgeInstructions]:
-        """What a judge job sends to `kittum.judge`: the items, the scope's criteria, and the
-        topic's instructions, all under the protocol version the stage reads with now."""
+    ) -> JudgeWork:
+        """What a judge job sends to `kittum.judge`, under the protocol version the stage reads
+        with now."""
         row = store.stage_row(tx, project_id, stage_id)
-        return (
-            store.stage_info(row),
-            _items(tx, row, item_refs),
-            self._criteria(tx, row),
-            self._topic(tx, row).judge,
+        info = store.stage_info(row)
+        topic = self._topic(tx, row)
+        return JudgeWork(
+            info=info,
+            items=_items(tx, row, item_refs),
+            criteria=criteria_for(topic, row["scope_id"], row["stage"]),
+            numbers=criterion_numbers(topic),
+            instructions=topic.judge,
+            protocol_hash=info.protocol_hash,
         )
 
     def attach_verdicts(
@@ -959,21 +978,20 @@ class Screening:
         self._commands.execute(tx, command, decide, load=load, apply=apply)
         return bench_id
 
-    def bench_items(
-        self, tx: Tx, project_id: Id, bench_id: Id
-    ) -> tuple[StageInfo, list[ScreeningItem], tuple[Criterion, ...], JudgeInstructions, str]:
-        """What a bench job sends to `kittum.judge`: the items, and the draft's criteria,
+    def bench_items(self, tx: Tx, project_id: Id, bench_id: Id) -> JudgeWork:
+        """What a bench job sends to `kittum.judge`: the run's items under the draft's criteria,
         instructions, and content hash."""
         bench = store.bench_row(tx, project_id, bench_id)
         row = store.stage_row(tx, project_id, bench["stage_id"])
         protocol = ReviewProtocol.model_validate(bench["protocol"])
         topic = topic_for(protocol, row["scope_id"], bench["topic_id"])
-        return (
-            store.stage_info(row),
-            _items(tx, row, bench["item_refs"]),
-            criteria_for(topic, row["scope_id"], row["stage"]),
-            topic.judge,
-            bench["protocol_hash"],
+        return JudgeWork(
+            info=store.stage_info(row),
+            items=_items(tx, row, bench["item_refs"]),
+            criteria=criteria_for(topic, row["scope_id"], row["stage"]),
+            numbers=criterion_numbers(topic),
+            instructions=topic.judge,
+            protocol_hash=bench["protocol_hash"],
         )
 
     def finish_bench(
@@ -1112,8 +1130,8 @@ class Screening:
         assignment_id: Id | None = None,
         item_ref: str | None = None,
     ) -> RecordPrompt:
-        """The prompt the AI judge reads one record with under the stage's protocol version.
-        The methods lead names any record by its reference; a screener of a topic with working
+        """The prompt the AI judge reads one record with under the stage's protocol version, in
+        the prompt version of the stage's judge config: what the AI read. The methods lead names any record by its reference; a screener of a topic with working
         documentation names one of their own assignments. In a complete topic a screener gets
         nothing of the AI, its prompt included."""
         row = store.stage_row(tx, project_id, stage_id)
@@ -1133,7 +1151,11 @@ class Screening:
             raise NotAssigned(f"record {ref} is not in this stage")
         topic = self._topic(tx, row)
         prompt = rendered_prompt(
-            item, criteria_for(topic, row["scope_id"], row["stage"]), topic.judge
+            item,
+            criteria_for(topic, row["scope_id"], row["stage"]),
+            topic.judge,
+            version=config_prompt_version(tx, row["judge_config_id"]),
+            numbers=criterion_numbers(topic),
         )
         return RecordPrompt(
             protocol_hash=row["protocol_hash"],

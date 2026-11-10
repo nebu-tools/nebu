@@ -40,6 +40,14 @@ const shot = async (page: Page, name: string) => {
   await page.screenshot({ path: join(SHOTS, `${name}.png`) });
 };
 
+/** The corpus strip on Studies: records from the searches − duplicates = reports in studies. */
+const expectCorpus = async (page: Page, figures: readonly [number, number, number, number]) => {
+  const ids = ["corpus-records", "corpus-duplicates", "corpus-reports", "corpus-studies"];
+  for (const [i, id] of ids.entries()) {
+    await expect(page.getByTestId(id)).toHaveText(String(figures[i]));
+  }
+};
+
 const cli = (...args: string[]) =>
   JSON.parse(
     execFileSync("uv", ["run", "kittum", "project", ...args], {
@@ -74,17 +82,15 @@ test("records found twice become one, and a registry entry joins its study", asy
     await page.goto(`/p/${projectId}/studies?as=${leadId}`);
     await expect(page.getByRole("button", { name: "Build the corpus" })).toBeEnabled();
     await page.keyboard.press("b");
-    await expect(page.getByTestId("corpus-count")).toHaveText(
-      "The searches returned 16 records. None is a duplicate yet. That leaves 16 reports in 16 studies.",
-    );
+    await expectCorpus(page, [16, 0, 16, 16]);
     await expect(page.getByTestId("open-duplicates")).toContainText(
       "Kittum proposes 4 more duplicates.",
     );
-    await expect(page.getByTestId("corpus-search")).toHaveText([
-      /^PubMed.*10 records$/,
-      /^Europe PMC.*4 records$/,
-      /^ClinicalTrials\.gov.*2 records$/,
-    ]);
+    // Each search's share of the records, in the hover over the strip's first figure.
+    await expect(page.getByTestId("corpus-records").locator("..")).toHaveAttribute(
+      "title",
+      "PubMed 10, Europe PMC 4, ClinicalTrials.gov 2",
+    );
     const ecig = page.getByTestId("proposal").filter({ hasText: "Same DOI 10.1056/nejmoa2308815" });
     await expect(ecig).toContainText("Duplicate records");
     await expect(ecig.getByRole("listitem")).toHaveText([/^PubMed/, /^Europe PMC/]);
@@ -95,13 +101,11 @@ test("records found twice become one, and a registry entry joins its study", asy
   await test.step("one key confirms every duplicate on an identifier", async () => {
     await page.keyboard.press("a");
     await expect(page.getByTestId("studies-notice")).toHaveText("Confirmed 4 duplicates.");
-    await expect(page.getByTestId("corpus-count")).toHaveText(
-      "The searches returned 16 records. 4 are duplicates. That leaves 12 reports in 12 studies.",
-    );
+    await expectCorpus(page, [16, 4, 12, 12]);
     await expect(page.getByTestId("open-duplicates")).toHaveCount(0);
     // The paper is one report now, found by both searches, with the reason it was merged.
     const study = page.getByTestId("linked-study").filter({ hasText: ECIG });
-    await expect(study.getByTestId("found-by")).toHaveText("Found by 2 searches");
+    await expect(study.getByTestId("found-by")).toHaveText("PubMed, Europe PMC");
     await expect(study.getByTestId("record-search")).toHaveText([/^PubMed/, /^Europe PMC/]);
     await expect(study.getByTestId("link-reason")).toHaveText(
       "MergedSame DOI 10.1056/nejmoa2308815. The methods lead confirmed it.",
@@ -115,9 +119,7 @@ test("records found twice become one, and a registry entry joins its study", asy
       await page.keyboard.press("Enter");
       await expect(page.getByTestId("studies-notice")).toHaveText("Confirmed the link.");
     }
-    await expect(page.getByTestId("corpus-count")).toHaveText(
-      "The searches returned 16 records. 4 are duplicates. That leaves 12 reports in 10 studies.",
-    );
+    await expectCorpus(page, [16, 4, 12, 10]);
     const study = page.getByTestId("linked-study").filter({ hasText: ECIG });
     await expect(study.getByTestId("study-report")).toHaveCount(2);
     await expect(study.locator("[data-testid=study-report][data-registry]")).toContainText(
@@ -128,7 +130,7 @@ test("records found twice become one, and a registry entry joins its study", asy
     );
     await study.scrollIntoViewIfNeeded();
     await shot(page, "studies-linked");
-    await page.getByTestId("corpus-count").scrollIntoViewIfNeeded();
+    await page.getByTestId("corpus-records").scrollIntoViewIfNeeded();
     await shot(page, "studies-count");
   });
 });

@@ -2780,6 +2780,16 @@
             "title": "Decidable At",
             "type": "array"
           },
+          "exclusion_reason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "extensions": {
             "$ref": "#/components/schemas/Extensions"
           },
@@ -4900,7 +4910,7 @@
       },
       "JudgeInstructions": {
         "additionalProperties": false,
-        "description": "The editable part of the AI judge's prompt for one search topic.\n\nEverything else in the prompt is fixed: the status definitions, the quote rules, the text\nthat tells the model the record is data, the record's hashed tag, and the answer schema. A\ntopic that sets neither field leaves them out of the protocol, so its content hash stays as\nit was before topics had instructions.",
+        "description": "The editable parts of the AI judge's prompt for one search topic.\n\nThe strictness and the guidance fill the stage rule. A team may also replace the whole\nsystem message (`system_prompt`, where `{stage_rule}` marks where the stage rule and the\nguidance go) and the user message (`user_template`, which must keep `{criteria}` and\n`{text}`). The answer schema and Kittum's quote check stay: they are how Kittum reads and\nchecks an answer. The protocol's versions are the prompt's history; clearing a field goes back\nto Kittum's wording. A topic that sets nothing leaves the instructions out of the protocol,\nand unset fields stay out of it, so content hashes stay as they were before.",
         "properties": {
           "guidance": {
             "anyOf": [
@@ -4915,6 +4925,26 @@
           "strictness": {
             "$ref": "#/components/schemas/JudgeStrictness",
             "default": "conservative"
+          },
+          "system_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PromptText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user_template": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/UserTemplate"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "JudgeInstructions",
@@ -6954,6 +6984,11 @@
         ],
         "title": "PromptTemplate",
         "type": "object"
+      },
+      "PromptText": {
+        "maxLength": 40000,
+        "minLength": 1,
+        "type": "string"
       },
       "Proposal": {
         "additionalProperties": false,
@@ -9230,6 +9265,16 @@
           },
           "population": {
             "$ref": "#/components/schemas/LocalizedText"
+          },
+          "short_label": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Text"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -9591,6 +9636,17 @@
           "protocol_hash": {
             "title": "Protocol Hash",
             "type": "string"
+          },
+          "protocol_version_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protocol Version Label"
           },
           "reveal": {
             "title": "Reveal",
@@ -11316,6 +11372,14 @@
             ],
             "title": "Ai Protocol Hash"
           },
+          "ai_unclear": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Ai Unclear",
+            "type": "array"
+          },
           "assignment_id": {
             "anyOf": [
               {
@@ -11980,6 +12044,9 @@
         ],
         "title": "UploadedDocument",
         "type": "object"
+      },
+      "UserTemplate": {
+        "$ref": "#/components/schemas/PromptText"
       },
       "ValidationError": {
         "properties": {

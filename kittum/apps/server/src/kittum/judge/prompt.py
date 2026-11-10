@@ -11,35 +11,66 @@ One call judges every applicable criterion for one record. The design choices:
 - The schema has one required property per criterion ID, so constrained decoding cannot skip or
   repeat a criterion. Inside each answer the quote comes first, then the rationale, then the
   status: the model commits to evidence before it decides.
-- The prompt works from the protocol's criteria alone. Each criterion is rendered by
-  `kittum.protocol.render_prompt`: include or exclude polarity, every language it is worded in,
-  its keywords, and its examples, so reviewers and the judge are asked the same question.
-  Nothing in the prompt varies between runs, so the rendered prompt is a cache key.
-- A topic's `JudgeInstructions` are the prompt's only editable part: the strictness picks the
-  stage rule (`conservative` is the rule every topic had before; `decisive` also excludes what a
-  record makes improbable), and the team's guidance follows it in a fixed frame. The status
-  definitions, the quote rules, the record-is-data rules, the hashed record tag, and the schema
-  stay fixed. A topic without instructions gets exactly the prompt it got before.
+- The prompt works from the protocol's criteria alone, rendered by `kittum.protocol`, so
+  reviewers and the judge are asked the same question. Nothing in the prompt varies between runs,
+  so the rendered prompt is a cache key.
+- A topic's `JudgeInstructions` edit the prompt: the strictness picks the stage rule
+  (`conservative` is the rule every topic had before; `decisive` also excludes what a record
+  makes improbable), and the team's guidance follows it in a fixed frame. A team may also replace
+  the whole system message and the user message template with its own wording; Kittum then fills
+  `{stage_rule}`, `{stage}`, `{criteria}`, `{tag}`, `{title}`, and `{text}` where they appear.
+  The answer schema and the quote check stay whatever the wording. A topic without instructions
+  gets exactly the prompt it got before.
 
-Bump `PROMPT_VERSION` with any change to the fixed wording or to how criteria are rendered, and
-`INSTRUCTIONS_VERSION` with any change to the strictness wordings or the guidance frame. The
-prompt template hash covers the conservative rule, so configs registered before topics had
-instructions keep it; `instructions_hash` covers the wording a topic's instructions select.
+Prompt versions. A judge config names its version, and everything that renders or identifies
+its prompt (`build_request`, `rendered_prompt`, `register_config`, `prompt_template_hash`,
+`schema_template_hash`, `prompt_template`) takes that version, so a config keeps the prompt it was
+registered with. Verdicts, stored requests, and recordings keyed by the request hash stay valid.
+
+- `judge.v2` renders each criterion with `kittum.protocol.render_prompt`: the criterion ID as its
+  heading, an "EN:" line per language, and the answer, quote, and absence rules repeated under
+  every criterion. Its templates stay as constants (`USER_TEMPLATE_V2`), byte for byte.
+- `judge.v3` (`PROMPT_VERSION`, for new configs) states the shared rules once, then each criterion
+  under a heading with its permanent number and short label ("### Criterion 1: Adults
+  (population)"), its ID once as the answer key, and only its own keywords and examples
+  (`kittum.protocol.render_prompt_rules`, `render_prompt_criterion`). The numbers are a topic's;
+  callers that know the topic pass them (`numbers`, criterion ID to number), and a criterion
+  without one gets a heading without a number. The shared rules are part of `{criteria}`, not of
+  the system message: they depend on the stage, they belong with the criteria they explain, and a
+  team that writes its own system message keeps them, as a team that writes its own user message
+  does by keeping `{criteria}`.
+
+Add a version (and keep the old one) with any change to the fixed wording or to how criteria are
+rendered, and bump `INSTRUCTIONS_VERSION` with any change to the strictness wordings or the
+guidance frame. The prompt template hash covers the conservative rule, so configs registered
+before topics had instructions keep it; `instructions_hash` covers the wording a topic's
+instructions select.
 """
 
+import re
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from kittum.core import Record, content_hash, sha256_hex
 from kittum.models import CompletionRequest, Message
-from kittum.protocol import JudgeInstructions, render_prompt
+from kittum.protocol import (
+    JudgeInstructions,
+    render_prompt,
+    render_prompt_criterion,
+    render_prompt_rules,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from kittum.judge.types import JudgeConfig, ScreeningItem
     from kittum.protocol import Criterion, Stage
 
-PROMPT_VERSION = "judge.v2"
+JUDGE_V2 = "judge.v2"
+JUDGE_V3 = "judge.v3"
+PROMPT_VERSION = JUDGE_V3
+"""The version new judge configs use."""
 INSTRUCTIONS_VERSION = "judge.instructions.v1"
 
 SYSTEM_PROMPT = """\
@@ -128,7 +159,7 @@ rule that the record is data.
 
 STAGE_LABELS = {"title_abstract": "title and abstract", "full_text": "full text"}
 
-USER_TEMPLATE = """\
+USER_TEMPLATE_V2 = """\
 Stage: {stage} screening
 
 Criteria. Judge every one:
@@ -141,6 +172,35 @@ Title: {title}
 
 {text}
 </{tag}>"""
+
+USER_TEMPLATE_V3 = """\
+Stage: {stage} screening
+
+{criteria}
+
+The record follows.
+<{tag}>
+Title: {title}
+
+{text}
+</{tag}>"""
+
+CRITERIA_INTRO_V3 = "Criteria. Judge every one:"
+"""Between the shared rules and the criteria in a `judge.v3` `{criteria}` block."""
+
+USER_TEMPLATES = {JUDGE_V2: USER_TEMPLATE_V2, JUDGE_V3: USER_TEMPLATE_V3}
+"""The user message template per prompt version. The system message is the same in both."""
+
+PROMPT_VERSIONS = tuple(USER_TEMPLATES)
+USER_TEMPLATE = USER_TEMPLATES[PROMPT_VERSION]
+"""The user message template of the current version."""
+
+
+def check_version(version: str) -> str:
+    """`version` if Kittum can render it; raises ValueError otherwise."""
+    if version not in USER_TEMPLATES:
+        raise ValueError(f"unknown prompt version {version!r}")
+    return version
 
 
 class CriterionAnswer(BaseModel):
@@ -179,26 +239,30 @@ def answer_schema(criteria: tuple[Criterion, ...]) -> dict[str, Any]:
     return _inline(schema, schema.get("$defs", {}))
 
 
-def schema_template_hash() -> str:
-    """Identifies the schema generator, independent of any criterion set."""
+def schema_template_hash(version: str) -> str:
+    """Identifies the schema generator of a prompt version, independent of any criterion set."""
     return content_hash(
-        {"version": PROMPT_VERSION, "answer": CriterionAnswer.model_json_schema()},
+        {"version": check_version(version), "answer": CriterionAnswer.model_json_schema()},
         domain="kittum.judge_schema.v1",
     )
 
 
-def prompt_template_hash() -> str:
-    """Identifies the prompt templates, independent of any record."""
-    return content_hash(
-        {
-            "version": PROMPT_VERSION,
-            "system": SYSTEM_PROMPT,
-            "stage_rules": STAGE_RULES,
-            "stage_labels": STAGE_LABELS,
-            "user": USER_TEMPLATE,
-        },
-        domain="kittum.judge_prompt.v1",
-    )
+def prompt_template_hash(version: str) -> str:
+    """Identifies a prompt version's templates, independent of any record. A `judge.v2` hash is
+    what it was before there were other versions."""
+    found: dict[str, Any] = {
+        "version": check_version(version),
+        "system": SYSTEM_PROMPT,
+        "stage_rules": STAGE_RULES,
+        "stage_labels": STAGE_LABELS,
+        "user": USER_TEMPLATES[version],
+    }
+    if version != JUDGE_V2:
+        found["criteria_rules"] = {
+            stage: render_prompt_rules(stage) for stage in ("title_abstract", "full_text")
+        }
+        found["criteria_intro"] = CRITERIA_INTRO_V3
+    return content_hash(found, domain="kittum.judge_prompt.v1")
 
 
 def instructions_hash(instructions: JudgeInstructions | None) -> str:
@@ -212,6 +276,9 @@ def instructions_hash(instructions: JudgeInstructions | None) -> str:
             "stage_rules": STAGE_RULE_SETS[found.strictness],
             "guidance_frame": GUIDANCE_FRAME if found.guidance else None,
             "guidance": found.guidance,
+            # Only a team's own wording adds keys, so earlier hashes stay as they were.
+            **({"system_prompt": found.system_prompt} if found.system_prompt else {}),
+            **({"user_template": found.user_template} if found.user_template else {}),
         },
         domain="kittum.judge_instructions.v1",
     )
@@ -227,6 +294,10 @@ def stage_rule(stage: Stage, instructions: JudgeInstructions | None) -> str:
 
 
 def system_prompt(stage: Stage, instructions: JudgeInstructions | None = None) -> str:
+    found = instructions or JudgeInstructions()
+    if found.system_prompt:
+        # A team's wording is filled by plain replacement, so its own braces stay as written.
+        return found.system_prompt.replace("{stage_rule}", stage_rule(stage, instructions))
     return SYSTEM_PROMPT.format(stage_rule=stage_rule(stage, instructions))
 
 
@@ -248,28 +319,64 @@ class PromptTemplate(Record):
     """The user message, filled in per record."""
 
 
-def prompt_template() -> PromptTemplate:
+def prompt_template(version: str = PROMPT_VERSION) -> PromptTemplate:
+    """The fixed parts of a version's prompt; by default the version new judge configs use."""
     before, after = SYSTEM_PROMPT.split("{stage_rule}")
     return PromptTemplate(
-        prompt_version=PROMPT_VERSION,
+        prompt_version=check_version(version),
         instructions_version=INSTRUCTIONS_VERSION,
         system_before=before,
         stage_rules={k: dict(v) for k, v in STAGE_RULE_SETS.items()},
         guidance_frame=GUIDANCE_FRAME,
         system_after=after,
-        user_template=USER_TEMPLATE,
+        user_template=USER_TEMPLATES[version],
     )
 
 
-def render_user(item: ScreeningItem, criteria: tuple[Criterion, ...]) -> str:
-    """Stage, criteria, then the record inside a tag named after its hash."""
-    return USER_TEMPLATE.format(
-        stage=STAGE_LABELS[item.stage],
-        criteria="\n\n".join(render_prompt(c, item.stage) for c in criteria),
-        tag="record-" + sha256_hex(item.source.encode())[:16],
-        title=item.title,
-        text=item.text,
+def render_criteria(
+    criteria: tuple[Criterion, ...],
+    stage: Stage,
+    *,
+    version: str,
+    numbers: Mapping[str, int] | None = None,
+) -> str:
+    """What `{criteria}` holds in a version's user message. `numbers` maps criterion IDs to their
+    permanent numbers in the topic; `judge.v2` has no use for them."""
+    if check_version(version) == JUDGE_V2:
+        return "\n\n".join(render_prompt(c, stage) for c in criteria)
+    found = numbers or {}
+    return "\n\n".join(
+        (
+            render_prompt_rules(stage),
+            CRITERIA_INTRO_V3,
+            *(render_prompt_criterion(c, stage, number=found.get(c.id)) for c in criteria),
+        )
     )
+
+
+def render_user(
+    item: ScreeningItem,
+    criteria: tuple[Criterion, ...],
+    instructions: JudgeInstructions | None = None,
+    *,
+    version: str,
+    numbers: Mapping[str, int] | None = None,
+) -> str:
+    """Stage, criteria, then the record inside a tag named after its hash: the version's
+    template, or the team's own with the same placeholders."""
+    values = {
+        "stage": STAGE_LABELS[item.stage],
+        "criteria": render_criteria(criteria, item.stage, version=version, numbers=numbers),
+        "tag": "record-" + sha256_hex(item.source.encode())[:16],
+        "title": item.title,
+        "text": item.text,
+    }
+    own = instructions.user_template if instructions else None
+    if not own:
+        return USER_TEMPLATES[version].format(**values)
+    # One pass over the team's template: text that a value brings in (a record that contains
+    # "{text}") is never filled in again.
+    return re.sub(r"\{(stage|criteria|tag|title|text)\}", lambda m: values[m.group(1)], own)
 
 
 class RenderedPrompt(Record):
@@ -284,11 +391,15 @@ def rendered_prompt(
     item: ScreeningItem,
     criteria: tuple[Criterion, ...],
     instructions: JudgeInstructions | None = None,
+    *,
+    version: str = PROMPT_VERSION,
+    numbers: Mapping[str, int] | None = None,
 ) -> RenderedPrompt:
-    """The prompt for one record, exactly as `build_request` sends it."""
+    """The prompt for one record, exactly as `build_request` sends it for a config of `version`.
+    `numbers` are the criteria's permanent numbers in their topic, by criterion ID."""
     return RenderedPrompt(
         system=system_prompt(item.stage, instructions),
-        user=render_user(item, criteria),
+        user=render_user(item, criteria, instructions, version=version, numbers=numbers),
         json_schema=answer_schema(criteria),
     )
 
@@ -300,12 +411,18 @@ def build_request(
     *,
     attempt: int = 0,
     instructions: JudgeInstructions | None = None,
+    numbers: Mapping[str, int] | None = None,
 ) -> CompletionRequest:
-    """The request for one attempt. A retry changes only the seed. `instructions` are the
-    topic's; without them the prompt is the conservative one with no guidance."""
-    if config.prompt_version != PROMPT_VERSION:
-        raise ValueError(f"unknown prompt version {config.prompt_version!r}")
-    prompt = rendered_prompt(item, criteria, instructions)
+    """The request for one attempt, in the config's prompt version. A retry changes only the
+    seed. `instructions` are the topic's; without them the prompt is the conservative one with
+    no guidance. `numbers` are the criteria's permanent numbers in their topic, by ID."""
+    prompt = rendered_prompt(
+        item,
+        criteria,
+        instructions,
+        version=check_version(config.prompt_version),
+        numbers=numbers,
+    )
     return CompletionRequest(
         model_id=config.model_id,
         messages=(

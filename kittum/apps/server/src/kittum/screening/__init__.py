@@ -70,7 +70,7 @@ Owner: WP-09.
 
 from kittum.screening.jobs import JudgeRunner, bench_handler, judge_handler
 from kittum.screening.metrics import RecordOutcome, stop_status
-from kittum.screening.rules import criteria_for, proposal, topic_for
+from kittum.screening.rules import criteria_for, criterion_numbers, proposal, topic_for
 from kittum.screening.service import (
     ADJUDICATED,
     AI_DISAGREEMENT_RESCREEN,
@@ -236,6 +236,7 @@ __all__ = [
     "WithdrawResult",
     "bench_handler",
     "criteria_for",
+    "criterion_numbers",
     "judge_handler",
     "proposal",
     "screening_table",

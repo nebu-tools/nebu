@@ -11,6 +11,8 @@ interface Comparator {
 export interface Question {
   readonly id: string;
   readonly label: Localized;
+  /** A few words that name the question where the full question does not fit. */
+  readonly short_label?: string | null;
   readonly population: Localized;
   readonly intervention: Localized;
   readonly comparators: ReadonlyArray<Comparator>;
@@ -25,6 +27,8 @@ export interface Criterion {
   readonly applies_to: ReadonlyArray<string>;
   /** A word or two for the screening strip. */
   readonly short_label?: string | null;
+  /** The reason the PRISMA flow names for records excluded on it, if not its own words. */
+  readonly exclusion_reason?: string | null;
 }
 export interface Source {
   readonly id: string;
@@ -50,8 +54,14 @@ export interface Topic {
   readonly scopes: ReadonlyArray<Scope>;
   readonly criteria: ReadonlyArray<Criterion>;
   readonly source_plan: { readonly sources: ReadonlyArray<Source> };
-  /** The AI judge's strictness and the team's guidance; left out while both are the default. */
-  readonly judge?: { readonly strictness?: string; readonly guidance?: string | null };
+  /** The AI judge's strictness, the team's guidance, and the team's own prompt wording, if any;
+   * left out while all are the default. */
+  readonly judge?: {
+    readonly strictness?: string;
+    readonly guidance?: string | null;
+    readonly system_prompt?: string | null;
+    readonly user_template?: string | null;
+  };
 }
 interface Outcome {
   readonly id: string;
@@ -115,20 +125,28 @@ export const blankDoc = (): Doc => ({
 export const PRESETS = {
   documented: {
     label: "Documented SLR",
+    sets: "two screeners with the AI as third, 1% sentinels, a 10% audit sample, and complete documentation",
     description:
       "Mode M1 with complete documentation: two people screen every record blind, the AI is a third screener, sentinels and an audit sample check the screening.",
   },
   targeted: {
     label: "Targeted search",
+    sets: "a pool of screeners with second opinions, no sentinels or audit sample, and working documentation",
     description:
       "Mode S with working documentation: one person of a pool screens each record and asks a colleague for a second opinion when unsure. No auditor, no sentinels. The AI's reading may show before the decision.",
   },
 } as const;
 export type Preset = keyof typeof PRESETS;
 
-/** The preset a topic's settings match, or null for M2 and M3, which only the mode list sets. */
-export const presetOf = (topic: Topic): Preset | null =>
-  topic.mode === "M1" ? "documented" : topic.mode === "S" ? "targeted" : null;
+/** The preset a topic's settings match, or null when they match neither (M2, M3, or an audit
+ * plan of the lead's own): the form calls that "Custom". */
+export const presetOf = (topic: Topic): Preset | null => {
+  const sentinels = Number(topic.audit?.sentinel_percent ?? "0");
+  const audit = Number(topic.audit?.random_audit_percent ?? "0");
+  if (topic.mode === "M1" && sentinels === 1 && audit === 10) return "documented";
+  if (topic.mode === "S" && sentinels === 0 && audit === 0) return "targeted";
+  return null;
+};
 
 /** The topic with a preset's settings. A rationale stays: S needs one, and only the lead can
  * write it. */
@@ -160,6 +178,27 @@ export const CTGOV = (id: string): Source => ({
   name: "ClinicalTrials.gov",
   strategy: "",
 });
+
+/** The label after `label`, by its last number: "1.1" to "1.2", "1" to "2", "0.3" to "0.4". */
+export const nextLabel = (label: string) => {
+  const found = /^(.*?)(\d+)(\D*)$/.exec(label.trim());
+  return found ? `${found[1]}${Number(found[2]) + 1}${found[3]}` : `${label.trim()}.1`;
+};
+
+/** Whether `label` comes after `before`, number by number: "1.2" after "1.1", "2" after "1.9".
+ * Labels without numbers count as after when they differ. */
+export const comesAfter = (label: string, before: string) => {
+  const numbers = (x: string) => (x.match(/\d+/g) ?? []).map(Number);
+  const a = numbers(label);
+  const b = numbers(before);
+  if (!a.length || !b.length) return label.trim() !== before.trim();
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+};
 
 /** An ID not yet used in `taken`: `prefix` and the first free number. */
 export const freshId = (prefix: string, taken: ReadonlyArray<string>) => {
@@ -299,6 +338,7 @@ export const toDoc = (source: unknown): { readonly doc: Doc } | { readonly probl
     questions: list(source, "questions", "").map((q, i) => {
       const at = `questions[${i}]`;
       withId(q, at);
+      plain(q, ["short_label"], `${at}.`);
       if (q["outcomes"] !== undefined) values(q, "outcomes", `${at}.`);
       return {
         ...q,
@@ -334,7 +374,7 @@ export const toDoc = (source: unknown): { readonly doc: Doc } | { readonly probl
         criteria: list(t, "criteria", `${at}.`).map((c, j) => {
           const cat = `${at}.criteria[${j}]`;
           withId(c, cat);
-          plain(c, ["slot", "polarity"], `${cat}.`);
+          plain(c, ["slot", "polarity", "short_label", "exclusion_reason"], `${cat}.`);
           return {
             polarity: "include",
             ...c,

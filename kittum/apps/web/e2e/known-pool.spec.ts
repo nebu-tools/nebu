@@ -105,10 +105,12 @@ test("complete the pool: the search's gaps, the new records, and the pool in the
     await dialog.getByLabel("Known papers file").setInputFiles(knownPapers());
     await expect(dialog.getByLabel("File format")).toHaveValue("records-csv");
     await dialog.getByRole("button", { name: "Add to the pool" }).click();
-    await expect(pool.getByTestId("pool-found")).toHaveText("2");
-    await expect(pool.getByTestId("pool-missed")).toHaveText("1");
-    await expect(pool.getByTestId("pool-new")).toHaveText("7");
-    await expect(pool).toContainText("new search records of 9, not in the pool");
+    // The summary strip carries the counts; the pool's panel lists the papers.
+    const summary = page.getByTestId("search-summary");
+    await expect(summary.getByTestId("pool-found")).toHaveText("2");
+    await expect(summary.getByTestId("pool-missed")).toHaveText("1");
+    await expect(summary.getByTestId("pool-new")).toHaveText("7");
+    await expect(summary).toContainText("7 of 9 search records are not in the known pool");
     await expect(pool.getByRole("list", { name: "Not found by the search" })).toContainText(
       "Nicotine mouth spray for smoking cessation",
     );

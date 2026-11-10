@@ -7,7 +7,9 @@ import { useState } from "react";
 
 import type { RevealSetting, Role, SearchTopic, Sentinel, Stage } from "../../data/schema.ts";
 import { run } from "../../data/workbench.ts";
-import { Button, Field, FileInput, Select, failure } from "../../ui/Form.tsx";
+import { modeLabel } from "../../lib/labels.ts";
+import { Button } from "../../ui/Button.tsx";
+import { Field, FileInput, Select, failure } from "../../ui/Form.tsx";
 import { DOCUMENTATION, MODES } from "../protocol/Protocol.tsx";
 import { useProject } from "../project.tsx";
 
@@ -29,7 +31,15 @@ const names = (people: ReadonlyArray<string>) =>
     ? (people[0] ?? "nobody")
     : `${people.slice(0, -1).join(", ")} and ${people.at(-1)}`;
 
-export function OpenStage({ onOpened }: { onOpened: (message: string) => void }) {
+export function OpenStage({
+  only,
+  onOpened,
+}: {
+  /** Offer only stages of this kind: Setup opens title and abstract under its own step, and
+   * full text under Retrieval. */
+  only?: Stage;
+  onOpened: (message: string) => void;
+}) {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
   const router = useRouter();
   const { project, me, protocol, labels, scopeLabel } = useProject();
@@ -39,6 +49,7 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
   const choices = topics.flatMap((topic) =>
     topic.scopes.flatMap((scope) =>
       (["title_abstract", "full_text"] as const)
+        .filter((stage) => !only || stage === only)
         .filter((stage) =>
           stage === "title_abstract"
             ? !open(scope.id, stage)
@@ -68,10 +79,13 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
     return <p className="text-ink-2">Publish the protocol first: it sets each scope's mode.</p>;
   }
   if (!chosen) {
+    // Under Setup's title and abstract step, the step's own figures say the stage is open.
+    if (only === "title_abstract") return null;
     return (
-      <p className="text-ink-2">
-        Every {labels.scope.toLowerCase()} is open at title and abstract. Full-text screening opens
-        for a {labels.scope.toLowerCase()} here or on Progress once its full texts are in.
+      <p className="text-sm text-ink-2">
+        {only === "full_text"
+          ? `Full-text screening is open for every ${labels.scope.toLowerCase()} that passed title and abstract.`
+          : `Every ${labels.scope.toLowerCase()} is open at title and abstract. Full-text screening opens for a ${labels.scope.toLowerCase()} here or on Progress once its full texts are in.`}
       </p>
     );
   }
@@ -230,7 +244,7 @@ export function OpenStage({ onOpened }: { onOpened: (message: string) => void })
         </p>
       ) : null}
       <div>
-        <Button primary type="submit" disabled={busy || (targeted && pool.length === 0)}>
+        <Button kind="primary" type="submit" disabled={busy || (targeted && pool.length === 0)}>
           {busy ? "Opening the stage" : `Open ${STAGES[chosen.stage].toLowerCase()} screening`}
         </Button>
       </div>
@@ -250,7 +264,10 @@ function StagePlan({ topic }: { topic: SearchTopic }) {
       <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-1 border-y border-rule py-3 text-sm">
         <dt className="text-xs font-semibold text-ink-2">Mode</dt>
         <dd>
-          <span className="font-semibold">S</span> <span className="text-ink-2">{MODES.S}</span>
+          <span className="font-semibold" title="Mode S">
+            {modeLabel("S")}
+          </span>
+          <span className="block text-ink-2">{MODES.S}</span>
         </dd>
         <dt className="text-xs font-semibold text-ink-2">Documentation</dt>
         <dd className="text-ink-2" data-testid="stage-documentation">
@@ -266,8 +283,10 @@ function StagePlan({ topic }: { topic: SearchTopic }) {
     <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-4 gap-y-1 border-y border-rule py-3 text-sm">
       <dt className="text-xs font-semibold text-ink-2">Mode</dt>
       <dd>
-        <span className="font-semibold">{topic.mode}</span>{" "}
-        <span className="text-ink-2">{MODES[topic.mode]}</span>
+        <span className="font-semibold" title={`Mode ${topic.mode}`}>
+          {modeLabel(topic.mode)}
+        </span>
+        <span className="block text-ink-2">{MODES[topic.mode]}</span>
       </dd>
       <dt className="text-xs font-semibold text-ink-2">Audit</dt>
       <dd className="text-ink-2">
@@ -277,7 +296,7 @@ function StagePlan({ topic }: { topic: SearchTopic }) {
       <dt className="text-xs font-semibold text-ink-2">People</dt>
       <dd className={short ? "text-exclude" : "text-ink-2"} data-testid="stage-people">
         {short
-          ? `${topic.mode} needs ${needed === 1 ? "a reviewer" : "two reviewers"}, an auditor, and an adjudicator. Add them under People.`
+          ? `This mode needs ${needed === 1 ? "a reviewer" : "two reviewers"}, an auditor, and an adjudicator. Add them under People.`
           : `${names(reviewers.slice(0, needed))} ${needed === 1 ? "screens" : "screen"}; ${names(auditors.slice(0, 1))} audits; ${names(adjudicators)} ${adjudicators.length === 1 ? "adjudicates" : "adjudicate"}.`}
       </dd>
     </dl>

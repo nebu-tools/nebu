@@ -4,7 +4,7 @@
 // the criterion the report fails, with evidence for it, or include, which says every criterion is
 // met. A verdict on each criterion is optional. A PDF that is not the record's report is marked
 // as the wrong document, which takes it out of screening and is not an exclusion.
-import { useRouteContext } from "@tanstack/react-router";
+import { Link, useRouteContext } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
@@ -16,8 +16,12 @@ import type {
   FullTextAssignment,
   Outcome,
   Reveal,
+  ScopeStatus,
+  TableDecision,
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
+import { Button } from "../../ui/Button.tsx";
+import { EmptyState } from "../../ui/Empty.tsx";
 import { Key, KeyHint } from "../../ui/Key.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { Mark, OUTCOMES, Status, VERDICTS } from "../../ui/Status.tsx";
@@ -28,6 +32,7 @@ import { AiReading } from "./AiReading.tsx";
 import type { CriterionName } from "./AiReading.tsx";
 import { Mentions, useEvidence } from "./evidence.tsx";
 import { AiBefore, AskSecondOpinion, SecondOpinionAsked } from "./Targeted.tsx";
+import { byKey, keyOf, numberOf, numbered } from "./criteria.ts";
 
 const VERDICT_KEYS: Record<string, CriterionStatus> = { y: "met", n: "not_met", "?": "unclear" };
 /** Outcomes that name one criterion: the key, then the criterion's number. */
@@ -39,14 +44,20 @@ const ON_A_CRITERION: Record<string, "exclude" | "insufficient_information"> = {
 /** The reviewer's full-text queue, one report at a time. */
 export function FullTextQueue() {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, labels, screeningStage } = useProject();
+  const { project, me, labels, screeningStage, scopeLabel, has, criteriaFor } = useProject();
   const scopeId = screeningStage("full_text")?.scope_id ?? null;
+  // The finished queue's own work: this person's full-text decisions, by outcome and reason.
+  const [mine, setMine] = useState<ReadonlyArray<TableDecision> | null>(null);
+  const titleAbstract = screeningStage("title_abstract")?.scope_id ?? null;
+  // Title and abstract records still waiting for this person: the next queue to offer.
+  const [waitingElsewhere, setWaitingElsewhere] = useState(0);
   const [assignment, setAssignment] = useState<FullTextAssignment | null | undefined>(undefined);
+  const [status, setStatus] = useState<ScopeStatus | null>(null);
   const [done, setDone] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  // Full texts still unread by the AI judge, while the queue is empty.
-  const [unread, setUnread] = useState(0);
   const [poll, setPoll] = useState(0);
+  // Full texts still unread by the AI judge, while the queue is empty.
+  const unread = assignment === null ? (status?.remaining ?? 0) : 0;
 
   useEffect(() => {
     if (!scopeId) return;
@@ -54,12 +65,12 @@ export function FullTextQueue() {
     const caller = { projectId: project.id, as: me.actor_id };
     run(workbench.fullText({ ...caller, scopeId }))
       .then(async (next) => {
-        const status =
-          next === null
-            ? await run(workbench.status({ ...caller, scopeId, stage: "full_text" }))
-            : null;
+        // The counts for the strip; a failure there leaves the strip empty, not the screen.
+        const counts = await run(
+          workbench.status({ ...caller, scopeId, stage: "full_text" }),
+        ).catch(() => null);
         if (!live) return;
-        setUnread(status?.remaining ?? 0);
+        setStatus(counts);
         setAssignment(next);
       })
       .catch(
@@ -75,51 +86,233 @@ export function FullTextQueue() {
   }, [workbench, project.id, me.actor_id, scopeId, done, poll]);
 
   useEffect(() => {
+    if (assignment !== null || !titleAbstract) return;
+    let live = true;
+    void run(
+      workbench.status({
+        projectId: project.id,
+        as: me.actor_id,
+        scopeId: titleAbstract,
+        stage: "title_abstract",
+      }),
+    ).then(
+      (s) => live && setWaitingElsewhere(s.remaining),
+      () => live && setWaitingElsewhere(0),
+    );
+    return () => {
+      live = false;
+    };
+  }, [assignment, titleAbstract, workbench, project.id, me.actor_id]);
+
+  useEffect(() => {
+    if (assignment !== null || !scopeId) return;
+    let live = true;
+    void run(
+      workbench.screeningTable({
+        projectId: project.id,
+        as: me.actor_id,
+        scopeId,
+        stage: "full_text",
+      }),
+    ).then(
+      (table) =>
+        live &&
+        setMine(
+          table.rows.flatMap((r) =>
+            r.decisions.filter((d) => d.reviewer_id === me.actor_id && d.outcome),
+          ),
+        ),
+      () => live && setMine(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [assignment, scopeId, workbench, project.id, me.actor_id]);
+
+  useEffect(() => {
     if (assignment !== null || unread === 0) return;
     const timer = window.setTimeout(() => setPoll((n) => n + 1), 3000);
     return () => window.clearTimeout(timer);
   }, [assignment, unread, poll]);
 
-  if (error) return <Message title="Kittum could not load the full text">{error}</Message>;
-  if (!scopeId) {
-    return (
-      <Message title="No full texts to screen">
+  const params = { projectId: project.id };
+  const scopeFull = scopeId ? scopeLabel(scopeId) : "";
+  const next = (
+    <>
+      {waitingElsewhere > 0 ? (
+        <Link to="/p/$projectId/screening/title-abstract" params={params} className={PRIMARY}>
+          Start title and abstract ({waitingElsewhere} waiting)
+        </Link>
+      ) : null}
+      <Link
+        to="/p/$projectId/screening/table"
+        params={params}
+        className={waitingElsewhere > 0 ? SECONDARY : PRIMARY}
+      >
+        Review your decisions
+      </Link>
+      <Link
+        to="/p/$projectId/progress"
+        params={params}
+        className="rounded-[4px] px-3 py-1.5 text-sm text-petrol hover:bg-petrol-wash"
+      >
+        See the review&rsquo;s progress
+      </Link>
+      {has("lead") ? (
+        <Link
+          to="/p/$projectId/retrieval"
+          params={params}
+          className="rounded-[4px] px-3 py-1.5 text-sm text-petrol hover:bg-petrol-wash"
+        >
+          Find the PDFs still missing
+        </Link>
+      ) : null}
+    </>
+  );
+
+  let body: ReactNode;
+  if (error) {
+    body = (
+      <EmptyState title="Kittum could not load the full text" testId="fulltext-error">
+        <span role="alert">{error}</span>
+      </EmptyState>
+    );
+  } else if (!scopeId) {
+    body = (
+      <EmptyState title="No full texts to screen" actions={next}>
         A record comes here after it passes title and abstract screening and has a full text, once
         the methods lead opens full-text screening for its {labels.scope.toLowerCase()}.
-      </Message>
+      </EmptyState>
+    );
+  } else if (assignment === undefined) {
+    body = <p className="px-8 py-10 text-ink-2">Loading the next full text.</p>;
+  } else if (assignment === null && unread > 0) {
+    body = (
+      <EmptyState
+        title="The AI judge is reading"
+        figures={[
+          ["Full texts you decided", status?.screened ?? "–"],
+          ["Not yet read by the AI judge", unread],
+        ]}
+      >
+        Each of your full texts appears here once the AI judge has read it. This page checks again
+        every few seconds.
+      </EmptyState>
+    );
+  } else if (assignment === null) {
+    body = (
+      <EmptyState
+        title="Your available full-text queue is done"
+        testId="fulltext-finished"
+        figures={[
+          ["Full texts you decided", status?.screened ?? "–"],
+          ...decidedFigures(mine, criteriaFor("full_text", scopeId)),
+          ...(done > 0 ? [["Decided in this session", done] as const] : []),
+        ]}
+        actions={next}
+      >
+        You have decided every full text that is ready for you. A report still waiting for its PDF
+        joins your queue once the PDF is in.
+      </EmptyState>
+    );
+  } else {
+    body = (
+      <FullTextScreen
+        key={assignment.assignment_id}
+        assignment={assignment}
+        onDecided={() => setDone((n) => n + 1)}
+      />
     );
   }
-  if (assignment === undefined) return <Message title="Loading the next full text" />;
-  if (assignment === null && unread > 0) {
-    return (
-      <Message title="The AI judge is reading">
-        The AI judge has not read {unread} of your full texts yet. Each one appears here once the
-        judge has read it.
-      </Message>
-    );
-  }
-  if (assignment === null) {
-    return (
-      <Message title="Full texts finished">
-        You have decided every full text assigned to you
-        {done > 0 ? `, ${done} in this session` : ""}.
-      </Message>
-    );
-  }
+
   return (
-    <FullTextScreen
-      key={assignment.assignment_id}
-      assignment={assignment}
-      onDecided={() => setDone((n) => n + 1)}
-    />
+    <div className="grid h-full grid-rows-[auto_minmax(0,1fr)]">
+      <QueueBar
+        scopeLabel={scopeFull ? `${labels.scope}: ${shortQuestion(scopeFull)}` : "Full text"}
+        title={scopeFull}
+        status={status}
+      />
+      <div className="min-h-0 overflow-y-auto">{body}</div>
+    </div>
   );
 }
 
-function Message({ title, children }: { title: string; children?: ReactNode }) {
+const PRIMARY =
+  "rounded-[4px] border border-petrol bg-petrol px-3 py-1.5 text-sm font-medium text-petrol-ink hover:brightness-110";
+const SECONDARY =
+  "rounded-[4px] border border-rule-strong bg-sheet px-3 py-1.5 text-sm hover:bg-sheet-2";
+
+/** A research question short enough for a strip or a table cell; the full one goes in a hover.
+ * "Do mobile phone interventions (smartphone apps, …) help adults who smoke…" loses its
+ * parentheses first, then is cut at a word. */
+export const shortQuestion = (question: string, length = 64) => {
+  const plain = question
+    .replace(/\s*\([^)]*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (plain.length <= length) return plain;
+  const cut = plain.slice(0, length + 1);
+  const word = cut.lastIndexOf(" ");
+  return `${(word > 20 ? cut.slice(0, word) : plain.slice(0, length)).replace(/[\s,:;]+$/, "")}…`;
+};
+
+/** "Included 4" and "Excluded 5: 3 on 1 Population, 2 on 4 Study type", from the decisions. */
+const decidedFigures = (
+  decisions: ReadonlyArray<TableDecision> | null,
+  criteria: ReadonlyArray<Criterion>,
+): ReadonlyArray<readonly [string, ReactNode]> => {
+  if (!decisions?.length) return [];
+  const out: Array<readonly [string, ReactNode]> = [];
+  for (const outcome of ["include", "exclude", "insufficient_information", "unclear"] as const) {
+    const these = decisions.filter((d) => d.outcome === outcome);
+    if (!these.length) continue;
+    const reasons = new Map<string, number>();
+    for (const d of these)
+      if (d.reason_criterion_id)
+        reasons.set(d.reason_criterion_id, (reasons.get(d.reason_criterion_id) ?? 0) + 1);
+    const why = [...reasons]
+      .toSorted((a, b) => b[1] - a[1])
+      .map(([id, n]) => `${n} on ${numbered(criteria, id)}`)
+      .join(", ");
+    out.push([OUTCOMES[outcome].past, `${these.length}${why ? `: ${why}` : ""}`]);
+  }
+  return out;
+};
+
+/** The strip above the queue, as on title and abstract: where, and how far. */
+function QueueBar({
+  scopeLabel,
+  title,
+  status,
+}: {
+  scopeLabel: string;
+  title: string;
+  status: ScopeStatus | null;
+}) {
+  const total = status ? status.screened + status.remaining : 0;
+  const share = total ? status!.screened / total : 0;
   return (
-    <div className="mx-auto max-w-[640px] px-10 py-16">
-      <h1 className="text-xl font-semibold">{title}</h1>
-      {children ? <p className="mt-2 text-md text-ink-2">{children}</p> : null}
+    <div className="flex h-9 items-center gap-4 border-b border-rule bg-paper px-4 text-xs">
+      <span className="min-w-0 truncate text-ink-2" title={title || scopeLabel}>
+        {scopeLabel}
+      </span>
+      {status ? (
+        <span className="ml-auto flex flex-none items-center gap-2.5 text-ink-2">
+          <span
+            className="h-1.5 w-40 overflow-hidden rounded-full bg-rule"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={total}
+            aria-valuenow={status.screened}
+            aria-label="Full texts screened"
+          >
+            <span className="block h-full bg-petrol" style={{ width: `${share * 100}%` }} />
+          </span>
+          <span className="whitespace-nowrap tabular-nums">
+            {status.screened} of {total} screened
+          </span>
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -139,7 +332,7 @@ function FullTextScreen({
     [criteriaFor, assignment.scope_id],
   );
   const mentions = useMemo(() => new Map(assignment.mentions), [assignment.mentions]);
-  const nameOf = (c: Criterion) => `${criteria.indexOf(c) + 1} ${labels[c.slot] ?? c.slot}`;
+  const nameOf = (c: Criterion) => `${numberOf(criteria, c.id)} ${labels[c.slot] ?? c.slot}`;
   const {
     active,
     setActive,
@@ -404,9 +597,12 @@ function FullTextScreen({
     if (armed) {
       setArmed(null);
       if (/^[1-9]$/.test(key)) {
-        const chosen = criteria[Number(key) - 1];
+        const chosen = byKey(criteria, key);
         if (chosen) void decideOn(armed, chosen);
-        else setNotice(`There is no criterion ${key}. Press 1 to ${criteria.length}.`);
+        else
+          setNotice(
+            `There is no criterion ${key}. Press ${criteria.map((c) => keyOf(criteria, c.id)).join(", ")}.`,
+          );
         return true;
       }
       if (key === "Escape" || key === "Backspace" || key in ON_A_CRITERION) return true;
@@ -487,6 +683,9 @@ function FullTextScreen({
     if (handled) firstKeyAt.current ??= at;
     return handled;
   });
+  /** A click on a button sends its key, so it goes through the same guards and timing. */
+  const press = (key: string) => window.dispatchEvent(new KeyboardEvent("keydown", { key }));
+  const locked = busy || adopting || outcome !== null || wrong !== null;
 
   const revealedCriterion = reveal ? criteria.find((x) => x.id === reveal.criterion_id) : undefined;
   const aiPage = aiQuote?.boxes[0]?.page;
@@ -495,7 +694,7 @@ function FullTextScreen({
     : undefined;
 
   return (
-    <div className="grid h-full grid-cols-[minmax(0,1fr)_minmax(380px,34%)]">
+    <div className="grid h-full grid-cols-[minmax(0,1fr)_minmax(380px,34%)] bg-paper">
       <PdfViewer
         workbench={workbench}
         layer={assignment.layer}
@@ -505,14 +704,15 @@ function FullTextScreen({
         label={`${assignment.report.study_label}, ${assignment.report.citation}`}
       />
       <aside
-        className="flex min-h-0 flex-col border-l border-rule-strong bg-sheet"
+        className="my-3 mr-3 flex min-h-0 flex-col overflow-hidden rounded-[6px] bg-raised shadow-raised"
         aria-label="Criteria"
       >
-        <header className="border-b border-rule px-5 pt-4 pb-3">
-          <p className="text-xs text-ink-3">
-            {labels.report} {assignment.report.study_label}, {assignment.report.licence}
+        <header className="px-5 pt-4 pb-2">
+          <p className="text-sm text-ink-2">
+            {labels.report} {assignment.report.study_label}
+            {assignment.report.licence ? `, ${assignment.report.licence}` : ""}
           </p>
-          <h1 className="mt-1 line-clamp-2 text-sm font-semibold" title={assignment.report.title}>
+          <h1 className="mt-1 line-clamp-2 text-md font-semibold" title={assignment.report.title}>
             {assignment.report.title}
           </h1>
         </header>
@@ -527,14 +727,15 @@ function FullTextScreen({
                 key={c.id}
                 aria-current={isActive || undefined}
                 data-revealed={reveal?.criterion_id === c.id || undefined}
-                className={`border-b border-rule px-5 py-3 ${isActive ? "bg-sheet-2 shadow-[inset_3px_0_0_var(--petrol)]" : ""} ${armed ? "shadow-[inset_0_2px_0_var(--exclude)]" : ""}`}
-                onClick={() => setActive(index)}
+                className={`px-5 py-2.5 ${isActive ? "bg-petrol-wash/50 shadow-[inset_3px_0_0_var(--petrol)]" : ""} ${armed ? "shadow-[inset_0_2px_0_var(--exclude)]" : ""}`}
+                onClick={() => (armed ? press(keyOf(criteria, c.id)) : setActive(index))}
+                title={armed ? `Choose criterion ${numberOf(criteria, c.id)}` : undefined}
               >
                 <div className="flex items-center gap-2">
                   <span className={armed === "exclude" ? "text-exclude" : ""}>
-                    <Key k={String(index + 1)} on={armed !== null} />
+                    <Key k={keyOf(criteria, c.id)} on={armed !== null} />
                   </span>
-                  <span className="text-2xs text-ink-3">{labels[c.slot] ?? c.slot}</span>
+                  <span className="text-xs text-ink-2">{labels[c.slot] ?? c.slot}</span>
                   {chosen ? <Mark term={OUTCOMES.exclude} title="Your exclusion reason" /> : null}
                   <span className="ml-auto flex items-center gap-2 text-xs">
                     {state.evidence.length > 0 ? (
@@ -546,7 +747,7 @@ function FullTextScreen({
                     {state.verdict ? (
                       <Status term={VERDICTS[state.verdict]} />
                     ) : (
-                      <span className="text-ink-3">No verdict</span>
+                      <span className="text-ink-2">No verdict</span>
                     )}
                   </span>
                 </div>
@@ -620,29 +821,69 @@ function FullTextScreen({
             onSend={(note) => void markWrong(note)}
           />
         ) : (
-          <footer className="border-t border-rule-strong bg-sheet-2 px-5 py-3 text-sm">
-            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          <footer className="px-5 pt-3 pb-4 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                kind="primary"
+                size="sm"
+                keys={["i"]}
+                disabled={locked}
+                title="Include: every criterion is met"
+                onMouseDown={keepFocus}
+                onClick={() => press("i")}
+              >
+                Include
+              </Button>
+              <Button
+                kind="danger"
+                size="sm"
+                keys={["e"]}
+                disabled={locked}
+                aria-pressed={armed === "exclude"}
+                onMouseDown={keepFocus}
+                onClick={() => press(armed === "exclude" ? "Escape" : "e")}
+              >
+                {armed === "exclude" ? "Exclude on which criterion?" : "Exclude on a criterion"}
+              </Button>
+              <Button
+                size="sm"
+                keys={["x"]}
+                disabled={locked}
+                aria-pressed={armed === "insufficient_information"}
+                onMouseDown={keepFocus}
+                onClick={() => press(armed === "insufficient_information" ? "Escape" : "x")}
+              >
+                Insufficient information
+              </Button>
+              {targeted ? (
+                <Button
+                  size="sm"
+                  keys={["f"]}
+                  disabled={locked}
+                  aria-pressed={Boolean(asking)}
+                  onMouseDown={keepFocus}
+                  onClick={() => press("f")}
+                >
+                  {asking ? "Asking for a second opinion" : "Second opinion"}
+                </Button>
+              ) : null}
+              <Button
+                kind="quiet"
+                size="sm"
+                keys={["w"]}
+                disabled={locked}
+                className="ml-auto"
+                onMouseDown={keepFocus}
+                onClick={() => press("w")}
+              >
+                Wrong document
+              </Button>
+            </div>
+            <div className="mt-2.5 flex flex-wrap gap-x-4 gap-y-1.5">
               <KeyHint keys={[",", "."]}>Mentions</KeyHint>
               <KeyHint keys={["Enter"]}>{selection ? "Adopt selection" : "Adopt"}</KeyHint>
-              <KeyHint keys={["y", "n", "?"]}>Verdict, if you want one</KeyHint>
+              <KeyHint keys={["y", "n", "?"]}>Verdict, optional</KeyHint>
               {aiQuote ? <KeyHint keys={["q"]}>The AI&rsquo;s quote</KeyHint> : null}
-            </div>
-            <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-rule pt-2.5">
-              <KeyHint keys={["i"]}>Include, every criterion met</KeyHint>
-              <span className="text-exclude">
-                <KeyHint keys={["e"]} on={armed === "exclude"}>
-                  Exclude on a criterion
-                </KeyHint>
-              </span>
-              <KeyHint keys={["x"]} on={armed === "insufficient_information"}>
-                Insufficient information
-              </KeyHint>
-              <KeyHint keys={["w"]}>Wrong document</KeyHint>
-              {targeted ? (
-                <KeyHint keys={["f"]} on={Boolean(asking)}>
-                  {asking ? "Asking for a second opinion" : "Second opinion"}
-                </KeyHint>
-              ) : null}
             </div>
             <p
               className="mt-2 min-h-5 text-xs text-ink-2"
@@ -655,7 +896,7 @@ function FullTextScreen({
                   {reasonCriterion ? ` on ${nameOf(reasonCriterion)}` : ""}.
                 </Status>
               ) : armed ? (
-                `Now press 1 to ${criteria.length} for the criterion. Esc cancels.`
+                `Now press 1 to ${criteria.length}, or click the criterion. Esc cancels.`
               ) : (
                 (notice ??
                 (verdicts > 0
@@ -669,6 +910,9 @@ function FullTextScreen({
     </div>
   );
 }
+
+/** Buttons on the decision rail keep the keyboard focus where it was, so keys go on working. */
+const keepFocus = (event: { preventDefault: () => void }) => event.preventDefault();
 
 function WrongDocumentForm({
   sent,
@@ -689,7 +933,7 @@ function WrongDocumentForm({
   if (sent) {
     return (
       <footer
-        className="border-t border-rule-strong bg-sheet-2 px-5 py-3 text-sm"
+        className="bg-sheet-2 px-5 py-3 text-sm"
         data-testid="wrong-document-sent"
         aria-live="polite"
       >
@@ -703,7 +947,7 @@ function WrongDocumentForm({
   }
   return (
     <form
-      className="border-t border-rule-strong bg-sheet-2 px-5 py-3 text-sm"
+      className="bg-sheet-2 px-5 py-3 text-sm"
       aria-label="Wrong document"
       data-testid="wrong-document"
       onSubmit={(event) => {

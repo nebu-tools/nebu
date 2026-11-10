@@ -17,6 +17,9 @@ from kittum.corpus import confirm, get_counts, ingest, list_proposals
 from kittum.judge import USER_TEMPLATE, VERIFIER_LIMITS
 from kittum.models import weights_hash
 from kittum.report import flow, load_review, one_line, render, render_files
+from kittum.report.prisma import svg
+from kittum.report.prisma import svg as prisma_svg
+from kittum.report.renderers import exclusion_reasons, registry_records
 from kittum.screening import Decision
 from kittum.search import SearchPlan, import_file
 from tests.report.support import (
@@ -160,7 +163,6 @@ def test_prisma_flow_reconciles_by_hand_with_screening_and_the_corpus(
         "Records excluded: n = 27",
         "Reports not retrieved: n = 1",
         "Reports assessed for eligibility: n = 5",
-        "  COMP-CONTROL: n = 1",
         "Studies included in review: n = 2",
         "Reports of included studies: n = 3",
         "Duplicate records removed: n = 2",
@@ -170,8 +172,57 @@ def test_prisma_flow_reconciles_by_hand_with_screening_and_the_corpus(
     at = texts.index
     assert at("Databases: n = 35") < at("  MEDLINE: n = 24") < at("Registers: n = 0")
     assert at("Databases: n = 35") < at("  Embase: n = 5") < at("Other sources: n = 0")
-    # No box claims what cannot happen: the AI never marks a record ineligible on its own.
-    assert not any("automation" in (t or "") for t in texts)
+    # A figure for publication names things in the protocol's words, never by ID: the question
+    # under the title, and the criterion a report failed by its permanent number and short name.
+    # Notes under it define the AI line and say what "not retrieved" means. The chain holds: no
+    # warning.
+    part = lambda kind: [  # noqa: E731
+        " ".join((t.text or "").split())
+        for t in svg.iter("{http://www.w3.org/2000/svg}text")
+        if t.get("class") == kind
+    ]
+    assert part("title") == ["PRISMA 2020 flow diagram", "NRT versus placebo or no NRT"]
+    assert part("warning") == []
+    words = " ".join(" ".join((t or "").split()) for t in texts)
+    topic = world.protocol.version.protocol.search_topics[0]
+    number = [c.id for c in topic.criteria].index("COMP-CONTROL") + 1
+    assert f"  {number} Comparator not met: n = 1" in texts
+    # A criterion with its own exclusion reason prints it as a paper words it, in place of its
+    # number and short name.
+    stored = review.protocol
+    assert stored is not None
+    own = "Follow-up shorter than six months"
+    criteria = tuple(
+        c.model_copy(update={"exclusion_reason": own}) if c.id == "FOLLOWUP" else c
+        for c in topic.criteria
+    )
+    document = stored.version.protocol.model_copy(
+        update={"search_topics": (topic.model_copy(update={"criteria": criteria}),)}
+    )
+    reworded = review.model_copy(
+        update={
+            "protocol": stored.model_copy(
+                update={"version": stored.version.model_copy(update={"protocol": document})}
+            )
+        }
+    )
+    lines = prisma_svg(f, "PRISMA", reasons=exclusion_reasons(reworded, "TRIALS"))
+    shown = " ".join(" ".join((t.text or "").split()) for t in ET.fromstring(lines).iter())
+    assert f"{own}: n = 1" in shown
+    assert f"{number} Comparator not met: n = 1" in shown
+    ai = f.ai_title_abstract.excluded_with_ai_involvement
+    assert f"  With AI involvement*: n = {ai}" in texts
+    notes = " ".join(part("note"))
+    assert "* With AI involvement: people excluded the record, and the AI also proposed it" in notes
+    assert "'" not in " ".join(t or "" for t in texts)  # typographic apostrophes in a figure
+    assert "Reports not retrieved: reports sought that had no full text in Kittum" in notes
+    assert "Retrieval was still open: 1 article needs a PDF." in notes
+    ids = [NRT_SCOPE, "TRIALS", *(c.id for c in world.criteria("full_text"))]
+    assert not [i for i in ids if i in words], ids
+    # The lines of PRISMA 2020's template stay even when they can only say zero: no screening
+    # mode lets the AI mark a record ineligible without a person.
+    assert "Records marked as ineligible by automation tools: n = 0" in words
+    assert "Records removed for other reasons: n = 0" in words
     # Legible at the width a report page or the Reports screen gives it: shown 870 px wide, the
     # smallest text is still 14 px.
     width = float(svg.get("width") or 0)
@@ -180,7 +231,7 @@ def test_prisma_flow_reconciles_by_hand_with_screening_and_the_corpus(
     )
     assert smallest * 870 / width >= 14, (smallest, width)
     # Every line fits its box, even in a monospaced fallback font (0.6 em a character).
-    _title, *lines = texts
+    lines = [t.text for t in svg.iter("{http://www.w3.org/2000/svg}text") if not t.get("class")]
     boxes = [t for t in lines if t not in ("Identification", "Screening", "Included")]
     assert max(len(t or "") * 16 * 0.6 for t in boxes) <= 420 - 2 * 12
 
@@ -529,6 +580,9 @@ def test_ai_disclosure_names_the_models_both_readings_and_the_extra_screens(
     assert d["verifier_limits"] == list(VERIFIER_LIMITS)
 
     ta, ft = d["stages"]
+    # Mode M1 never shows the AI before a decision: every first decision is blind.
+    assert ta["first_decisions"]["ai_on_screen"] == 0 and ta["first_decisions"]["total"] > 0
+    assert all(a["ai_on_screen"] == 0 for s in (ta, ft) for a in s["agreement"])
     # Both readings of the AI against each screener, from the blind decisions.
     assert sorted(a["kind"] for a in ta["agreement"]) == [
         "human_ai",
@@ -569,11 +623,12 @@ def test_ai_disclosure_names_the_models_both_readings_and_the_extra_screens(
         a for a in ta["agreement"] if a["kind"] == "human_ai" and a["raters"][0] == "Reviewer 1"
     )
     cells = own["table"]
-    assert "|  | the AI's own reading: include | the AI's own reading: exclude |" in text
+    assert "|  | the AI's raw reading: include | the AI's raw reading: exclude |" in text
     assert (
         f"| Reviewer 1: exclude | {cells['exclude_include']} | {cells['exclude_exclude']} |" in text
     )
-    assert "the AI's own reading" in text and "the AI's checked reading" in text
+    assert "the AI's raw reading" in text and "the AI's quote-checked reading" in text
+    assert "Each was made blind, before Kittum showed any AI output." in text
     assert "| nrt-vs-control | Title and abstract | 2 | 1 | 1 | 0 |" in text
     assert RECIPE.repository in text
     for limit in VERIFIER_LIMITS:
@@ -649,3 +704,42 @@ def test_a_metric_the_report_computes_equals_what_screening_reports(
                 )
                 compared += 1
     assert compared == 4
+
+
+def test_the_flow_tells_registry_records_from_articles_still_without_a_full_text(
+    capivasertib: ReviewWorld,
+) -> None:
+    """Before full text opens, every sought report is not retrieved. The figure splits them into
+    articles without a full text and trial registry entries by the workbench's rule (no DOI, and a
+    registry ID it knows or a registry as the journal), so Retrieval, Progress, and the flow count
+    the same reports; the split leaves the PRISMA count as it is."""
+    world = capivasertib
+    with world.db.transaction() as tx:
+        opened = tx.execute(
+            "select e.seq from screening_stage s join audit_event e on e.event_id ="
+            " s.opened_event_id where s.project_id = %s and s.stage = 'full_text'",
+            (world.project_id,),
+        ).fetchone()
+    assert opened is not None
+    review = review_at(world, opened["seq"] - 1)
+    f = flow(review, "RCT", CAPI_SCOPE)
+    assert f.reports_not_retrieved == 4
+
+    def lines(drawing: str | bytes) -> list[str | None]:
+        return [t.text for t in ET.fromstring(drawing).iter("{http://www.w3.org/2000/svg}text")]
+
+    # CAPItello-291's CTIS entry has no DOI and an EU CT number ("2023-505042-25-00"): a registry
+    # record, for the figure as for the workbench's rule, so the box splits the four.
+    files = {r.path: r.data for r in render_files(review, "prisma", CAPI_SCOPE)}
+    shown = lines(files[f"RCT-{CAPI_SCOPE}.svg"])
+    assert "Reports not retrieved: n = 4" in shown
+    assert any("Registry record, no article yet" in (t or "") for t in shown)
+    capitello = world.record(CAPI_TITLES["ctis_capitello"]).item_ref
+    assert capitello in registry_records(review)
+    # With one registry record among them, the box splits the four.
+    at = lines(svg(f, "PRISMA 2020 flow diagram", registry_not_retrieved=1)).index
+    assert (
+        at("Reports not retrieved: n = 4")
+        < at("  Article, PDF needed: n = 3")
+        < at("  Registry record, no article yet: n = 1")
+    )

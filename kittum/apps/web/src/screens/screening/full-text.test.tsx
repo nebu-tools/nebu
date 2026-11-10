@@ -22,7 +22,7 @@ describe("full-text screening", () => {
 
     await expect.element(page.getByText("Page 1 of 12")).toBeVisible();
     await press("ArrowDown"); // criterion 2: progressed after prior therapy
-    await expect.element(page.getByText(`– of ${pretreated.length}`)).toBeVisible();
+    await expect.element(page.getByText(`${pretreated.length} mentions`)).toBeVisible();
     expect(sourceBox()).toBeNull();
 
     // `.` walks the mentions in document order, and the page follows with the marker on the span.
@@ -168,7 +168,9 @@ describe("full-text screening", () => {
       },
     ]);
     expect(app.workbench.decisions).toHaveLength(0);
-    await expect.element(page.getByRole("heading", { name: "Full texts finished" })).toBeVisible();
+    await expect
+      .element(page.getByRole("heading", { name: "Your available full-text queue is done" }))
+      .toBeVisible();
   });
 
   test("a held key adopts or marks once, and the decision reports when the report was shown and first acted on", async () => {

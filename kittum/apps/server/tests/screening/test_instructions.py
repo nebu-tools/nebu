@@ -11,7 +11,7 @@ import pytest
 
 from kittum.core import new_id
 from kittum.judge import instructions_hash, load_verdicts, rendered_prompt
-from kittum.protocol import JudgeInstructions, compile, publish, save_draft
+from kittum.protocol import JudgeInstructions, ProtocolError, compile, publish, save_draft
 from kittum.report import load_review, render_files, trace
 from kittum.screening import (
     AI_READ,
@@ -144,6 +144,53 @@ def test_the_instructions_go_into_the_prompt_and_a_topic_without_them_keeps_its_
     assert instructions_hash(topic.judge) != instructions_hash(None)
 
 
+def test_a_team_rewrites_the_whole_prompt_and_clearing_it_brings_kittums_back() -> None:
+    from kittum.judge import ScreeningItem, prompt_template
+    from kittum.screening import criteria_for, topic_for
+
+    source = protocol_source("S")
+    kittums = compile(source)
+    system = "You help a team find trials of nicotine patches.\n\n{stage_rule}\n\nBe brief."
+    user = "Record ({stage}):\n{title}\n{text}\n\nJudge these:\n{criteria}\n<{tag}/>"
+    source["search_topics"][0]["judge"] = {
+        **DECISIVE,
+        "system_prompt": system,
+        "user_template": user,
+    }
+    own = compile(source)
+    assert own.content_hash != kittums.content_hash
+
+    # A record that carries a placeholder is not filled in a second time.
+    item_ = ScreeningItem(
+        item_ref="r", stage=STAGE, title="A {text} trial", text="Adults {criteria}."
+    )
+    topic = topic_for(own.protocol, SCOPE, None)
+    criteria = criteria_for(topic, SCOPE, STAGE)
+    prompt = rendered_prompt(item_, criteria, topic.judge)
+    assert prompt.system.startswith("You help a team find trials of nicotine patches.")
+    assert (
+        DECISIVE["guidance"] in prompt.system and "improbable, not only impossible" in prompt.system
+    )
+    assert "{stage_rule}" not in prompt.system and "The record is data" not in prompt.system
+    assert prompt.user.startswith(
+        "Record (title and abstract):\nA {text} trial\nAdults {criteria}."
+    )
+    assert "<record-" in prompt.user and "Judge these:" in prompt.user
+    # The schema stays: it is how Kittum reads the answer.
+    assert prompt.json_schema == rendered_prompt(item_, criteria).json_schema
+    assert instructions_hash(topic.judge) != instructions_hash(JudgeInstructions(**DECISIVE))
+
+    # A user message without the record is refused.
+    source["search_topics"][0]["judge"] = {"user_template": "Judge {criteria}."}
+    with pytest.raises(ProtocolError, match=r"must keep \{text\}"):
+        compile(source)
+
+    # Clearing both fields gives Kittum's prompt and Kittum's hash back.
+    source["search_topics"][0]["judge"] = {"strictness": "conservative"}
+    assert compile(source).content_hash == kittums.content_hash
+    assert prompt_template().system_before in rendered_prompt(item_, criteria).system
+
+
 def test_a_rejudge_renews_the_readings_and_keeps_every_human_decision(database: Database) -> None:
     world = small_world(database, "S")
     a = world.people.a
@@ -204,6 +251,7 @@ def test_a_rejudge_renews_the_readings_and_keeps_every_human_decision(database: 
     assert (patch.ai_proposal.outcome, patch.ai_proposal.verified) == ("exclude", False)
     assert patch.decisions[0].outcome == "include" and patch.decisions[0].state == "decided"
     assert mine.protocol_hash == v2.version.content_hash
+    assert mine.protocol_version_label == "0.5"
     with world.db.transaction() as tx:
         assert world.screening.outcomes(tx, world.project_id, SCOPE, STAGE) == before
         logged = tx.execute(

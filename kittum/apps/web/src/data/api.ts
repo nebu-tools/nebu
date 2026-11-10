@@ -186,6 +186,7 @@ const toProtocol = (published: KittumApi.PublishedProtocol): ProtocolVersion => 
       questions: protocol.questions.map((q) => ({
         id: q.id,
         label: text(q.label),
+        short_label: q.short_label ?? null,
         population: text(q.population),
         intervention: text(q.intervention),
         comparators: (q.comparators ?? []).map((c) => text(c.text)),
@@ -216,6 +217,9 @@ const toProtocol = (published: KittumApi.PublishedProtocol): ProtocolVersion => 
             text_en: c.text["en"] ?? text(c.text),
             text_de: c.text["de"] ?? c.text["en"] ?? text(c.text),
             short_label: c.short_label ?? null,
+            // Read loosely: the field is optional in the protocol and older contracts lack it.
+            exclusion_reason:
+              (c as { readonly exclusion_reason?: string | null }).exclusion_reason ?? null,
             decidable_at: c.decidable_at,
             // A criterion for the whole topic applies to each of its scopes.
             applies_to: c.applies_to.flatMap((a) =>

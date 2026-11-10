@@ -20,18 +20,31 @@ import type {
   SourceRecord,
 } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
-import { Key, KeyHint } from "../../ui/Key.tsx";
+import { formatDate } from "../../lib/format.ts";
+import { sourceLabel, studyLabel } from "../../lib/labels.ts";
+import { Button } from "../../ui/Button.tsx";
+import { EmptyState } from "../../ui/Empty.tsx";
 import { useKeys } from "../../ui/keys.ts";
+import { Page } from "../../ui/Page.tsx";
+import { Panel } from "../../ui/Panel.tsx";
+import { ACCEPTED, Mark } from "../../ui/Status.tsx";
 import { usePoll } from "../../ui/poll.ts";
 import { LEAD_ONLY, plural, useProject } from "../project.tsx";
 import { BuildCorpus } from "../setup/BuildCorpus.tsx";
-import { EnrichmentPanel, noticeName, RecordDetail, runActive } from "./Enrichment.tsx";
+import {
+  EnrichmentPanel,
+  EnrichmentProblems,
+  hasProblems,
+  noticeName,
+  PROBLEMS_ID,
+  RecordDetail,
+  runActive,
+  wrongMatch,
+} from "./Enrichment.tsx";
+import type { RecordName } from "./Enrichment.tsx";
 
 /** Search sources whose records are registry entries, not publications. */
 const REGISTRIES = new Set(["ctgov", "clinicaltrials", "euctr", "ctis", "ictrp"]);
-
-const day = (iso: string) =>
-  new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 
 interface Located {
   readonly record: SourceRecord;
@@ -88,6 +101,8 @@ export function StudiesScreen() {
   const [enriching, setEnriching] = useState(false);
   const [enrichError, setEnrichError] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [showAllSingles, setShowAllSingles] = useState(false);
+  const [showAllLinked, setShowAllLinked] = useState(false);
   /** The open record's enrichment, under the occurrence it belongs to. */
   const [detail, setDetail] = useState<{
     readonly id: string;
@@ -199,6 +214,16 @@ export function StudiesScreen() {
     return [...map].map(([studyId, reports]): Study => ({ studyId, reports }));
   }, [corpus]);
 
+  const recordNames = useMemo(
+    (): ReadonlyArray<RecordName> =>
+      [...byOccurrence.values()].map(({ record }) => ({
+        id: record.occurrence_id,
+        title: record.title,
+        label: studyLabel(record.authors, record.year),
+      })),
+    [byOccurrence],
+  );
+
   const pending = proposals.filter((p) => (p.status ?? "pending") === "pending");
   const exact = pending.filter((p) => p.exact && p.relation === "same_record");
   const decided = proposals.filter((p) => p.status === "confirmed").length;
@@ -281,13 +306,75 @@ export function StudiesScreen() {
     }
   };
 
+  const startEnrichment = () => {
+    if (!lead || !corpus || enriching) return;
+    if (runActive(enrichment)) {
+      setNotice("The enrichment is still running. Its progress shows above.");
+      return;
+    }
+    void enrich();
+  };
+
+  const confirm = (proposal: LinkProposal) => {
+    if (!proposal.id) return;
+    void act({ action: "confirm", proposalId: proposal.id }, "Confirmed the link.");
+  };
+
+  const confirmExact = () => {
+    if (exact.length === 0) {
+      setNotice("No open duplicate has the same DOI, PMID, or PMCID.");
+      return;
+    }
+    void act(
+      { action: "confirm_exact" },
+      `Confirmed ${exact.length} ${exact.length === 1 ? "duplicate" : "duplicates"}.`,
+    );
+  };
+
+  const toggleMark = (key: string) =>
+    setMarked((m) => {
+      const next = new Set(m);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const merge = () => {
+    if (marked.size < 2) {
+      setNotice(`Mark two or more records with x, then press m to merge them into one ${study}.`);
+      return;
+    }
+    // Records of one study are linked already, perhaps closer (one report found twice): a study
+    // merge would add nothing but a revision that says it merged them.
+    if (new Set([...marked].map((id) => byOccurrence.get(id)?.report.study_id)).size === 1) {
+      setNotice(`These records are one ${study} already. Press s on a record to split it out.`);
+      return;
+    }
+    void act(
+      { action: "merge", occurrenceIds: [...marked], relation: "same_study" },
+      `Merged ${marked.size} records into one ${study}.`,
+    );
+  };
+
+  const split = (group: Study, located: Located) => {
+    if (recordCount(group) < 2) {
+      setNotice("This record is not linked to another record.");
+      return;
+    }
+    // A study of several reports: take this record's report out of it. One report found twice:
+    // take this record out of the report.
+    const level = group.reports.length > 1 ? "study" : "report";
+    void act(
+      { action: "split", occurrenceIds: [located.record.occurrence_id], level },
+      level === "study"
+        ? `Moved the ${report_} into a ${study} of its own.`
+        : `Moved the record into a ${report_} of its own.`,
+    );
+  };
+
   useKeys((event) => {
     if (event.key === "r" && lead && corpus && !enriching) {
-      if (runActive(enrichment)) {
-        setNotice("The enrichment is still running. Its progress shows above.");
-        return true;
-      }
-      void enrich();
+      startEnrichment();
       return true;
     }
     if (event.key === "Escape" && detailOpen) {
@@ -309,64 +396,25 @@ export function StudiesScreen() {
         setSelected((i) => Math.max(i - 1, 0));
         return true;
       case "Enter":
+        // Enter on a focused button or link is that control's own.
+        if (event.target instanceof HTMLElement && event.target.closest("button, a")) return false;
         if (current.kind !== "proposal" || !current.proposal.id) return false;
-        void act({ action: "confirm", proposalId: current.proposal.id }, "Confirmed the link.");
+        confirm(current.proposal);
         return true;
       case "a":
-        if (exact.length === 0) {
-          setNotice("No open duplicate has the same DOI, PMID, or PMCID.");
-          return true;
-        }
-        void act(
-          { action: "confirm_exact" },
-          `Confirmed ${exact.length} ${exact.length === 1 ? "duplicate" : "duplicates"}.`,
-        );
+        confirmExact();
         return true;
       case "x":
         if (current.kind !== "record") return false;
-        setMarked((m) => {
-          const next = new Set(m);
-          if (next.has(current.key)) next.delete(current.key);
-          else next.add(current.key);
-          return next;
-        });
+        toggleMark(current.key);
         return true;
       case "m":
-        if (marked.size < 2) {
-          setNotice(
-            `Mark two or more records with x, then press m to merge them into one ${study}.`,
-          );
-          return true;
-        }
-        // Records of one study are linked already, perhaps closer (one report found twice):
-        // a study merge would add nothing but a revision that says it merged them.
-        if (new Set([...marked].map((id) => byOccurrence.get(id)?.report.study_id)).size === 1) {
-          setNotice(`These records are one ${study} already. Press s on a record to split it out.`);
-          return true;
-        }
-        void act(
-          { action: "merge", occurrenceIds: [...marked], relation: "same_study" },
-          `Merged ${marked.size} records into one ${study}.`,
-        );
+        merge();
         return true;
-      case "s": {
+      case "s":
         if (current.kind !== "record") return false;
-        const { study: group, located } = current;
-        if (recordCount(group) < 2) {
-          setNotice("This record is not linked to another record.");
-          return true;
-        }
-        // A study of several reports: take this record's report out of it. One report found
-        // twice: take this record out of the report.
-        const level = group.reports.length > 1 ? "study" : "report";
-        void act(
-          { action: "split", occurrenceIds: [located.record.occurrence_id], level },
-          level === "study"
-            ? `Moved the ${report_} into a ${study} of its own.`
-            : `Moved the record into a ${report_} of its own.`,
-        );
+        split(current.study, current.located);
         return true;
-      }
       default:
         return false;
     }
@@ -381,9 +429,10 @@ export function StudiesScreen() {
     const index = targets.findIndex((t) => t.key === key);
     if (index >= 0) setSelected(index);
   };
-  const selectedClass = (key: string) =>
-    isCurrent(key) ? "bg-sheet shadow-[inset_3px_0_0_var(--petrol)]" : "";
-
+  const openRecordById = (key: string) => {
+    select(key);
+    setDetailOpen(true);
+  };
   const relations: Record<LinkProposal["relation"], string> = {
     same_record: "Duplicate records",
     same_report: `Two records of one ${report_}`,
@@ -392,258 +441,526 @@ export function StudiesScreen() {
 
   const records = corpus?.reports.reduce((n, r) => n + r.records.length, 0) ?? 0;
   const duplicates = records - (corpus?.reports.length ?? 0);
-  const recordRow = (located: Located, titled = true) => (
-    <StudyRecord
-      key={located.record.occurrence_id}
-      located={located}
-      titled={titled}
-      current={isCurrent(located.record.occurrence_id)}
-      marked={marked.has(located.record.occurrence_id)}
-      rowRef={rowRef(located.record.occurrence_id)}
-      onSelect={() => select(located.record.occurrence_id)}
-      flag={flags.get(located.record.occurrence_id)}
-    />
-  );
+  const currentRecord = current?.kind === "record" ? current : null;
+
+  /** The actions on the selected record, beside it. */
+  const recordActions = (key: string) => {
+    if (!lead || currentRecord?.key !== key) return null;
+    const linkedRecord = recordCount(currentRecord.study) > 1;
+    return (
+      <span className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+        <Button size="sm" kind="quiet" keys={["x"]} disabled={busy} onClick={() => toggleMark(key)}>
+          {marked.has(key)
+            ? "Unmark"
+            : linkedRecord
+              ? `Merge with another ${study}…`
+              : "Mark to merge"}
+        </Button>
+        {linkedRecord ? (
+          <Button
+            size="sm"
+            kind="quiet"
+            keys={["s"]}
+            disabled={busy}
+            onClick={() => split(currentRecord.study, currentRecord.located)}
+          >
+            Split out
+          </Button>
+        ) : null}
+        <Button size="sm" kind="quiet" keys={["o"]} onClick={() => setDetailOpen((o) => !o)}>
+          {detailOpen ? "Close the enrichment" : "Enrichment"}
+        </Button>
+      </span>
+    );
+  };
+
+  const recordRow = (located: Located, titled = true) => {
+    const key = located.record.occurrence_id;
+    return (
+      <StudyRecord
+        key={key}
+        located={located}
+        titled={titled}
+        current={isCurrent(key)}
+        marked={marked.has(key)}
+        rowRef={rowRef(key)}
+        onSelect={() => select(key)}
+        flag={flags.get(key)}
+        actions={recordActions(key)}
+      />
+    );
+  };
   const locate = (report: CorpusReport, record: SourceRecord): Located =>
     byOccurrence.get(record.occurrence_id) ?? { record, report, search: undefined };
 
-  const showDetail = lead && detailOpen && openRecord !== null;
-  return (
-    <div className="grid h-full grid-rows-[minmax(0,1fr)_auto]">
-      <div
-        className={`grid min-h-0 ${showDetail ? "grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]" : "grid-cols-1"}`}
-      >
-        <section className="overflow-y-auto bg-paper">
-          <div className="mx-auto max-w-[980px] px-10 pt-10 pb-16">
-            <h1 className="text-xl font-semibold tracking-[-0.01em]">{plural(labels.study)}</h1>
-            {project.stages.length > 0 ? (
-              <p className="mt-2 max-w-[70ch] text-sm text-ink-2">
-                Screening that is open already uses the links as they were when it opened. Links you
-                confirm now count from the next stage.
-              </p>
-            ) : null}
-            {!lead ? (
-              <p className="mt-4 max-w-[60ch] text-ink-2" data-testid="lead-only">
-                {LEAD_ONLY}
-              </p>
-            ) : error ? (
-              <p role="alert" className="mt-4 text-exclude">
-                {error}
-              </p>
-            ) : corpus === undefined ? (
-              <p className="mt-4 text-ink-3">Loading the corpus.</p>
-            ) : corpus === null ? (
-              <>
-                <p className="mt-2 text-sm text-ink-2">The corpus is not built yet.</p>
-                <BuildCorpus searches={searches} onBuilt={() => void load()} />
-              </>
-            ) : (
-              <>
-                <CorpusCount
-                  searches={corpus.searches ?? []}
-                  records={records}
-                  duplicates={duplicates}
-                  reports={corpus.reports.length}
-                  studies={studies.length}
-                  openDuplicates={pending.filter((p) => p.relation === "same_record").length}
-                  eventSeq={corpus.revision.event_seq ?? 0}
-                  reportWord={[report_, reports_]}
-                  studyWord={[study, studies_]}
-                />
+  // Long lists of single-record studies fold; the selection unfolds them when it moves past.
+  const singleShown =
+    showAllSingles ||
+    single.length <= FOLDED ||
+    (currentRecord !== null && single.indexOf(currentRecord.study) >= FOLDED);
+  const singles = singleShown ? single : single.slice(0, FOLDED);
+  const linkedOpen =
+    showAllLinked ||
+    linked.length <= FOLDED ||
+    (currentRecord !== null && linked.indexOf(currentRecord.study) >= FOLDED) ||
+    linked
+      .slice(FOLDED)
+      .some((g) => g.reports.some((r) => r.records.some((x) => marked.has(x.occurrence_id))));
+  const linkedShown = linkedOpen ? linked : linked.slice(0, FOLDED);
 
-                <EnrichmentPanel run={enrichment} busy={enriching} error={enrichError} />
+  if (!lead) {
+    return (
+      <section className="h-full overflow-y-auto bg-paper">
+        <EmptyState title={plural(labels.study)} testId="lead-only">
+          {LEAD_ONLY}
+        </EmptyState>
+      </section>
+    );
+  }
 
-                <h2 className="mt-10 border-b border-rule-strong pb-1.5 text-lg font-semibold">
-                  Proposed links
-                  <span className="ml-3 text-sm font-normal text-ink-3">{pending.length} open</span>
-                </h2>
-                {exact.length > 0 ? (
-                  <p className="mt-3 text-sm text-ink-2" data-testid="confirm-exact">
-                    <Key k="a" /> confirms all {exact.length}{" "}
-                    {exact.length === 1 ? "duplicate" : "duplicates"} with the same DOI, PMID, or
-                    PMCID. <Key k="Enter" /> confirms the selected link only.
-                  </p>
-                ) : null}
-                {pending.length === 0 ? (
-                  <p className="mt-3 text-ink-2">No proposed link is open.</p>
-                ) : (
-                  <ol aria-label="Proposed links">
-                    {pending.map((proposal, i) => {
-                      const key = proposal.id ?? `proposal-${i}`;
-                      return (
-                        <li
-                          key={key}
-                          ref={rowRef(key)}
-                          data-testid="proposal"
-                          aria-current={isCurrent(key) || undefined}
-                          onClick={() => select(key)}
-                          className={`border-b border-rule py-4 pr-4 pl-5 ${selectedClass(key)}`}
-                        >
-                          <p className="flex flex-wrap items-baseline gap-x-4">
-                            <span className="font-semibold">{relations[proposal.relation]}</span>
-                            <span className="text-sm text-ink-2">
-                              {proposal.evidence.join(". ")}
-                            </span>
-                          </p>
-                          <ul className="mt-2 grid gap-1.5">
-                            {proposal.occurrence_ids.map((id) => (
-                              <RecordLine
-                                key={id}
-                                located={byOccurrence.get(id)}
-                                flag={flags.get(id)}
-                              />
-                            ))}
-                          </ul>
-                        </li>
-                      );
-                    })}
-                  </ol>
-                )}
-                {decided > 0 ? (
-                  <p className="mt-3 text-sm text-ink-3">
-                    You confirmed {decided} proposed {decided === 1 ? "link" : "links"}.
-                  </p>
-                ) : null}
-
-                <h2 className="mt-10 border-b border-rule-strong pb-1.5 text-lg font-semibold">
-                  {plural(labels.study)} with more than one record
-                  <span className="ml-3 text-sm font-normal text-ink-3">{linked.length}</span>
-                </h2>
-                {linked.length === 0 ? (
-                  <p className="mt-3 text-ink-2">No {study} has more than one record yet.</p>
-                ) : (
-                  <ol aria-label={`Linked ${studies_}`}>
-                    {linked.map((group) => (
-                      <LinkedStudy
-                        key={group.studyId}
-                        group={group}
-                        links={corpus.links ?? []}
-                        studyWord={study}
-                        reportWord={[report_, reports_]}
-                        locate={locate}
-                        recordRow={recordRow}
-                      />
-                    ))}
-                  </ol>
-                )}
-
-                <h2 className="mt-10 border-b border-rule-strong pb-1.5 text-lg font-semibold">
-                  Single-record {studies_}
-                  <span className="ml-3 text-sm font-normal text-ink-3">{single.length}</span>
-                </h2>
-                <ol aria-label={`Single-record ${studies_}`}>
-                  {single.map((group) =>
-                    group.reports.flatMap((report) =>
-                      report.records.map((record) => recordRow(locate(report, record))),
-                    ),
-                  )}
-                </ol>
-              </>
-            )}
-          </div>
-        </section>
-        {showDetail && openRecord ? (
-          <aside
-            aria-label="Enrichment of the selected record"
-            className="overflow-y-auto border-l border-rule-strong bg-sheet px-6 pt-8 pb-16"
-          >
-            <RecordDetail
-              record={detail?.id === openRecord.occurrence_id ? detail.record : undefined}
-              searchSource={openRecord.source}
-            />
-          </aside>
-        ) : null}
-      </div>
-      <footer className="flex h-10 items-center gap-5 border-t border-rule-strong bg-sheet-2 px-4 text-sm">
-        <KeyHint keys={["j", "k"]}>Move</KeyHint>
-        <KeyHint keys={["Enter"]} muted={!lead || current?.kind !== "proposal"}>
-          Confirm the link
-        </KeyHint>
-        <KeyHint keys={["a"]} muted={!lead || exact.length === 0}>
-          Confirm all duplicates on an ID
-        </KeyHint>
-        <KeyHint keys={["x"]} muted={current?.kind !== "record"}>
-          Mark
-        </KeyHint>
-        <KeyHint keys={["m"]} muted={!lead || marked.size < 2}>
-          Merge into one {study}
-        </KeyHint>
-        <KeyHint keys={["s"]} muted={!lead || current?.kind !== "record"}>
-          Split out
-        </KeyHint>
-        <KeyHint keys={["o"]} muted={!lead || current?.kind !== "record"}>
-          {detailOpen ? "Close the enrichment" : "Open the enrichment"}
-        </KeyHint>
-        <KeyHint keys={["r"]} muted={!lead || !corpus || runActive(enrichment)}>
-          Enrich again
-        </KeyHint>
-        <span
-          className="ml-auto truncate text-ink-2"
-          aria-live="polite"
-          data-testid="studies-notice"
-        >
-          {busy ? "Saving." : notice}
+  const scrollTo = (id: string) => {
+    const target = document.getElementById(id);
+    target?.scrollIntoView({ block: "start", behavior: "smooth" });
+    target?.focus({ preventScroll: true });
+  };
+  const openDuplicates = pending.filter((p) => p.relation === "same_record").length;
+  const settled = enrichment && !runActive(enrichment) ? enrichment.sources : [];
+  const mismatches = settled.filter(wrongMatch).reduce((n, s) => n + s.failed, 0);
+  const failures = settled.filter((s) => !wrongMatch(s)).reduce((n, s) => n + s.failed, 0);
+  // What needs the lead now, with a way to each; the figures are in the strip below.
+  // What needs the lead now, set after the corpus sum with a way to each. A confirmed link is
+  // no work, so it is not repeated here.
+  const openWork = (
+    <>
+      {openDuplicates > 0 ? (
+        <span className="text-sm text-unclear" data-testid="open-duplicates">
+          Kittum proposes {openDuplicates}{" "}
+          {openDuplicates === 1 ? "more duplicate" : "more duplicates"}.
         </span>
-      </footer>
+      ) : null}
+      {pending.length > 0 ? (
+        <SummaryLink onClick={() => scrollTo("proposals")}>
+          Review {pending.length} proposed {pending.length === 1 ? "link" : "links"}
+        </SummaryLink>
+      ) : null}
+      {mismatches > 0 ? (
+        <SummaryLink tone="waits" onClick={() => scrollTo(PROBLEMS_ID)}>
+          Check {mismatches} wrong {mismatches === 1 ? "match" : "matches"}
+        </SummaryLink>
+      ) : null}
+      {failures > 0 ? (
+        <SummaryLink tone="exclude" onClick={() => scrollTo(PROBLEMS_ID)}>
+          {failures} enrichment {failures === 1 ? "failure" : "failures"}
+        </SummaryLink>
+      ) : null}
+      {enrichment && enrichment.retracted > 0 ? (
+        <span className="text-sm font-semibold text-exclude">
+          {enrichment.retracted} retracted {enrichment.retracted === 1 ? "record" : "records"}
+        </span>
+      ) : null}
+    </>
+  );
+
+  const openSearch = currentRecord?.located.search;
+  const showDetail = detailOpen && openRecord !== null;
+  return (
+    <div
+      className={`grid h-full min-h-0 grid-rows-[minmax(0,1fr)] ${showDetail ? "grid-cols-[minmax(0,1fr)_minmax(26rem,34rem)]" : "grid-cols-1"}`}
+    >
+      <Page
+        kind="lead"
+        title={plural(labels.study)}
+        summary={corpus === null ? "The corpus is not built yet." : undefined}
+      >
+        {error ? (
+          <p role="alert" className="text-exclude">
+            {error}
+          </p>
+        ) : corpus === undefined ? (
+          <p className="text-ink-2">Loading the corpus.</p>
+        ) : corpus === null ? (
+          <div className="max-w-[880px]">
+            <BuildCorpus searches={searches} onBuilt={() => void load()} />
+          </div>
+        ) : (
+          <>
+            <CorpusCount
+              searches={corpus.searches ?? []}
+              records={records}
+              duplicates={duplicates}
+              reports={corpus.reports.length}
+              studies={studies.length}
+              eventSeq={corpus.revision.event_seq ?? 0}
+              reportWord={[report_, reports_]}
+              studyWord={[study, studies_]}
+            >
+              {openWork}
+            </CorpusCount>
+
+            <div className="mt-6">
+              <EnrichmentPanel
+                run={enrichment}
+                busy={enriching}
+                error={enrichError}
+                canEnrich={!runActive(enrichment)}
+                onEnrich={startEnrichment}
+              />
+            </div>
+
+            {/* The sheet: the links and records the lead works on, in flat groups. */}
+            <Panel className="mt-6">
+              <div className="grid gap-10">
+                {/* The open work first: what enrichment left to check, then links to confirm. */}
+                {enrichment && hasProblems(enrichment) ? (
+                  <EnrichmentProblems
+                    run={enrichment}
+                    records={recordNames}
+                    flags={flags}
+                    onOpenRecord={openRecordById}
+                  />
+                ) : null}
+                {pending.length > 0 ? (
+                  <Group
+                    id="proposals"
+                    title={
+                      project.stages.length > 0 ? (
+                        <span
+                          className="cursor-help underline decoration-ink-3 decoration-dotted underline-offset-4"
+                          title="Open screening keeps the links it started with. Links you confirm now count from the next stage."
+                        >
+                          Proposed links
+                        </span>
+                      ) : (
+                        "Proposed links"
+                      )
+                    }
+                    summary={`${pending.length} open${decided > 0 ? `, ${decided} confirmed` : ""}`}
+                    actions={
+                      exact.length > 0 ? (
+                        <span data-testid="confirm-exact">
+                          <Button
+                            kind="primary"
+                            keys={["a"]}
+                            disabled={busy}
+                            onClick={confirmExact}
+                          >
+                            Confirm all {exact.length}{" "}
+                            {exact.length === 1 ? "duplicate" : "duplicates"} with the same DOI,
+                            PMID, or PMCID
+                          </Button>
+                        </span>
+                      ) : null
+                    }
+                  >
+                    <ol aria-label="Proposed links" className="-mx-2 grid gap-1">
+                      {pending.map((proposal, i) => {
+                        const key = proposal.id ?? `proposal-${i}`;
+                        const selected = isCurrent(key);
+                        return (
+                          <li
+                            key={key}
+                            ref={rowRef(key)}
+                            data-testid="proposal"
+                            aria-current={selected || undefined}
+                            onClick={() => select(key)}
+                            className={`grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-6 rounded-[4px] py-2.5 pr-3 pl-4 ${selected ? "shadow-[inset_3px_0_0_var(--petrol)]" : ""}`}
+                          >
+                            <div className="min-w-0">
+                              <p className="flex flex-wrap items-baseline gap-x-3">
+                                <span className="font-semibold">
+                                  {relations[proposal.relation]}
+                                </span>{" "}
+                                <span className="text-sm text-ink-2">
+                                  {proposal.evidence.join(". ")}
+                                </span>
+                              </p>
+                              <ul className="mt-1.5 grid gap-1">
+                                {proposal.occurrence_ids.map((id) => (
+                                  <RecordLine
+                                    key={id}
+                                    located={byOccurrence.get(id)}
+                                    flag={flags.get(id)}
+                                  />
+                                ))}
+                              </ul>
+                            </div>
+                            {proposal.id ? (
+                              <Button
+                                size="sm"
+                                kind={selected ? "primary" : "secondary"}
+                                {...(selected ? { keys: ["Enter"] } : {})}
+                                disabled={busy}
+                                onClick={() => confirm(proposal)}
+                              >
+                                Confirm the link
+                              </Button>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </Group>
+                ) : null}
+
+                <Group
+                  title={`${plural(labels.study)} with more than one record`}
+                  summary={
+                    linked.length === 0
+                      ? `No ${study} has more than one record yet.`
+                      : `${linked.length} ${linked.length === 1 ? study : studies_}, each confirmed`
+                  }
+                >
+                  {linked.length > 0 ? (
+                    <div className="-mx-5">
+                      <LinkedHeader studyWord={study} />
+                      <ol aria-label={`Linked ${studies_}`}>
+                        {linkedShown.map((group) => {
+                          const ids = group.reports.flatMap((r) =>
+                            r.records.map((x) => x.occurrence_id),
+                          );
+                          const first = ids[0];
+                          return (
+                            <LinkedStudy
+                              key={group.studyId}
+                              group={group}
+                              open={ids.some((id) => isCurrent(id) || marked.has(id))}
+                              onOpen={() => first && select(first)}
+                              links={corpus.links ?? []}
+                              reportWord={[report_, reports_]}
+                              locate={locate}
+                              recordRow={recordRow}
+                            />
+                          );
+                        })}
+                      </ol>
+                      {linked.length > FOLDED ? (
+                        <div className="px-4 py-2">
+                          <Button
+                            kind="quiet"
+                            size="sm"
+                            onClick={() => setShowAllLinked((s) => !s)}
+                          >
+                            {linkedOpen ? "Show fewer" : `Show all ${linked.length}`}
+                          </Button>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </Group>
+
+                <Group
+                  title={`Single-record ${studies_}`}
+                  summary={`${single.length} ${single.length === 1 ? study : studies_} found by one search`}
+                >
+                  <ol aria-label={`Single-record ${studies_}`} className="-mx-2 grid gap-0.5">
+                    {singles.map((group) =>
+                      group.reports.flatMap((report) =>
+                        report.records.map((record) => recordRow(locate(report, record))),
+                      ),
+                    )}
+                  </ol>
+                  {single.length > FOLDED ? (
+                    <Button
+                      kind="quiet"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => setShowAllSingles((s) => !s)}
+                    >
+                      {singleShown ? "Show fewer" : `Show all ${single.length}`}
+                    </Button>
+                  ) : null}
+                </Group>
+              </div>
+            </Panel>
+          </>
+        )}
+        {corpus && (marked.size > 0 || notice || busy) ? (
+          <div className="sticky bottom-0 mt-6 flex items-center gap-4 rounded-[4px] border border-rule-strong bg-sheet px-4 py-2.5 text-sm shadow-[0_-4px_16px_rgb(0_0_0/0.06)]">
+            {marked.size > 0 ? (
+              <>
+                <span className="font-medium">
+                  {marked.size} {marked.size === 1 ? "record" : "records"} marked
+                </span>
+                <Button
+                  kind="primary"
+                  size="sm"
+                  keys={["m"]}
+                  disabled={busy || marked.size < 2}
+                  onClick={merge}
+                >
+                  Merge into one {study}
+                </Button>
+                <Button kind="quiet" size="sm" onClick={() => setMarked(new Set())}>
+                  Clear the marks
+                </Button>
+              </>
+            ) : null}
+            <span
+              className="ml-auto truncate text-ink-2"
+              aria-live="polite"
+              data-testid="studies-notice"
+            >
+              {busy
+                ? "Saving."
+                : (notice ?? (marked.size === 1 ? "Mark one more record to merge." : null))}
+            </span>
+          </div>
+        ) : null}
+      </Page>
+      {showDetail && openRecord ? (
+        <aside
+          aria-label="Enrichment of the selected record"
+          className="overflow-y-auto border-l border-rule-strong bg-sheet px-6 pt-6 pb-16"
+        >
+          <div className="mb-4 flex justify-end">
+            <Button kind="quiet" size="sm" keys={["Escape"]} onClick={() => setDetailOpen(false)}>
+              Close
+            </Button>
+          </div>
+          <RecordDetail
+            record={detail?.id === openRecord.occurrence_id ? detail.record : undefined}
+            searchSource={sourceLabel(openRecord.source, openSearch?.platform)}
+          />
+        </aside>
+      ) : null}
     </div>
   );
 }
 
-/** What the searches returned and what deduplication made of it, per search and in total. */
+/** A flat group inside the sheet: a small heading, one summary line, its content. */
+function Group({
+  id,
+  title,
+  summary,
+  actions,
+  children,
+}: {
+  id?: string;
+  title: React.ReactNode;
+  summary?: React.ReactNode;
+  actions?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  return (
+    <section id={id} tabIndex={id ? -1 : undefined} className="outline-none">
+      <header className="flex flex-wrap items-start gap-x-4 gap-y-1">
+        <div className="min-w-0 flex-1">
+          <h2 className="text-md font-semibold">{title}</h2>
+          {summary ? <p className="mt-0.5 text-sm text-ink-2">{summary}</p> : null}
+        </div>
+        {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
+      </header>
+      {children ? <div className="mt-3">{children}</div> : null}
+    </section>
+  );
+}
+
+/** Lists longer than this fold behind "Show all". */
+const FOLDED = 6;
+
+function SummaryLink({
+  tone,
+  onClick,
+  children,
+}: {
+  tone?: "exclude" | "waits";
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`font-medium underline underline-offset-2 ${
+        tone === "exclude" ? "text-exclude" : tone === "waits" ? "text-marker-edge" : "text-petrol"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** What deduplication made of the searches, as a sum. Each search's count is in the hover: the
+ * Search screen lists the searches. */
 function CorpusCount({
   searches,
   records,
   duplicates,
   reports,
   studies,
-  openDuplicates,
   eventSeq,
   reportWord: [report, reportsWord],
   studyWord: [study, studiesWord],
+  children,
 }: {
   searches: ReadonlyArray<CorpusSearch>;
   records: number;
   duplicates: number;
   reports: number;
   studies: number;
-  openDuplicates: number;
   eventSeq: number;
   reportWord: readonly [string, string];
   studyWord: readonly [string, string];
+  /** The open work, set after the sum. */
+  children?: React.ReactNode;
 }) {
-  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const bySearch = searches
+    .map((search) => `${sourceLabel(search.source, search.platform)} ${search.retrieved_count}`)
+    .join(", ");
   return (
-    <div className="mt-4">
-      <p className="max-w-[64ch] text-lg leading-snug" data-testid="corpus-count">
-        The searches returned {n(records, "record", "records")}.{" "}
-        {duplicates === 0
-          ? "None is a duplicate yet."
-          : `${duplicates} ${duplicates === 1 ? "is a duplicate" : "are duplicates"}.`}{" "}
-        That leaves {n(reports, report, reportsWord)} in {n(studies, study, studiesWord)}.
-      </p>
-      {openDuplicates > 0 ? (
-        <p className="mt-1 text-sm text-unclear" data-testid="open-duplicates">
-          Kittum proposes {n(openDuplicates, "more duplicate", "more duplicates")}. Confirm them
-          below to count them.
-        </p>
+    <p
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-md"
+      aria-label="Corpus figures"
+      title={`As of ledger event ${eventSeq}`}
+    >
+      <Term value={records} testId="corpus-records" title={bySearch || undefined}>
+        {records === 1 ? "record" : "records"} from the searches
+      </Term>
+      <Op>−</Op>
+      <Term value={duplicates} testId="corpus-duplicates">
+        {duplicates === 1 ? "duplicate" : "duplicates"}
+      </Term>
+      <Op>=</Op>
+      <Term value={reports} testId="corpus-reports">
+        {reports === 1 ? report : reportsWord}
+      </Term>
+      <Op>in</Op>
+      <Term value={studies} testId="corpus-studies">
+        {studies === 1 ? study : studiesWord}
+      </Term>
+      {children ? (
+        <span className="ml-6 flex flex-wrap items-baseline gap-x-4">{children}</span>
       ) : null}
-      {searches.length > 0 ? (
-        <table className="mt-4 text-sm" aria-label="Searches in the corpus">
-          <tbody>
-            {searches.map((search) => (
-              <tr key={search.id} data-testid="corpus-search">
-                <td className="py-0.5 pr-6">{search.platform}</td>
-                <td className="py-0.5 pr-6 text-ink-3">{day(search.started_at)}</td>
-                <td className="py-0.5 text-right tabular-nums">
-                  {n(search.retrieved_count, "record", "records")}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : null}
-      <p className="mt-2 text-xs text-ink-3">As of ledger event {eventSeq}.</p>
-    </div>
+    </p>
+  );
+}
+
+function Term({
+  value,
+  testId,
+  title,
+  children,
+}: {
+  value: number;
+  testId: string;
+  title?: string | undefined;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5" title={title}>
+      <span className="text-lg font-medium tabular-nums text-ink" data-testid={testId}>
+        {value}
+      </span>
+      <span className="text-ink-2">{children}</span>
+    </span>
+  );
+}
+
+function Op({ children }: { children: React.ReactNode }) {
+  return (
+    <span aria-hidden className="text-lg text-ink-2">
+      {children}
+    </span>
   );
 }
 
@@ -657,78 +974,150 @@ function reason(link: CorpusLink) {
   return `${link.evidence.join(". ")}. The methods lead confirmed it.`;
 }
 
-/** A study of several records: its study links, then each report with its records. */
+/** How two records matched, in a few words: the evidence up to its identifier ("Same DOI"). */
+const matchName = (link: CorpusLink) => {
+  if (link.linked_by === "merged_by_hand") return "Merged by hand";
+  const [evidence] = link.evidence;
+  if (!evidence) return "Confirmed";
+  const words = evidence.split(" ");
+  const cut = words.findIndex((w) => /\d/.test(w));
+  return cut > 0 ? words.slice(0, cut).join(" ") : evidence;
+};
+
+const LINKED_COLUMNS = "grid-cols-[minmax(0,1fr)_7.5rem_11rem_8.5rem_8.5rem]";
+
+/** The header of the linked studies' table. */
+function LinkedHeader({ studyWord }: { studyWord: string }) {
+  return (
+    <div
+      className={`grid ${LINKED_COLUMNS} gap-x-4 border-b border-rule-strong px-4 py-1.5 text-xs font-medium text-ink-2`}
+      aria-hidden
+    >
+      <span>{studyWord.charAt(0).toUpperCase() + studyWord.slice(1)}</span>
+      <span>Match</span>
+      <span>Found by</span>
+      <span>Status</span>
+      <span />
+    </div>
+  );
+}
+
+/** A study of several records as one row: its name, how its records matched, the searches that
+ * found them, and who confirmed it. Its reports and records open with the selection. */
 function LinkedStudy({
   group,
+  open,
+  onOpen,
   links,
-  studyWord,
-  reportWord: [report, reportsWord],
+  reportWord: [, reportsWord],
   locate,
   recordRow,
 }: {
   group: Study;
+  open: boolean;
+  onOpen: () => void;
   links: ReadonlyArray<CorpusLink>;
-  studyWord: string;
   reportWord: readonly [string, string];
   locate: (report: CorpusReport, record: SourceRecord) => Located;
   recordRow: (located: Located, titled?: boolean) => React.ReactNode;
 }) {
   const inStudy = new Set(group.reports.flatMap((r) => r.records.map((x) => x.occurrence_id)));
-  const studyLinks = links.filter(
-    (l) => l.relation === "same_study" && l.occurrence_ids.some((id) => inStudy.has(id)),
-  );
-  const records = recordCount(group);
+  const ours = links.filter((l) => l.occurrence_ids.some((id) => inStudy.has(id)));
+  const studyLinks = ours.filter((l) => l.relation === "same_study");
+  const matches = [...new Set(ours.map(matchName))];
+  const byHand = ours.some((l) => l.linked_by === "merged_by_hand");
+  const found = [
+    ...new Set(
+      group.reports.flatMap((r) =>
+        r.records.map((record) => {
+          const { search } = locate(r, record);
+          return sourceLabel(record.source, search?.platform);
+        }),
+      ),
+    ),
+  ];
+  const first = group.reports[0]?.records[0];
+  const label = first ? studyLabel(first.authors, first.year) : null;
+  const registry = group.reports.some(isRegistry);
   return (
-    <li className="border-b border-rule py-4" data-testid="linked-study">
-      <p className="pl-5 text-sm text-ink-3">
-        One {studyWord},{" "}
-        {group.reports.length === 1 ? `1 ${report}` : `${group.reports.length} ${reportsWord}`},{" "}
-        {records} records
-      </p>
-      {studyLinks.map((l) => (
-        <Why key={`${l.revision_id}-${l.occurrence_ids.join()}`} label="Linked">
-          {reason(l)}
-        </Why>
-      ))}
-      <ul className="mt-2 grid gap-3">
-        {group.reports.map((r) => {
-          const inReport = new Set(r.records.map((x) => x.occurrence_id));
-          const reportLinks = links.filter(
-            (l) =>
-              l.relation !== "same_study" &&
-              l.occurrence_ids.filter((id) => inReport.has(id)).length >= 2,
-          );
-          const [first] = r.records;
-          return (
-            <li
-              key={r.report_id}
-              data-testid="study-report"
-              data-registry={isRegistry(r) || undefined}
-              className="ml-5 border-l-2 border-rule pl-3"
-            >
-              <p className="pr-4 text-sm">
-                {isRegistry(r) ? (
-                  <span className="mr-2 rounded-[2px] bg-sheet-2 px-1.5 py-px text-xs font-medium text-ink-2">
-                    Registry entry
-                  </span>
+    <li
+      className={`border-b border-rule last:border-b-0 ${open ? "bg-sheet-2/50" : ""}`}
+      data-testid="linked-study"
+      data-open={open || undefined}
+    >
+      <div className={`grid ${LINKED_COLUMNS} items-center gap-x-4 px-4 py-2 text-sm`}>
+        {/* Two lines when folded; the whole title once the row is open. */}
+        <span className={`min-w-0 leading-snug ${open ? "" : "line-clamp-2"}`} title={first?.title}>
+          {label ? <span className="font-medium">{label}</span> : null}
+          {label ? " " : null}
+          {first?.title}
+        </span>
+        <span title={ours.flatMap((l) => l.evidence).join(". ")}>{matches.join(", ")}</span>
+        <span data-testid="found-by">{found.join(", ")}</span>
+        <span className="inline-flex items-center gap-1.5">
+          <Mark term={{ ...ACCEPTED, label: byHand ? "Merged by hand" : "Confirmed" }} />
+          {byHand ? "Merged by hand" : "Confirmed"}
+        </span>
+        <span className="text-right">
+          {open ? null : (
+            <Button size="sm" kind="quiet" onClick={onOpen}>
+              Show {recordCount(group)} records
+            </Button>
+          )}
+        </span>
+      </div>
+      <div hidden={!open} className="px-4 pb-3">
+        {registry || group.reports.length > 1 ? (
+          <p className="text-xs text-ink-2">
+            {group.reports.length} {reportsWord}, {recordCount(group)} records
+          </p>
+        ) : null}
+        {studyLinks.map((l) => (
+          <Why key={`${l.revision_id}-${l.occurrence_ids.join()}`} label="Linked" inset>
+            {reason(l)}
+          </Why>
+        ))}
+        <ul className="mt-1 grid gap-2">
+          {group.reports.map((r) => {
+            const inReport = new Set(r.records.map((x) => x.occurrence_id));
+            const reportLinks = links.filter(
+              (l) =>
+                l.relation !== "same_study" &&
+                l.occurrence_ids.filter((id) => inReport.has(id)).length >= 2,
+            );
+            const [head] = r.records;
+            return (
+              <li
+                key={r.report_id}
+                data-testid="study-report"
+                data-registry={isRegistry(r) || undefined}
+              >
+                {/* One report: the row above names it. Several: each report by its title. */}
+                {group.reports.length > 1 ? (
+                  <p className="pr-4 text-sm leading-snug">
+                    {isRegistry(r) ? (
+                      <>
+                        <span className="mr-2 rounded-[3px] border border-rule-strong px-1.5 py-px text-xs font-medium text-ink-2">
+                          Registry entry
+                        </span>{" "}
+                      </>
+                    ) : null}
+                    <span className="font-medium">{head?.title}</span>
+                  </p>
                 ) : null}
-                <span className="font-medium">{first?.title}</span>
-                {r.records.length > 1 ? (
-                  <span className="ml-2 text-ink-3" data-testid="found-by">
-                    Found by {r.records.length} searches
-                  </span>
-                ) : null}
-              </p>
-              {reportLinks.map((l) => (
-                <Why key={`${l.revision_id}-${l.occurrence_ids.join()}`} label="Merged" inset>
-                  {reason(l)}
-                </Why>
-              ))}
-              <ul>{r.records.map((record) => recordRow(locate(r, record), false))}</ul>
-            </li>
-          );
-        })}
-      </ul>
+                {reportLinks.map((l) => (
+                  <Why key={`${l.revision_id}-${l.occurrence_ids.join()}`} label="Merged" inset>
+                    {reason(l)}
+                  </Why>
+                ))}
+                <ul className="mt-1">
+                  {r.records.map((record) => recordRow(locate(r, record), false))}
+                </ul>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </li>
   );
 }
@@ -745,9 +1134,9 @@ function Why({
   return (
     <p
       data-testid="link-reason"
-      className={`mt-1 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 pr-4 text-sm ${inset ? "" : "pl-5"}`}
+      className={`mt-1 grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2 pr-4 text-sm ${inset ? "" : "px-5"}`}
     >
-      <span className="text-ink-3">{label}</span>
+      <span className="font-medium text-ink-2">{label}</span>
       <span className="text-ink-2">{children}</span>
     </p>
   );
@@ -761,16 +1150,18 @@ function RecordLine({
   flag: RecordFlag | undefined;
 }) {
   if (!located) {
-    return <li className="text-sm text-ink-3">This record is not in the current revision.</li>;
+    return <li className="text-sm text-ink-2">This record is not in the current revision.</li>;
   }
   const { record, search } = located;
   return (
-    <li className="grid grid-cols-[8rem_minmax(0,1fr)] gap-3 text-sm">
-      <span className="narrow text-ink-3">{search?.platform ?? record.source}</span>
+    <li className="grid grid-cols-[9rem_minmax(0,1fr)] gap-3 text-sm">
+      <span className="text-ink-2" title={`Source ID: ${record.source}`}>
+        {sourceLabel(record.source, search?.platform)}
+      </span>
       <span>
         <Flags flag={flag} />
-        {record.title}
-        <span className="ml-2 text-ink-3">{ids(record)}</span>
+        <Named record={record} />
+        {ids(record) ? <span className="ml-2 text-ink-2">{ids(record)}</span> : null}
       </span>
     </li>
   );
@@ -782,13 +1173,13 @@ function Flags({ flag }: { flag: RecordFlag | undefined }) {
   return (
     <span className="mr-2" data-testid="record-flag">
       {flag.retracted ? (
-        <span className="mr-2 rounded-[2px] bg-exclude px-1.5 py-px text-xs font-semibold text-sheet">
+        <span className="mr-2 rounded-[3px] bg-exclude px-1.5 py-px text-xs font-semibold text-sheet">
           Retracted
         </span>
       ) : null}
       {flag.updates.map((kind) => (
         <span key={kind} className="mr-2 text-xs font-medium text-unclear">
-          {noticeName(kind)}
+          {noticeName(kind)}{" "}
         </span>
       ))}
     </span>
@@ -796,7 +1187,8 @@ function Flags({ flag }: { flag: RecordFlag | undefined }) {
 }
 
 /** One search result: the search that found it, then the record as that search returned it.
- * Under its report's title, a record shows its identifiers only. */
+ * Under its report's title, a record shows its identifiers only. The selected record carries
+ * its actions. */
 function StudyRecord({
   located: { record, search },
   titled,
@@ -805,6 +1197,7 @@ function StudyRecord({
   rowRef,
   onSelect,
   flag,
+  actions,
 }: {
   located: Located;
   titled: boolean;
@@ -813,6 +1206,7 @@ function StudyRecord({
   rowRef: (el: HTMLElement | null) => void;
   onSelect: () => void;
   flag: RecordFlag | undefined;
+  actions: React.ReactNode;
 }) {
   return (
     <li
@@ -821,30 +1215,64 @@ function StudyRecord({
       data-marked={marked || undefined}
       data-testid="study-record"
       onClick={onSelect}
-      className={`grid grid-cols-[1.5rem_8rem_minmax(0,1fr)] items-baseline gap-3 py-1.5 pr-4 pl-5 text-sm ${
-        current ? "bg-sheet shadow-[inset_3px_0_0_var(--petrol)]" : ""
+      className={`grid min-h-9 grid-cols-[1.5rem_9rem_minmax(0,1fr)_auto] items-center gap-3 py-1.5 pr-3 pl-3 text-sm ${
+        current ? "bg-petrol-wash/40 shadow-[inset_3px_0_0_var(--petrol)]" : ""
       } ${marked ? "bg-petrol-wash" : ""}`}
     >
-      <span>{marked ? <Key k="x" on /> : null}</span>
-      <span className="narrow text-ink-3" data-testid="record-search">
-        {search?.platform ?? record.source}
-        {search ? <span className="block text-2xs">{day(search.started_at)}</span> : null}
+      <span>
+        {marked ? (
+          <span
+            className="inline-flex size-4 items-center justify-center rounded-[3px] bg-petrol text-2xs font-bold text-petrol-ink"
+            aria-label="Marked"
+            role="img"
+          >
+            ✓
+          </span>
+        ) : null}
+      </span>
+      <span
+        data-testid="record-search"
+        title={[
+          `Source ID: ${record.source}`,
+          search ? `Search run ${formatDate(search.started_at)}` : null,
+        ]
+          .filter(Boolean)
+          .join(". ")}
+      >
+        {sourceLabel(record.source, search?.platform)}
       </span>
       <span>
         <Flags flag={flag} />
-        {titled ? record.title : null}
-        <span className={titled ? "ml-2 text-ink-3" : "text-ink-2"}>{ids(record)}</span>
+        {titled ? <Named record={record} /> : null}
+        {titled && ids(record) ? " " : null}
+        <span className="text-ink-2">{ids(record)}</span>
         {flag?.open_access ? (
-          <span className="ml-2 text-xs text-include">Open-access location</span>
+          <>
+            {" "}
+            <span className="ml-2 text-xs font-medium text-include">Open-access location</span>
+          </>
         ) : null}
       </span>
+      <span>{actions}</span>
     </li>
   );
 }
 
+/** A record as a study is named, "Free 2011", then its title. */
+function Named({ record }: { record: SourceRecord }) {
+  const label = studyLabel(record.authors, record.year);
+  return (
+    <>
+      {label ? <span className="font-medium">{label}</span> : null}
+      {label ? " " : null}
+      <span>{record.title}</span>
+    </>
+  );
+}
+
+/** A record's identifiers; its year is in its study name. */
 const ids = (record: SourceRecord) =>
   [
-    record.year ? String(record.year) : null,
     record.pmid ? `PMID ${record.pmid}` : null,
     record.pmcid ?? null,
     record.doi ? `DOI ${record.doi}` : null,

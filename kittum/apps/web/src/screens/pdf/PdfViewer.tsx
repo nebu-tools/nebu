@@ -31,6 +31,9 @@ export interface TextSelection {
 const GAP = 16;
 const VISIBLE_RATIO = 0.9;
 const MAX_WIDTH = 860;
+/** Zoom steps relative to the default page width; "fit" fills the pane's width. */
+const ZOOMS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2] as const;
+type Zoom = (typeof ZOOMS)[number] | "fit";
 /** Pages kept per workbench, most recently used last; older ones are dropped and reloaded. */
 const PAGE_CACHE_SIZE = 16;
 const pageCaches = new WeakMap<Workbench, Map<string, Promise<PageLayer>>>();
@@ -67,6 +70,7 @@ export function PdfViewer({
   onSelection,
   onCurrentVisible,
   label,
+  targetLabel = "Show the evidence",
 }: {
   workbench: Workbench;
   layer: LayerSummary;
@@ -76,11 +80,18 @@ export function PdfViewer({
   onSelection?: (selection: TextSelection | null) => void;
   onCurrentVisible?: (visible: boolean) => void;
   label: string;
+  /** The toolbar button that brings `target` back into view. */
+  targetLabel?: string;
 }) {
   const frame = useRef<HTMLDivElement>(null);
   const list = useRef<LegendListRef>(null);
   const [width, setWidth] = useState(0);
   const [visiblePage, setVisiblePage] = useState(1);
+  const [zoom, setZoom] = useState<Zoom>(1);
+  // Each press of the evidence button scrolls to the target again, even the same one.
+  const [jumps, setJumps] = useState(0);
+  // The page number being typed, while the page field is open.
+  const [typing, setTyping] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     const element = frame.current;
@@ -90,7 +101,8 @@ export function PdfViewer({
     return () => observer.disconnect();
   }, []);
 
-  const pageWidth = Math.max(0, Math.min(width - 2 * GAP, MAX_WIDTH));
+  const fitWidth = Math.max(0, width - 2 * GAP);
+  const pageWidth = Math.round(zoom === "fit" ? fitWidth : Math.min(fitWidth, MAX_WIDTH) * zoom);
   // The source is on screen when every page it touches reports all of its boxes on screen.
   const currentPages = [
     ...new Set(
@@ -115,20 +127,36 @@ export function PdfViewer({
     [layer.pages, pageWidth],
   );
 
+  const pageTop = (index: number) => heights.slice(0, index).reduce((a, b) => a + b, 0);
   useEffect(() => {
     if (!target || pageWidth === 0) return;
     const index = target.box.page - 1;
     const size = layer.pages[index];
     if (!size) return;
-    const before = heights.slice(0, index).reduce((a, b) => a + b, 0);
     const y = (target.box.y0 / size.height) * (heights[index] ?? 0);
     void list.current?.scrollToOffset({
-      offset: Math.max(0, GAP + before + y - 120),
+      offset: Math.max(0, GAP + pageTop(index) + y - 120),
       animated: false,
     });
-    // Only a new target moves the page; re-renders of the same target leave the reader's scroll alone.
+    // Only a new target (or a press of the evidence button, or a new zoom) moves the page;
+    // re-renders of the same target leave the reader's scroll alone.
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [target?.key, pageWidth]);
+  }, [target?.key, pageWidth, jumps]);
+
+  const goTo = (page: number) => {
+    const to = Math.min(Math.max(1, Math.round(page)), layer.pages.length);
+    void list.current?.scrollToOffset({ offset: pageTop(to - 1), animated: false });
+    setVisiblePage(to);
+  };
+  const zoomBy = (step: 1 | -1) => {
+    const current = zoom === "fit" ? fitWidth / Math.min(fitWidth, MAX_WIDTH) : zoom;
+    const next =
+      step === 1
+        ? ZOOMS.find((z) => z > current + 0.01)
+        : ZOOMS.findLast((z) => z < current - 0.01);
+    if (next !== undefined) setZoom(next);
+  };
+  const percent = Math.round((pageWidth / Math.max(1, Math.min(fitWidth, MAX_WIDTH))) * 100);
 
   // Load the pages around the target before they scroll into view.
   useEffect(() => {
@@ -173,13 +201,118 @@ export function PdfViewer({
 
   return (
     <section aria-label={label} className="flex h-full min-h-0 flex-col bg-paper">
-      <div className="flex h-8 flex-none items-center justify-between border-b border-rule px-4 text-xs text-ink-3">
-        <span>{label}</span>
-        <span>
-          Page {visiblePage} of {layer.pages.length}
+      <div
+        className="flex h-10 flex-none items-center gap-3 px-4 text-sm text-ink-2"
+        role="toolbar"
+        aria-label="Document"
+        // A click on a tool keeps the keyboard focus where it was, so the screen's keys go on.
+        onMouseDown={(event) => {
+          if ((event.target as HTMLElement).closest("button")) event.preventDefault();
+        }}
+      >
+        <span className="min-w-0 flex-1 truncate" title={label}>
+          {label}
+        </span>
+        {target ? (
+          <button
+            type="button"
+            className={TOOL}
+            onClick={() => setJumps((n) => n + 1)}
+            title="Scroll back to the highlighted passage"
+          >
+            {targetLabel}
+          </button>
+        ) : null}
+        <span className="flex flex-none items-center gap-1" aria-label="Pages">
+          <button
+            type="button"
+            className={ICON}
+            aria-label="Previous page"
+            disabled={visiblePage <= 1}
+            onClick={() => goTo(visiblePage - 1)}
+          >
+            ‹
+          </button>
+          {typing !== null ? (
+            <form
+              className="flex items-center gap-1"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const page = Number(typing);
+                if (Number.isFinite(page) && page > 0) goTo(page);
+                setTyping(null);
+              }}
+            >
+              <label className="flex items-center gap-1">
+                Page
+                <input
+                  autoFocus
+                  inputMode="numeric"
+                  aria-label="Go to page"
+                  value={typing}
+                  onChange={(event) => setTyping(event.target.value.replace(/\D/g, ""))}
+                  onBlur={() => setTyping(null)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") setTyping(null);
+                  }}
+                  className="h-7 w-11 rounded-[3px] border border-rule-strong bg-sheet px-1.5 text-center tabular-nums"
+                />
+              </label>
+              <span>of {layer.pages.length}</span>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className={`${TOOL} tabular-nums`}
+              title="Go to a page"
+              onClick={() => setTyping(String(visiblePage))}
+            >
+              Page {visiblePage} of {layer.pages.length}
+            </button>
+          )}
+          <button
+            type="button"
+            className={ICON}
+            aria-label="Next page"
+            disabled={visiblePage >= layer.pages.length}
+            onClick={() => goTo(visiblePage + 1)}
+          >
+            ›
+          </button>
+        </span>
+        <span className="flex flex-none items-center gap-1" aria-label="Zoom">
+          <button
+            type="button"
+            className={ICON}
+            aria-label="Zoom out"
+            disabled={zoom !== "fit" && zoom <= ZOOMS[0]}
+            onClick={() => zoomBy(-1)}
+          >
+            −
+          </button>
+          <span className="w-11 text-center tabular-nums" aria-live="polite">
+            {percent}%
+          </span>
+          <button
+            type="button"
+            className={ICON}
+            aria-label="Zoom in"
+            disabled={zoom !== "fit" && zoom >= ZOOMS[ZOOMS.length - 1]!}
+            onClick={() => zoomBy(1)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            className={TOOL}
+            aria-pressed={zoom === "fit"}
+            onClick={() => setZoom(zoom === "fit" ? 1 : "fit")}
+          >
+            Fit width
+          </button>
         </span>
       </div>
-      <div ref={frame} className="min-h-0 flex-1" onMouseUp={select}>
+      <div ref={frame} className="min-h-0 flex-1 overflow-x-auto" onMouseUp={select}>
         {pageWidth > 0 ? (
           <LegendList
             ref={list}
@@ -189,7 +322,7 @@ export function PdfViewer({
             getFixedItemSize={(_, index) => heights[index] ?? 0}
             estimatedItemSize={heights[0] ?? 800}
             drawDistance={1200}
-            style={{ height: "100%" }}
+            style={{ height: "100%", width: Math.max(width, pageWidth + 2 * GAP) }}
             onViewableItemsChanged={({ viewableItems }) => {
               const first = viewableItems[0]?.item;
               if (first) setVisiblePage(first.page);
@@ -211,6 +344,11 @@ export function PdfViewer({
     </section>
   );
 }
+
+const TOOL =
+  "inline-flex h-7 items-center rounded-[4px] px-2 text-sm text-petrol hover:bg-petrol-wash disabled:opacity-40";
+const ICON =
+  "inline-flex h-7 w-7 items-center justify-center rounded-[4px] border border-rule-strong bg-sheet text-md text-ink hover:bg-sheet-2 disabled:cursor-not-allowed disabled:opacity-40";
 
 function PageView({
   workbench,
@@ -304,7 +442,7 @@ function PageView({
   return (
     <div className="flex justify-center pt-4" style={{ height: height + GAP }}>
       <div
-        className="relative bg-white shadow-[0_0_0_1px_var(--rule),0_1px_3px_rgb(0_0_0/0.08)]"
+        className="relative rounded-[2px] bg-white shadow-raised"
         ref={frame}
         style={{ width, height }}
         data-page={size.page}

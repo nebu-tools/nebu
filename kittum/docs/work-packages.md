@@ -422,6 +422,18 @@ Modules `kittum.judge` and `kittum.models`. Needs: `protocol`, `core`.
   `INSTRUCTIONS_VERSION` and `instructions_hash` version the wordings; `prompt_template` gives
   the editor the fixed parts (`GET /api/judge/prompt-template`), and `rendered_prompt` the
   messages and schema for one record.
+- Prompt `judge.v3` (`PROMPT_VERSION` for new configs): the answer, quote, and absence rules once
+  above the criteria (inside `{criteria}`, so a team's own messages keep them), and each criterion
+  under "### Criterion N: <short label> (<slot>)" with its ID once as the answer key, one
+  language without a label, and only its own keywords and examples. The numbers are the topic's
+  permanent ones (`screening.criterion_numbers`), passed as `numbers` by screening's judge and
+  bench jobs and the prompt view. Every version stays renderable: `build_request`,
+  `register_config`, the template hashes, and `prompt_template` take the config's version, so
+  `judge.v2` configs, stored requests, and recordings keep their bytes. A worker whose judge is
+  `<recipe>@judge.v3` judges a stage opened under `<recipe>@judge.v2` with that config
+  (`load_config`); the demo replay stays on `judge.v2` (its answers are to that prompt), and an
+  LLM replay sends the version its recording notes (`judge.v2` when it notes none). The
+  workbench's prompt view renders in the stage's config's version (`config_prompt_version`).
 - A small gold set (`tests/judge/fixtures/demo_gold.json`): the demo's 30 title and abstract
   items, the screeners' decisions from the end-to-end plan, and recorded answers from
   GLM-5.3-Flash and qwen3.5:4b. The filter verifies 2 of GLM's 5 correct `not_met` readings (was

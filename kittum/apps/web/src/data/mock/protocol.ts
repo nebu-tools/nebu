@@ -84,6 +84,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_POP_ADV_BTC",
     short_label: "Advanced BTC",
+    exclusion_reason: null,
     slot: "population",
     text_en:
       "Adults with locally advanced or metastatic biliary tract cancer: cholangiocarcinoma, gallbladder or ampullary carcinoma",
@@ -99,6 +100,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_POP_PRETREATED",
     short_label: "Pretreated",
+    exclusion_reason: null,
     slot: "population",
     text_en: "Disease progressed after at least one prior systemic therapy for advanced disease",
     text_de:
@@ -113,6 +115,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_INT_ARMS",
     short_label: null,
+    exclusion_reason: null,
     slot: "intervention",
     text_en:
       "Ivosidenib, or a protocol comparator in at least one arm: FOLFOX, fluorouracil-based chemotherapy, or best supportive care",
@@ -128,6 +131,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_DES_RCT",
     short_label: "RCT",
+    exclusion_reason: null,
     slot: "study_type",
     text_en: "Randomised controlled trial",
     text_de: "Randomisierte kontrollierte Studie",
@@ -141,6 +145,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_PUB_PRIMARY",
     short_label: null,
+    exclusion_reason: null,
     slot: "other",
     text_en:
       "Report or secondary analysis of a trial; not a review, meta-analysis, pooled analysis, protocol, or letter",
@@ -156,6 +161,7 @@ export const CRITERIA: ReadonlyArray<Criterion> = [
   {
     id: "C_OUT_RELEVANT",
     short_label: "Outcomes",
+    exclusion_reason: null,
     slot: "outcome",
     text_en:
       "Reports a patient-relevant endpoint: overall survival, symptoms, health-related quality of life, or adverse events",
@@ -179,6 +185,7 @@ export const PROTOCOL: ProtocolVersion = {
       {
         id: SCOPE_A,
         label: "A: adults with IDH1-mutant cholangiocarcinoma after at least one prior therapy",
+        short_label: null,
         population: "Adults with IDH1-mutant cholangiocarcinoma after at least one prior therapy",
         intervention: "Ivosidenib",
         comparators: ["Best supportive care"],

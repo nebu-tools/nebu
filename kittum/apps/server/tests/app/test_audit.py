@@ -638,9 +638,6 @@ def test_a_tampered_decision_is_pinpointed_and_a_bundle_sealed_before_still_veri
     assert theirs == {
         "ok": False,
         "checked_through_seq": None,
-        "verify": None,
-        "events": None,
-        "by_type": None,
     }
 
     # The bundle sealed before the edit still verifies: it holds its own copy of the chain. A new

@@ -5,20 +5,35 @@
 import { Link, useRouteContext } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { ExtractionReview, Proposal, ReviewField } from "../../data/schema.ts";
+import type { Acceptance, ExtractionReview, Proposal, ReviewField } from "../../data/schema.ts";
 import { run, WorkbenchError } from "../../data/workbench.ts";
-import { Key, KeyHint } from "../../ui/Key.tsx";
+import { formatDateTime } from "../../lib/format.ts";
+import { keyWords } from "../../lib/labels.ts";
+import { Help } from "../../ui/Help.tsx";
+import { Button } from "../../ui/Button.tsx";
 import { useKeys } from "../../ui/keys.ts";
 import { ACCEPTED, Mark, PROPOSAL_STATUS, Status } from "../../ui/Status.tsx";
+import { studyName, useStudyNames } from "../appraisal/studyNames.ts";
 import { PdfViewer } from "../pdf/PdfViewer.tsx";
 import type { PageHighlight, TextSelection } from "../pdf/PdfViewer.tsx";
 import { useProject } from "../project.tsx";
+import { ValueHistory } from "./History.tsx";
+import {
+  AcceptedBar,
+  Backing,
+  estimateFacts,
+  journalOf,
+  PolicyTag,
+  studyFromText,
+  quantityLabel,
+  ToVerify,
+  unitBeside,
+  unitGap,
+} from "./marks.tsx";
+import type { EstimateFacts, Path } from "./marks.tsx";
 
 /** How long the source must be on screen before Enter accepts; the server checks it too. */
 export const VIEW_MS = 400;
-
-type Path = "janus" | "llm";
-const PATH_NAME: Record<Path, string> = { janus: "Janus", llm: "LLM" };
 
 interface FieldState {
   readonly picked: Path | null;
@@ -26,6 +41,8 @@ interface FieldState {
   /** The accepted value, when it is the reviewer's own. */
   readonly value: string | null;
   readonly edited: TextSelection | null;
+  /** The acceptance as the server recorded it: who, when, from which path, how long they looked. */
+  readonly acceptance: Acceptance | null;
 }
 
 /** An edit in progress: the selection and the value the reviewer confirms from it. */
@@ -41,14 +58,6 @@ const agreement = (field: ReviewField) =>
       ? ("agree" as const)
       : ("single" as const);
 
-const SINGLE: Record<ReviewField["agreement"], string> = {
-  janus_only: "Janus only",
-  llm_only: "LLM only",
-  neither: "Neither path",
-  agree: "Both agree",
-  disagree: "The paths disagree",
-};
-
 /** The first number in a selection, as the value an edit proposes. */
 const firstNumber = (text: string) => /[-−–]?\d+(?:[.,·]\d+)*/u.exec(text)?.[0] ?? text.trim();
 
@@ -57,9 +66,12 @@ const failedChecks = (p: Proposal | undefined) =>
 
 export function ExtractionScreen({ review }: { review: ExtractionReview }) {
   const { workbench } = useRouteContext({ from: "/p/$projectId" });
-  const { project, me, labels } = useProject();
+  const { project, me } = useProject();
+  const studyNames = useStudyNames();
   const anchors = useMemo(() => new Map(review.anchors.map((a) => [a.id, a])), [review.anchors]);
   const [selected, setSelected] = useState(0);
+  // All fields in the schema's order, or only those still to verify.
+  const [filter, setFilter] = useState<"all" | "open">("all");
   const [fields, setFields] = useState<Record<string, FieldState>>(() =>
     Object.fromEntries(
       review.fields.map((f) => [
@@ -69,6 +81,7 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
           accepted: f.accepted,
           value: f.acceptance?.edited ? f.acceptance.value : null,
           edited: null,
+          acceptance: f.acceptance,
         },
       ]),
     ),
@@ -126,8 +139,28 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
     return out;
   }, [other, source?.id, sourceBoxes, field?.id]);
   const firstBox = sourceBoxes?.[0];
+  // A table cell is checked against its row and column headers: the jump lands higher on the
+  // page, so the table's top (its caption and header rows) stays in view above the cell.
+  const tableTop = useMemo(() => {
+    const cell = edited ? undefined : source?.cells?.[0];
+    const page = firstBox?.page;
+    const size = page ? review.layer.pages[page - 1] : undefined;
+    if (!cell || !firstBox || !size) return null;
+    const tops = review.anchors
+      .filter((a) => a.cells?.some((c) => c.table_id === cell.table_id))
+      .flatMap((a) => a.boxes)
+      .filter((b) => b.page === page)
+      .map((b) => b.y0);
+    const top = Math.min(firstBox.y0, ...tops) - size.height * 0.09;
+    return Math.max(0, top, firstBox.y0 - size.height * 0.4);
+  }, [edited, source, firstBox, review.anchors, review.layer.pages]);
   const target =
-    field && firstBox ? { key: `${field.id}-${shown?.path}-${nudge}`, box: firstBox } : null;
+    field && firstBox
+      ? {
+          key: `${field.id}-${shown?.path}-${nudge}`,
+          box: tableTop === null ? firstBox : { ...firstBox, y0: tableTop },
+        }
+      : null;
 
   const sourceKey = field
     ? `${field.id}|${shown?.path}|${edited ? `edit:${edited.start}-${edited.end}` : (source?.id ?? "none")}`
@@ -164,17 +197,55 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
     document.addEventListener("visibilitychange", onVisibility);
     return () => document.removeEventListener("visibilitychange", onVisibility);
   }, []);
+  // A new selection brings its row and the history under it into view, the row first if both do
+  // not fit. The first field is in view on arrival, so nothing scrolls then: the reviewer's own
+  // scrolling is never undone by the screen settling.
+  const scrolledFor = useRef(field?.id);
   useEffect(() => {
-    rows.current.get(field?.id ?? "")?.scrollIntoView({ block: "nearest" });
+    if (scrolledFor.current === field?.id) return;
+    scrolledFor.current = field?.id;
+    const row = rows.current.get(field?.id ?? "");
+    row?.parentElement?.scrollIntoView({ block: "nearest" });
+    row?.scrollIntoView({ block: "nearest" });
   }, [field?.id]);
   const viewedMs = () =>
     (viewed.current.get(sourceKey) ?? 0) +
     (visible.current?.key === sourceKey ? performance.now() - visible.current.since : 0);
 
+  /** The fields the list shows: with the filter on, the open ones and the one in hand. */
+  const listed = (at: number) =>
+    review.fields
+      .map((_, i) => i)
+      .filter((i) => filter === "all" || i === at || !fields[review.fields[i]!.id]?.accepted);
   const move = (step: number) => {
-    setSelected((s) => Math.max(0, Math.min(review.fields.length - 1, s + step)));
+    setSelected((s) => {
+      const order = listed(s);
+      const here = order.indexOf(s);
+      return order[Math.max(0, Math.min(order.length - 1, here + step))] ?? s;
+    });
     setEditing(null);
     setNotice(null);
+  };
+  /** The next value still to verify after the selected one, round to the start. */
+  const nextOpen = () => {
+    const n = review.fields.length;
+    for (let step = 1; step <= n; step++) {
+      const i = (selected + step) % n;
+      if (!fields[review.fields[i]!.id]?.accepted) {
+        setSelected(i);
+        setEditing(null);
+        setNotice(null);
+        return;
+      }
+    }
+  };
+  const showOpen = (on: boolean) => {
+    setFilter(on ? "open" : "all");
+    if (on && fields[review.fields[selected]?.id ?? ""]?.accepted) {
+      const next = review.fields.findIndex((f) => !fields[f.id]?.accepted);
+      if (next >= 0) setSelected(next);
+    }
+    setEditing(null);
   };
 
   const accept = async ({ override = false }: { override?: boolean } = {}) => {
@@ -234,6 +305,7 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
           accepted: acceptance.path,
           value: acceptance.edited ? acceptance.value : null,
           edited: editing?.selection ?? null,
+          acceptance,
         },
       }));
       setEditing(null);
@@ -320,7 +392,7 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
     const seen = groupable.filter((f) => rowViewedMs(f.id) >= VIEW_MS);
     if (!seen.length) {
       setNotice(
-        "None of the agreeing standard fields has been on screen long enough. Scroll to them and read them first.",
+        "None of the standard values where both paths agree has been on screen long enough. Scroll to them and read them first.",
       );
       return;
     }
@@ -339,11 +411,12 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
       );
       setFields((all) => {
         const next = { ...all };
-        for (const a of accepted) next[a.field_id] = { ...next[a.field_id]!, accepted: a.path };
+        for (const a of accepted)
+          next[a.field_id] = { ...next[a.field_id]!, accepted: a.path, acceptance: a };
         return next;
       });
       setNotice(
-        `Accepted ${accepted.length} agreeing standard ${accepted.length === 1 ? "field" : "fields"} as a group. A random tenth of them go to a re-check.${
+        `Accepted ${accepted.length} standard ${accepted.length === 1 ? "value" : "values"} where both paths agree, as a group. A random tenth of them go to a re-check.${
           unseen ? ` ${unseen} more ${unseen === 1 ? "has" : "have"} not been on screen yet.` : ""
         }`,
       );
@@ -354,9 +427,45 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
     }
   };
 
+  const pick = (path: Path | null) => {
+    if (!field) return;
+    setFields((all) => ({ ...all, [field.id]: { ...all[field.id]!, picked: path } }));
+    setNotice(null);
+  };
+  const startEdit = () => {
+    if (state?.accepted) {
+      setNotice("This value is accepted already.");
+      return;
+    }
+    if (!selection) {
+      setNotice("Select the value on the page first. An edit needs a source span.");
+      return;
+    }
+    setEditing({ selection, value: firstNumber(selection.quote) });
+    setNotice(`Edited to “${firstNumber(selection.quote)}”. Press Enter to accept.`);
+  };
+  // The batch names its fields before it applies: a first a (or the button) lists them, a second
+  // accepts them.
+  // While the list is open: the fields not on screen long enough yet, as of opening it.
+  const [confirming, setConfirming] = useState<ReadonlySet<string> | null>(null);
+  const openConfirm = () =>
+    setConfirming(new Set(groupable.filter((f) => rowViewedMs(f.id) < VIEW_MS).map((f) => f.id)));
+  const confirmGroup = () => {
+    setConfirming(null);
+    void acceptGroup();
+  };
+
   useKeys((event) => {
     if (!field) return false;
     const key = event.key;
+    if (confirming) {
+      if (key === "a" || key === "Enter") {
+        confirmGroup();
+        return true;
+      }
+      setConfirming(null);
+      if (key === "Escape") return true;
+    }
     if (key === "Tab") {
       move(event.shiftKey ? -1 : 1);
       return true;
@@ -378,123 +487,324 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
       return true;
     }
     if (key === "a") {
-      void acceptGroup();
+      if (groupable.length) openConfirm();
+      else setNotice("No standard value where both paths agree is open in this run.");
       return true;
     }
     if ((key === "1" || key === "2") && status === "differ") {
-      const path = field.proposals[Number(key) - 1]?.path ?? null;
-      setFields((all) => ({ ...all, [field.id]: { ...all[field.id]!, picked: path } }));
-      setNotice(null);
+      pick(field.proposals[Number(key) - 1]?.path ?? null);
       return true;
     }
     if (key === "e") {
-      if (state?.accepted) {
-        setNotice("This value is accepted already.");
-        return true;
-      }
-      if (!selection) {
-        setNotice("Select the value on the page first. An edit needs a source span.");
-        return true;
-      }
-      setEditing({ selection, value: firstNumber(selection.quote) });
-      setNotice(`Edited to “${firstNumber(selection.quote)}”. Press Enter to accept.`);
+      startEdit();
       return true;
     }
     return false;
   });
 
-  const groups = useMemo(() => {
-    const out: Array<{
-      endpoint: string;
-      set: string;
-      parts: Array<{ title: string; fields: ReviewField[] }>;
-    }> = [];
-    for (const f of review.fields) {
-      let group = out.find((g) => g.endpoint === f.labels.endpoint && g.set === f.key.analysis_set);
-      if (!group)
-        out.push((group = { endpoint: f.labels.endpoint, set: f.key.analysis_set, parts: [] }));
-      const title = `${f.labels.arm}, ${f.labels.timepoint.toLowerCase()}`;
-      let part = group.parts.find((p) => p.title === title);
-      if (!part) group.parts.push((part = { title, fields: [] }));
-      part.fields.push(f);
-    }
-    return out;
-  }, [review.fields]);
+  const shownIds = new Set(listed(selected).map((i) => review.fields[i]!.id));
+  const groups: Array<{ endpoint: string; set: string; fields: ReviewField[] }> = [];
+  for (const f of review.fields) {
+    if (!shownIds.has(f.id)) continue;
+    let group = groups.find(
+      (g) => g.endpoint === f.labels.endpoint && g.set === f.key.analysis_set,
+    );
+    if (!group)
+      groups.push((group = { endpoint: f.labels.endpoint, set: f.key.analysis_set, fields: [] }));
+    group.fields.push(f);
+  }
 
   const done = review.fields.filter((f) => fields[f.id]?.accepted).length;
+  const open = review.fields.length - done;
+  const names = new Map(project.members.map((m) => [m.actor_id, m.display_name]));
+  const paths = review.run.model_identity
+    ? `Janus and the LLM path (${review.run.model_identity})`
+    : "the Janus path only";
+  const dataCut = field?.key.data_cut ?? review.fields[0]?.key.data_cut;
+  const valueNow = (f: ReviewField) => {
+    const s = fields[f.id];
+    const p = proposal(f, s);
+    return s?.value ?? (p?.status === "extracted" ? p.value : null);
+  };
+  const failedNow = failedChecks(shown).length > 0;
+  const study = studyFromText(
+    studyNames.get(review.report.id),
+    review.layer.text,
+    review.report.citation,
+    studyName(studyNames, review.report.id, review.report.title),
+  );
+  const ids = [review.report.study_label, review.report.citation].filter(Boolean).join(" · ");
+  // The batch names its fields by endpoint: "Cigarettes per day: 2 values".
+  const batchNames = [...new Set(groupable.map((f) => f.labels.endpoint))]
+    .map((endpoint) => {
+      const n = groupable.filter((f) => f.labels.endpoint === endpoint).length;
+      return `${endpoint}: ${n} ${n === 1 ? "value" : "values"}`;
+    })
+    .join("\n");
+  const groupLabel = (f: ReviewField) =>
+    `${f.labels.endpoint}, ${f.labels.arm} · ${f.labels.timepoint.toLowerCase()}: ${quantityLabel(f)}`;
 
   return (
-    <div className="grid h-full grid-cols-[minmax(600px,47%)_minmax(0,1fr)]">
-      <section
-        className="flex min-h-0 flex-col border-r border-rule-strong bg-sheet"
-        aria-label="Extracted fields"
-      >
-        <header className="flex items-baseline gap-4 border-b border-rule px-5 pt-4 pb-3">
-          <div className="min-w-0">
-            <p className="text-xs text-ink-3">
-              <Link
-                to="/p/$projectId/extraction"
-                params={{ projectId: project.id }}
-                className="text-petrol hover:underline"
-              >
-                Runs
-              </Link>{" "}
-              {labels.report} {review.report.study_label}, data cut {field?.key.data_cut}
-            </p>
-            <h1 className="mt-0.5 truncate text-sm font-semibold" title={review.report.title}>
-              {review.report.title}
-            </h1>
-          </div>
-          <span
-            className="ml-auto text-xs whitespace-nowrap text-ink-2"
-            data-testid="accepted-count"
+    <div className="grid h-full grid-cols-[minmax(760px,50%)_minmax(0,1fr)]">
+      <section className="flex min-h-0 flex-col bg-paper" aria-label="Extracted fields">
+        <header className="px-6 pt-3 pb-3">
+          <Link
+            to="/p/$projectId/extraction"
+            params={{ projectId: project.id }}
+            className="inline-flex items-center gap-1 text-sm text-petrol hover:underline"
           >
-            {done} of {review.fields.length} accepted
-          </span>
-        </header>
-        <div ref={list} className="min-h-0 flex-1 overflow-y-auto" data-testid="fields">
-          <div className="narrow sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_7.5rem_8.5rem_5.5rem] gap-3 border-b border-rule bg-sheet px-5 py-1.5 text-2xs text-ink-3">
-            <span>Field</span>
-            <span className="text-right">Value</span>
-            <span>Paths</span>
-            <span>Review</span>
-          </div>
-          {groups.map((group) => (
-            <section key={`${group.endpoint}-${group.set}`} className="border-b border-rule pb-1">
-              <h2 className="flex items-baseline gap-3 px-5 pt-3 pb-1 text-sm font-semibold">
-                {group.endpoint}
-                <span className="text-xs font-normal text-ink-3">{group.set}</span>
-              </h2>
-              {group.parts.map((part) => (
-                <div key={part.title}>
-                  <h3 className="px-5 pt-1.5 pb-0.5 text-xs text-ink-2">{part.title}</h3>
-                  {part.fields.map((f) => (
-                    <FieldRow
-                      key={f.id}
-                      field={f}
-                      state={fields[f.id]}
-                      editing={f.id === field?.id ? editing : null}
-                      shown={proposal(f, fields[f.id])}
-                      selected={f.id === field?.id}
-                      onSelect={() => {
-                        setSelected(review.fields.indexOf(f));
-                        setEditing(null);
-                      }}
-                      rowRef={(el) => {
-                        if (el) rows.current.set(f.id, el);
-                        else rows.current.delete(f.id);
-                      }}
-                    />
-                  ))}
-                </div>
+            <span aria-hidden="true">←</span>
+            All runs
+          </Link>
+          <h1
+            className="mt-1.5 truncate text-lg leading-snug font-semibold"
+            title={[review.report.title, ids].filter(Boolean).join("\n")}
+          >
+            {study}
+          </h1>
+          {study !== review.report.title ? (
+            <p className="line-clamp-2 text-sm text-ink-2" title={ids}>
+              {review.report.title}
+            </p>
+          ) : null}
+          <p className="mt-1 text-sm text-ink-2">
+            Read by {paths}
+            {review.run.completed_at ? ` on ${formatDateTime(review.run.completed_at)}` : ""}.
+            {dataCut ? ` Data cut: ${keyWords(dataCut).toLowerCase()}.` : ""}
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <AcceptedBar accepted={done} total={review.fields.length} />
+            <span
+              className="text-sm font-medium whitespace-nowrap tabular-nums"
+              data-testid="accepted-count"
+            >
+              {done} of {review.fields.length} accepted
+            </span>
+            {open > 0 ? (
+              <>
+                <ToVerify>{`${open} to verify`}</ToVerify>
+                <Button size="sm" kind="quiet" onClick={nextOpen}>
+                  Next to verify
+                </Button>
+              </>
+            ) : (
+              <span className="text-sm">
+                <Status term={ACCEPTED}>Every value accepted</Status>
+              </span>
+            )}
+            <span
+              className="ml-auto inline-flex overflow-hidden rounded-[4px] border border-rule-strong text-sm"
+              role="group"
+              aria-label="Show"
+            >
+              {(
+                [
+                  ["all", `All fields (${review.fields.length})`],
+                  ["open", `To verify (${open})`],
+                ] as const
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  aria-pressed={filter === value}
+                  onClick={() => showOpen(value === "open")}
+                  className={`h-7 px-2.5 ${filter === value ? "bg-petrol-wash font-medium text-petrol" : "bg-sheet text-ink-2 hover:bg-sheet-2"}`}
+                >
+                  {label}
+                </button>
               ))}
-            </section>
-          ))}
+            </span>
+            <span className="relative">
+              <Button
+                size="sm"
+                keys={["a"]}
+                disabled={!groupable.length || busy}
+                aria-expanded={confirming !== null}
+                title={batchNames}
+                onClick={() => (confirming ? setConfirming(null) : openConfirm())}
+              >
+                {groupable.length
+                  ? groupable.length === 1
+                    ? "Accept the standard value where both paths agree"
+                    : `Accept the ${groupable.length} standard values where both paths agree`
+                  : "No standard values where both paths agree"}
+              </Button>
+              {confirming ? (
+                <div
+                  className="absolute top-full right-0 z-30 mt-1.5 w-[36rem] rounded-[4px] border border-rule-strong bg-sheet p-4 shadow-[0_8px_24px_rgb(0_0_0/0.12)]"
+                  data-testid="group-confirm"
+                >
+                  <p className="text-sm font-semibold">
+                    <Help text="Both paths read the same value, every check passed, and the value is standard, not critical. Only values that were on screen long enough go in. The checks test the numbers, not their clinical meaning.">
+                      Accept these {groupable.length} values together?
+                    </Help>
+                  </p>
+                  <ul className="mt-2.5 space-y-1 text-sm">
+                    {groupable.map((f) => {
+                      const v = valueNow(f);
+                      const seen = !confirming.has(f.id);
+                      return (
+                        <li key={f.id} className="flex items-baseline gap-2">
+                          <span className="min-w-0 flex-1 truncate" title={groupLabel(f)}>
+                            {groupLabel(f)}
+                          </span>
+                          <span className="font-semibold tabular-nums">
+                            {v ?? "–"}
+                            {v && f.spec.unit ? ` ${f.spec.unit}` : ""}
+                          </span>
+                          {seen ? null : (
+                            <span className="text-xs text-ink-2">not on screen yet</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="mt-3 flex items-center gap-2">
+                    <Button kind="primary" size="sm" keys={["a"]} onClick={confirmGroup}>
+                      Accept {groupable.length === 1 ? "it" : `the ${groupable.length} values`}
+                    </Button>
+                    <Button
+                      kind="quiet"
+                      size="sm"
+                      keys={["Esc"]}
+                      onClick={() => setConfirming(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </span>
+          </div>
+        </header>
+        {/* The working surface: the values, raised off the page. */}
+        {/* The sheet ends at its last row; it scrolls only when the rows outgrow the screen. */}
+        <div className="mx-4 flex min-h-0 flex-col overflow-hidden rounded-[6px] bg-raised shadow-raised">
+          <div ref={list} className="min-h-0 overflow-y-auto" data-testid="fields">
+            <div
+              className={`sticky top-0 z-10 grid h-8 ${COLUMNS} items-center gap-3 border-b border-rule bg-raised px-6 text-xs font-semibold text-ink-2`}
+            >
+              <span>Arm · timepoint</span>
+              <span>Quantity</span>
+              <span className="text-right">Value</span>
+              <span>Paths</span>
+              <span>Review</span>
+            </div>
+            {groups.map((group) => (
+              <section key={`${group.endpoint}-${group.set}`} className="pb-1">
+                <h2 className="sticky top-8 z-[5] flex items-baseline gap-2 bg-raised px-6 pt-3 pb-1 text-md font-semibold">
+                  {group.endpoint}
+                  <span
+                    className="rounded-full bg-sheet-2 px-2 text-xs font-normal text-ink-2"
+                    title={group.set}
+                  >
+                    {keyWords(group.set)}
+                  </span>
+                </h2>
+                {group.fields.map((f) => {
+                  const isSelected = f.id === field?.id;
+                  const s = fields[f.id];
+                  return (
+                    <div key={f.id} className="scroll-mt-[72px]">
+                      <FieldRow
+                        field={f}
+                        state={s}
+                        editing={isSelected ? editing : null}
+                        shown={proposal(f, s)}
+                        facts={estimateFacts({
+                          field: f,
+                          fields: review.fields,
+                          anchors,
+                          valueOf: valueNow,
+                          text: review.layer.text,
+                          acceptanceAnchor: s?.acceptance?.anchor_id,
+                          extraQuotes: s?.edited ? [s.edited.quote] : [],
+                        })}
+                        selected={isSelected}
+                        onSelect={() => {
+                          setSelected(review.fields.indexOf(f));
+                          setEditing(null);
+                        }}
+                        rowRef={(el) => {
+                          if (el) rows.current.set(f.id, el);
+                          else rows.current.delete(f.id);
+                        }}
+                      />
+                      {isSelected ? (
+                        <ValueHistory
+                          field={f}
+                          fields={review.fields}
+                          acceptance={s?.acceptance ?? null}
+                          accepted={s?.accepted ?? null}
+                          ownValue={s?.acceptance ? null : (s?.value ?? null)}
+                          edited={
+                            s?.edited
+                              ? { quote: s.edited.quote, page: s.edited.boxes[0]?.page ?? null }
+                              : null
+                          }
+                          shown={shown}
+                          anchors={anchors}
+                          names={names}
+                          run={review.run}
+                          text={review.layer.text}
+                          onPick={status === "differ" && !s?.accepted ? pick : null}
+                          actions={
+                            s?.accepted ? null : (
+                              <>
+                                <Button
+                                  kind="primary"
+                                  size="sm"
+                                  keys={["Enter"]}
+                                  disabled={busy}
+                                  onClick={() => void accept()}
+                                >
+                                  {editing ? `Accept ${editing.value.trim()}` : "Accept"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  keys={["e"]}
+                                  disabled={!selection}
+                                  title={
+                                    selection
+                                      ? undefined
+                                      : "Select the value on the page first. An edit needs a source span."
+                                  }
+                                  onClick={startEdit}
+                                >
+                                  Edit from selection
+                                </Button>
+                                {failedNow ? (
+                                  <Button
+                                    kind="danger"
+                                    size="sm"
+                                    keys={["o"]}
+                                    onClick={() => void accept({ override: true })}
+                                  >
+                                    Accept despite the failed check
+                                  </Button>
+                                ) : null}
+                                {status === "differ" && !s?.picked ? (
+                                  <span className="text-sm text-ink-2">
+                                    The paths disagree: take one value above first.
+                                  </span>
+                                ) : null}
+                              </>
+                            )
+                          }
+                        />
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </section>
+            ))}
+          </div>
         </div>
-        <footer className="border-t border-rule-strong bg-sheet-2 px-5 py-2.5 text-sm">
+        {/* Notices only: every action has its button, the keys are in the Keys sheet. */}
+        <footer className="px-6 py-2 text-sm">
           {editing ? (
             <label className="mb-2 flex items-center gap-3">
-              <span className="text-xs font-semibold text-ink-2">Value from your selection</span>
+              <span className="text-sm font-semibold text-ink-2">Value from your selection</span>
               <input
                 autoFocus
                 aria-label="Edited value"
@@ -511,33 +821,17 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
                 }}
                 className="w-32 rounded-[3px] border border-petrol bg-sheet px-2 py-0.5 text-sm outline-none"
               />
-              <span className="min-w-0 truncate text-xs text-ink-3" title={editing.selection.quote}>
+              <span className="min-w-0 truncate text-sm text-ink-2" title={editing.selection.quote}>
                 from “{editing.selection.quote.trim()}”
               </span>
             </label>
           ) : null}
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-            <KeyHint keys={["Tab"]}>Next field</KeyHint>
-            <KeyHint keys={["Enter"]}>Accept</KeyHint>
-            <KeyHint keys={["1", "2"]} muted={status !== "differ"}>
-              Pick a path
-            </KeyHint>
-            <KeyHint keys={["e"]} muted={!selection}>
-              Edit from selection
-            </KeyHint>
-            <KeyHint keys={["o"]} muted={!failedChecks(shown).length}>
-              Accept despite a failed check
-            </KeyHint>
-            <KeyHint keys={["a"]} muted={!groupable.length}>
-              Accept {groupable.length || "no"} agreeing standard fields
-            </KeyHint>
-          </div>
           <p
-            className="mt-1.5 min-h-5 text-xs text-ink-2"
+            className="min-h-5 text-sm text-ink"
             aria-live="polite"
             data-testid="extraction-notice"
           >
-            {notice ?? (field ? describe(field, shown) : "")}
+            {notice ?? ""}
           </p>
         </footer>
       </section>
@@ -548,34 +842,22 @@ export function ExtractionScreen({ review }: { review: ExtractionReview }) {
         target={target}
         onSelection={setSelection}
         onCurrentVisible={onCurrentVisible}
-        label={`${review.report.study_label}, ${review.report.citation || review.report.licence}`}
+        label={[study, journalOf(review.report.citation)].filter(Boolean).join(" · ")}
+        targetLabel="Show this value on the page"
       />
     </div>
   );
 }
 
-const describe = (field: ReviewField, shown: Proposal | undefined) => {
-  const failed = field.proposals.flatMap((p) =>
-    failedChecks(p).map((message) => `${PATH_NAME[p.path]}: ${message}`),
-  );
-  if (failed.length) return failed.join(" ");
-  const policy =
-    field.spec.policy === "critical"
-      ? "Critical. Check it against the highlighted source."
-      : field.spec.policy === "standard"
-        ? "Standard. You can accept agreeing, validated values together after reading the list."
-        : "Descriptive. Check the value and its span once.";
-  const why = shown?.message ? ` ${shown.message}.` : "";
-  return shown && shown.status !== "extracted"
-    ? `${PROPOSAL_STATUS[shown.status].label}.${why} ${policy}`
-    : policy;
-};
+// Arm and timepoint get the room: they tell two rows apart. Paths and the policy are icons.
+const COLUMNS = "grid-cols-[minmax(10rem,18rem)_minmax(9rem,1fr)_8rem_7.5rem_6.5rem]";
 
 function FieldRow({
   field,
   state,
   editing,
   shown,
+  facts,
   selected,
   onSelect,
   rowRef,
@@ -584,6 +866,7 @@ function FieldRow({
   state: FieldState | undefined;
   editing: Editing | null;
   shown: Proposal | undefined;
+  facts: EstimateFacts;
   selected: boolean;
   onSelect: () => void;
   rowRef: (el: HTMLElement | null) => void;
@@ -592,7 +875,10 @@ function FieldRow({
   const failed = field.proposals.some((p) => failedChecks(p).length > 0);
   const own = editing?.value ?? state?.value ?? null;
   const value = own ?? (shown?.status === "extracted" ? shown.value : null);
-  const unit = own ? field.spec.unit : shown?.unit;
+  const unit = unitBeside(own ? field.spec.unit : shown?.unit, facts.label);
+  const where = `${field.labels.arm} · ${field.labels.timepoint.toLowerCase()}`;
+  // Two readings to choose from: both in the value cell, the taken one in ink.
+  const choose = status === "differ" && !state?.accepted && !own;
   return (
     <div
       ref={rowRef}
@@ -601,50 +887,77 @@ function FieldRow({
       data-testid="field-row"
       data-field-id={field.id}
       onClick={onSelect}
-      className={`grid grid-cols-[minmax(0,1fr)_7.5rem_8.5rem_5.5rem] items-center gap-3 px-5 py-[5px] text-sm ${selected ? "evidence-item" : ""}`}
+      className={`grid cursor-default scroll-mt-[72px] scroll-mb-1 ${COLUMNS} items-center gap-2.5 border-b border-rule/60 px-6 py-1.5 text-md ${selected ? "bg-petrol-wash shadow-[inset_3px_0_0_var(--petrol)]" : "hover:bg-sheet-2"}`}
     >
-      <span className="truncate">
-        {field.spec.description}
-        {field.spec.policy !== "critical" ? (
-          <span className="ml-2 text-2xs text-ink-3">{field.spec.policy}</span>
-        ) : null}
-      </span>
-      <span className="text-right whitespace-nowrap" data-testid="field-value">
-        {value ??
-          (shown ? (
-            <Status term={PROPOSAL_STATUS[shown.status]} />
+      <span className="break-words" title={`${where} (${field.key.arm} · ${field.key.timepoint})`}>
+        {where}
+      </span>{" "}
+      <span
+        className="min-w-0 break-words"
+        title={[facts.label, facts.interval, field.key.quantity].filter(Boolean).join(" · ")}
+      >
+        {facts.label}{" "}
+        <span className="block leading-4">
+          <PolicyTag policy={field.spec.policy} />
+        </span>
+      </span>{" "}
+      <span className="text-right">
+        <span className="text-right whitespace-nowrap tabular-nums" data-testid="field-value">
+          {choose ? (
+            field.proposals.map((p, i) => (
+              <span
+                key={p.path}
+                title={`${i + 1}: ${p.path === "janus" ? "Janus" : "LLM"} read ${p.value ?? PROPOSAL_STATUS[p.status].label}`}
+                className={state?.picked === p.path ? "font-semibold text-ink" : "text-marker-edge"}
+              >
+                {i > 0 ? " / " : ""}
+                {p.value ?? PROPOSAL_STATUS[p.status].label}
+                {/* Same number, different unit: the unit is the disagreement. */}
+                {field.proposals.some((q) => q.unit !== p.unit) && p.unit
+                  ? `${unitGap(p.unit)}${p.unit}`
+                  : ""}
+              </span>
+            ))
           ) : (
-            <span className="text-ink-3">Empty</span>
-          ))}
-        {value && unit ? <span className="ml-1 text-ink-3">{unit}</span> : null}
-      </span>
-      <span className="narrow flex items-center gap-1.5 text-xs whitespace-nowrap">
-        {status === "differ" ? (
-          field.proposals.map((p, i) => (
-            <span
-              key={p.path}
-              className={`flex items-center gap-1 ${state?.picked === p.path || state?.accepted === p.path ? "font-semibold text-ink" : "text-unclear"}`}
-            >
-              <Key k={String(i + 1)} />
-              {p.value ?? PROPOSAL_STATUS[p.status].label}
-              {/* Same number, different unit: the unit is the disagreement. */}
-              {field.proposals.some((q) => q.unit !== p.unit) && p.unit ? ` ${p.unit}` : ""}
-            </span>
-          ))
-        ) : (
-          <span className={status === "agree" ? "text-ink-2" : "text-ink-3"}>
-            {SINGLE[field.agreement]}
-          </span>
-        )}
-        {failed ? <Mark term={PROPOSAL_STATUS.invalid} title="A validator failed" /> : null}
-      </span>
-      <span className="text-xs">
+            <>
+              {value ??
+                (shown ? (
+                  <Status term={PROPOSAL_STATUS[shown.status]} />
+                ) : (
+                  <span className="text-ink-3">Empty</span>
+                ))}
+              {value && unit ? (
+                <>
+                  {unitGap(unit)}
+                  <span className="text-ink-2">{unit}</span>
+                </>
+              ) : null}
+            </>
+          )}
+        </span>
+        {facts.interval ? (
+          <span className="block text-xs whitespace-nowrap text-ink-2">{facts.interval}</span>
+        ) : null}
+      </span>{" "}
+      <span className="narrow flex items-center gap-1.5 text-sm">
+        <Backing agreement={field.agreement} />
+        {failed ? <Mark term={PROPOSAL_STATUS.invalid} title="A check failed" /> : null}
+      </span>{" "}
+      <span className="text-sm">
         {state?.accepted ? (
-          <Status term={ACCEPTED}>{state.value !== null ? "Edited" : "Accepted"}</Status>
+          <>
+            {/* Editing is how the value came about, not a review state of its own. */}
+            <span
+              className="whitespace-nowrap"
+              title={state.value !== null ? "Edited by hand, then accepted" : undefined}
+            >
+              <Status term={ACCEPTED}>
+                {state.value !== null ? "Accepted, edited" : "Accepted"}
+              </Status>
+            </span>
+          </>
         ) : (
-          <span className="text-ink-3">
-            {status === "differ" && !state?.picked ? "Pick a path" : "To verify"}
-          </span>
+          <ToVerify>{status === "differ" && !state?.picked ? "Pick a path" : "To verify"}</ToVerify>
         )}
       </span>
     </div>

@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING, Any, Literal
 from kittum.core import Id, Record, Sha256
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from kittum.db import Tx
     from kittum.ledger import AuditEvent
     from kittum.storage import ArtifactStore
@@ -302,6 +304,51 @@ def _protocol_labels(tx: Tx, project_id: Id, hashes: list[str]) -> dict[str, str
     return labels
 
 
+def _own_templates(tx: Tx, project_id: Id, hashes: list[str]) -> dict[str, dict[str, str | None]]:
+    """Each protocol version's own user message template per topic, None where a topic keeps
+    Kittum's. A version Kittum has no document of is missing."""
+    docs = {
+        r["content_hash"]: r["document"]
+        for r in tx.execute(
+            "select content_hash, document from protocol_version where project_id = %s"
+            " and content_hash = any(%s)",
+            (project_id, hashes),
+        ).fetchall()
+    }
+    for r in tx.execute(
+        "select protocol_hash, protocol from screening_bench where project_id = %s"
+        " and protocol_hash = any(%s)",
+        (project_id, hashes),
+    ).fetchall():
+        docs.setdefault(r["protocol_hash"], r["protocol"])
+    return {
+        h: {
+            t["id"]: (t.get("judge") or {}).get("user_template")
+            for t in doc.get("search_topics", [])
+        }
+        for h, doc in docs.items()
+    }
+
+
+def _template(
+    own: Mapping[str, Mapping[str, str | None]],
+    protocol_hash: str,
+    topic_ids: set[str],
+    judge: Mapping[str, Any],
+    defaults: Mapping[str, str] | None,
+) -> str | None:
+    """The user message template a group of verdicts was sent with: the topic's own under the
+    protocol version they were read with, else the prompt version's. None when the version or the
+    topic cannot be found, or when topics sharing the scope send different templates, rather than
+    a template that may not be the one used."""
+    topics = own.get(protocol_hash)
+    if topics is None or not topic_ids or not topic_ids <= topics.keys():
+        return None
+    default = (defaults or {}).get(judge.get("prompt_version") or "")
+    found = {topics[t] or default for t in topic_ids}
+    return found.pop() if len(found) == 1 else None
+
+
 def prompt_cards(
     tx: Tx,
     project_id: Id,
@@ -309,10 +356,11 @@ def prompt_cards(
     judges: dict[str, dict[str, Any]],
     store: ArtifactStore | None,
     *,
-    judge_template: str | None = None,
+    judge_templates: Mapping[str, str] | None = None,
 ) -> tuple[PromptCard, ...]:
     """One card per use of each AI role through the cutoff, in the order the review first used
-    them. `judges` holds each judge configuration's recorded recipe and prompt hashes by ID."""
+    them. `judges` holds each judge configuration's recorded recipe and prompt hashes by ID;
+    `judge_templates` the judge's user message template by prompt version."""
     cards: list[PromptCard] = []
 
     verdict_ids = [e.payload["verdict_id"] for e in events if e.type == VERDICT_RECORDED]
@@ -330,6 +378,14 @@ def prompt_cards(
     for config_id, stage, scope, _ in groups:
         versions[config_id, stage, scope] = versions.get((config_id, stage, scope), 0) + 1
     labels = _protocol_labels(tx, project_id, [k[3] for k in groups])
+    own = _own_templates(tx, project_id, [k[3] for k in groups])
+    # A verdict names its scope, not its topic, and several topics may screen one scope.
+    topics: dict[tuple[str, str], set[str]] = {}
+    for r in tx.execute(
+        "select stage, scope_id, topic_id from screening_stage where project_id = %s",
+        (project_id,),
+    ).fetchall():
+        topics.setdefault((r["stage"], r["scope_id"]), set()).add(r["topic_id"])
     for (config_id, stage, scope, protocol_hash), rows in groups.items():
         judge = judges.get(config_id, {})
         recipe = judge.get("recipe") or {}
@@ -357,7 +413,9 @@ def prompt_cards(
                     "endpoints": list(judge.get("endpoints", [])),
                     "reported_model_identities": list(judge.get("model_identities", [])),
                 },
-                user_template=judge_template,
+                user_template=_template(
+                    own, protocol_hash, topics.get((stage, scope), set()), judge, judge_templates
+                ),
             )
         )
 

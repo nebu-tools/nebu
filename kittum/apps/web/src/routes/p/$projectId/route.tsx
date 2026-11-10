@@ -1,9 +1,9 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { Menu } from "@base-ui/react/menu";
-import { createFileRoute, Link, Outlet, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { createFileRoute, Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 
-import type { Member, ProjectSummary } from "../../../data/schema.ts";
+import type { Member, ProjectSummary, Role } from "../../../data/schema.ts";
 import { run } from "../../../data/workbench.ts";
 import {
   derive,
@@ -14,6 +14,7 @@ import {
 } from "../../../screens/project.tsx";
 import type { ProjectState } from "../../../screens/project.tsx";
 import { Key } from "../../../ui/Key.tsx";
+import { Mark, VERDICTS } from "../../../ui/Status.tsx";
 import { useKeys } from "../../../ui/keys.ts";
 import { useTheme } from "../../../ui/theme.ts";
 
@@ -46,33 +47,58 @@ type Section =
   | "reports"
   | "audit";
 
+// Who acts on which stage: the screens a person screens on, the lead's own pages.
+const LEAD: ReadonlyArray<Role> = [];
+const SCREENS: ReadonlyArray<Role> = ["reviewer", "auditor"];
+
 const NAV: ReadonlyArray<{
   section: Section;
   label: string;
   chord: string;
-  group?: string;
+  group: string;
+  /** The roles that act on this stage; the methods lead sees every stage. None: everyone. */
+  roles?: ReadonlyArray<Role>;
   /** Shown only to a methods lead who screens nothing, as the server answers only them. */
   lead?: boolean;
 }> = [
-  { section: "setup", label: "Setup", chord: "u" },
-  { section: "protocol", label: "Protocol", chord: "p" },
-  { section: "search", label: "Search", chord: "s" },
-  { section: "studies", label: "Studies", chord: "d" },
-  { section: "retrieval", label: "Retrieval", chord: "v" },
+  { section: "setup", label: "Workflow", chord: "u", group: "Set up", roles: LEAD },
+  { section: "protocol", label: "Protocol", chord: "p", group: "Set up" },
+  { section: "search", label: "Search", chord: "s", group: "Set up", roles: LEAD },
+  { section: "studies", label: "Studies", chord: "d", group: "Set up", roles: LEAD },
   {
     section: "screening/title-abstract",
     label: "Title and abstract",
     chord: "t",
-    group: "Screening",
+    group: "Screen",
+    roles: SCREENS,
   },
-  { section: "screening/full-text", label: "Full text", chord: "f", group: "Screening" },
-  { section: "screening/table", label: "Table", chord: "k", group: "Screening" },
-  { section: "adjudication", label: "Adjudication", chord: "a", group: "Screening" },
-  { section: "extraction", label: "Extraction", chord: "x" },
-  { section: "risk-of-bias", label: "Risk of bias", chord: "b" },
-  { section: "progress", label: "Progress", chord: "o" },
-  { section: "reports", label: "Reports", chord: "r" },
-  { section: "audit", label: "Audit", chord: "l", lead: true },
+  { section: "screening/table", label: "Table", chord: "k", group: "Screen", roles: SCREENS },
+  { section: "retrieval", label: "Retrieval", chord: "v", group: "Screen", roles: LEAD },
+  {
+    section: "screening/full-text",
+    label: "Full text",
+    chord: "f",
+    group: "Screen",
+    roles: SCREENS,
+  },
+  {
+    section: "adjudication",
+    label: "Adjudication",
+    chord: "a",
+    group: "Screen",
+    roles: ["adjudicator"],
+  },
+  {
+    section: "extraction",
+    label: "Extraction",
+    chord: "x",
+    group: "Appraise",
+    roles: ["reviewer"],
+  },
+  { section: "risk-of-bias", label: "Risk of bias", chord: "b", group: "Appraise", roles: LEAD },
+  { section: "progress", label: "Progress", chord: "o", group: "Report" },
+  { section: "reports", label: "Reports", chord: "r", group: "Report" },
+  { section: "audit", label: "Audit", chord: "l", lead: true, group: "Report" },
 ];
 
 const path = (section: Section) => `/p/$projectId/${section}` as const;
@@ -98,7 +124,13 @@ function ProjectLayout() {
 function Layout({ state, onSwitch }: { state: ProjectState; onSwitch: () => void }) {
   const navigate = useNavigate();
   const { seesLeadData } = derive(state);
-  const nav = NAV.filter((n) => !n.lead || seesLeadData);
+  const isLead = state.me.roles.includes("lead");
+  const nav = NAV.filter(
+    (n) =>
+      (!n.lead || seesLeadData) &&
+      (isLead || !n.roles || n.roles.some((r) => state.me.roles.includes(r))),
+  );
+  const groups = new Set(nav.map((n) => n.group)).size;
   const [chord, setChord] = useState(false);
   const [help, setHelp] = useState(false);
   const { theme, toggle } = useTheme();
@@ -139,14 +171,23 @@ function Layout({ state, onSwitch }: { state: ProjectState; onSwitch: () => void
           >
             {nav.map((item, index) => (
               <span key={item.section} className="flex items-center">
-                {/* A rule on each side of a group, the screening stages. */}
-                {index > 0 && nav[index - 1]?.group !== item.group ? (
-                  <span aria-hidden="true" className="mx-1 h-4 w-px self-center bg-rule-strong" />
+                {/* Each group of stages starts with its name, after a rule; a role that sees one
+                group needs no names. */}
+                {groups > 1 && (index === 0 || nav[index - 1]?.group !== item.group) ? (
+                  <span className="flex items-center" aria-hidden="true">
+                    {index > 0 ? (
+                      <span className="mx-2 h-4 w-px self-center bg-rule-strong" />
+                    ) : null}
+                    <span className="mr-1 text-xs whitespace-nowrap text-ink-3">{item.group}</span>
+                  </span>
                 ) : null}
                 <Link
                   to={path(item.section)}
                   params={{ projectId: state.project.id }}
-                  className="narrow rounded-[3px] px-1 py-1 text-sm whitespace-nowrap text-ink-2 hover:text-ink data-[status=active]:bg-petrol-wash data-[status=active]:font-medium data-[status=active]:text-petrol"
+                  // A hidden bold copy of the label reserves the active item's width, so the
+                  // row does not shift when the active item changes.
+                  data-label={item.label}
+                  className="narrow inline-flex flex-col items-center rounded-[3px] px-1 py-1 text-sm whitespace-nowrap text-ink-2 after:invisible after:block after:h-0 after:overflow-hidden after:font-medium after:content-[attr(data-label)] hover:text-ink data-[status=active]:bg-petrol-wash data-[status=active]:font-medium data-[status=active]:text-petrol"
                   title={`g then ${item.chord}`}
                 >
                   {item.label}
@@ -159,14 +200,22 @@ function Layout({ state, onSwitch }: { state: ProjectState; onSwitch: () => void
               <Key k="g" /> then a stage key
             </span>
           ) : null}
+          {seesLeadData ? (
+            <LedgerMark projectId={state.project.id} actorId={state.me.actor_id} />
+          ) : null}
           <Identity member={state.me} onSwitch={onSwitch} />
           <button
             type="button"
             onClick={toggle}
-            className="rounded-[3px] px-2 py-1 text-sm text-ink-2 hover:text-ink"
+            className="flex-none rounded-[3px] px-1.5 py-1 text-sm text-ink-2 hover:bg-sheet-2 hover:text-ink"
             aria-label={theme === "dark" ? "Use light theme" : "Use dark theme"}
+            title={theme === "dark" ? "Use the light theme" : "Use the dark theme"}
           >
-            {theme === "dark" ? "Light" : "Dark"}
+            {/* A half-filled circle: the font has no such glyph, so it is drawn. */}
+            <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <circle cx="7" cy="7" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+              <path d="M7 1.5a5.5 5.5 0 0 1 0 11z" fill="currentColor" />
+            </svg>
           </button>
           <KeysDialog open={help} onOpenChange={setHelp} />
         </header>
@@ -183,7 +232,9 @@ function ProjectSwitcher({ state }: { state: ProjectState }) {
   return (
     <Menu.Root>
       <Menu.Trigger className="flex max-w-[360px] min-w-0 flex-none items-baseline gap-2 rounded-[3px] px-2 py-1 text-left hover:bg-sheet-2 data-[popup-open]:bg-sheet-2">
-        <span className="max-w-[150px] truncate text-sm font-semibold">{state.project.name}</span>
+        <span className="max-w-[300px] truncate text-sm font-semibold" title={state.project.name}>
+          {state.project.name}
+        </span>
         <svg
           width="9"
           height="6"
@@ -236,7 +287,7 @@ const KEYS: ReadonlyArray<{
     ],
   },
   {
-    screen: "Setup (the methods lead)",
+    screen: "Workflow (the methods lead)",
     keys: [
       [["j", "k"], "Next and previous step"],
       [["Enter"], "Go to the step's screen"],
@@ -253,6 +304,8 @@ const KEYS: ReadonlyArray<{
       [["Ctrl", "Enter"], "Save the form as a revision, or check the YAML"],
       [["1–9", "a"], "Tick a suggested change, accept the ticked ones"],
       [["i", "n"], "Import a search file, run a live search"],
+      [["j", "k"], "Search: move between the searches"],
+      [["Enter"], "Search: show or fold the selected search's full query"],
       [["u", "s"], "Upload a full text, add a full-text sentinel"],
       [["o", "r"], "Fetch open-access PDFs, retry the sources that failed"],
       [["b", "e"], "Upload many PDFs, export the reports without a PDF"],
@@ -261,6 +314,7 @@ const KEYS: ReadonlyArray<{
   {
     screen: "Studies (the methods lead)",
     keys: [
+      [["j", "k"], "Move between records"],
       [["Enter"], "Confirm the selected proposed link"],
       [["a"], "Confirm every duplicate with the same DOI, PMID, or PMCID"],
       [["x", "m"], "Mark records, then merge them into one study"],
@@ -275,8 +329,9 @@ const KEYS: ReadonlyArray<{
       [["e", "1–9"], "Exclude on a criterion"],
       [["u"], "Unclear"],
       [["Backspace"], "Undo the last decision"],
+      [["f"], "Ask for a second opinion, in a pool of screeners"],
       [[" "], "Keep your decision and go to the next record"],
-      [["c"], "Show every criterion in full, or short again"],
+      [["p"], "Read the prompt the AI read this record with; p or Esc returns"],
     ],
   },
   {
@@ -317,9 +372,10 @@ const KEYS: ReadonlyArray<{
   {
     screen: "Reports (the methods lead)",
     keys: [
-      [["p"], "Render the PRISMA flow"],
-      [["a"], "Show the AI-use disclosure with its prompts"],
-      [["e"], "Download the extracted values"],
+      [["p"], "Generate the PRISMA flow diagram"],
+      [["a"], "Generate the AI-use disclosure"],
+      [["e"], "Generate the extracted values"],
+      [["b"], "Generate the risk-of-bias table"],
       [["s"], "Seal the handover bundle"],
     ],
   },
@@ -341,6 +397,10 @@ const KEYS: ReadonlyArray<{
       [["Enter"], "Accept, once the source was on screen"],
       [["1", "2"], "Pick a path when they disagree"],
       [["e"], "Edit from a selection on the page"],
+      [["j", "k"], "Move between fields or runs"],
+      [["o"], "Accept despite a failed check"],
+      [["a"], "Accept the validated standard fields (press twice)"],
+      [["n"], "Request a run (the methods lead, on the runs screen)"],
     ],
   },
 ];
@@ -397,12 +457,11 @@ function Identity({ member, onSwitch }: { member: Member; onSwitch: () => void }
       data-testid="identity"
       title={`${member.roles.map((r) => ROLE_LABELS[r]).join(", ")}. There is no sign-in yet: choose who you are. Anyone who can reach the server can act as anyone.`}
       aria-label={`Acting as ${member.display_name}, ${member.roles.map((r) => ROLE_LABELS[r]).join(", ")}. Switch person`}
-      className="flex items-baseline gap-2 rounded-[3px] px-2 py-1 text-sm whitespace-nowrap hover:bg-sheet-2"
+      className="flex flex-none items-baseline gap-2 rounded-[3px] px-2 py-1 text-sm whitespace-nowrap hover:bg-sheet-2"
     >
       <span className="font-medium">{member.display_name}</span>
-      <span className="hidden text-xs text-ink-3 2xl:inline">
-        {member.roles.map((r) => ROLE_LABELS[r]).join(", ")}
-      </span>
+      {/* The roles are in the hover and for screen readers; the bar keeps its width. */}
+      <span className="sr-only">{member.roles.map((r) => ROLE_LABELS[r]).join(", ")}</span>
     </button>
   );
 }
@@ -457,5 +516,54 @@ function IdentityPicker({
         ) : null}
       </div>
     </div>
+  );
+}
+
+/** The ledger's state on every lead screen: a quiet check while it verifies, a red mark that
+ * opens the audit when it does not. */
+function LedgerMark({ projectId, actorId }: { projectId: string; actorId: string }) {
+  const { workbench } = Route.useRouteContext();
+  // Checked again on every screen change, so a new check on Audit shows here too.
+  const path = useLocation({ select: (l) => l.pathname });
+  const [ledger, setLedger] = useState<{ ok: boolean; seq: number | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    run(workbench.ledger({ projectId, as: actorId })).then(
+      (l) =>
+        live &&
+        setLedger({
+          ok: l.ok,
+          seq: l.ok ? (l.checked_through_seq ?? null) : (l.verify?.first_bad_seq ?? null),
+        }),
+      () => live && setLedger(null),
+    );
+    return () => {
+      live = false;
+    };
+  }, [workbench, projectId, actorId, path]);
+  if (!ledger) return null;
+  return (
+    <Link
+      to="/p/$projectId/audit"
+      params={{ projectId }}
+      data-testid="ledger-mark"
+      className={`flex flex-none items-center gap-1.5 rounded-[3px] px-2 py-1 text-xs whitespace-nowrap ${
+        ledger.ok ? "text-ink-2 hover:text-ink" : "bg-exclude-wash font-semibold text-exclude"
+      }`}
+      title={
+        ledger.ok
+          ? `Every ledger event up to ${ledger.seq ?? "the last"} matches its hash. Open the audit.`
+          : `The ledger's hash chain breaks at event ${ledger.seq ?? "?"}. Open the audit.`
+      }
+    >
+      <Mark term={ledger.ok ? VERDICTS.met : VERDICTS.not_met} />
+      {ledger.ok ? (
+        <span>
+          Ledger<span className="sr-only"> verified</span>
+        </span>
+      ) : (
+        "Ledger break"
+      )}
+    </Link>
   );
 }

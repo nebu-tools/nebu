@@ -14,6 +14,12 @@ afterEach(() => {
 });
 
 const notice = () => page.getByTestId("extraction-notice");
+/** A group accept lists its fields first; a second a applies it. */
+const groupAccept = async () => {
+  await press("a");
+  await expect.element(page.getByTestId("group-confirm")).toBeVisible();
+  await press("a");
+};
 const selected = () =>
   document.querySelector("[data-testid=field-row][aria-selected=true]")?.textContent ?? "";
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -49,7 +55,8 @@ window.IntersectionObserver = class extends RealObserver {
 /** The two agreeing standard fields a group accept takes, at the end of the mock list. */
 const groupRows = () =>
   [...document.querySelectorAll<HTMLElement>("[data-testid=field-row]")].filter(
-    (r) => r.textContent?.includes("standard") && r.textContent.includes("Both agree"),
+    (r) =>
+      r.querySelector("[data-policy=standard]") !== null && r.textContent?.includes("Both agree"),
   );
 /** Scrolls the group's rows into view and waits until the page has been told each one is. */
 const showGroupRows = async () => {
@@ -129,6 +136,11 @@ describe("extraction review", () => {
     // The two agreeing standard fields are last in the list, below the fold: a group accept
     // now would take values the reviewer never saw, however long the screen has been open.
     await pause(VIEW_MS + 300);
+    // The batch names its fields before it applies.
+    await press("a");
+    await expect
+      .element(page.getByTestId("group-confirm"))
+      .toMatchTextContent(/Patients with any adverse event.*Patients with any adverse event/);
     await press("a");
     await expect.element(notice(), settle).toMatchTextContent("has been on screen long enough");
     expect(app.workbench.groupAccepts).toHaveLength(0);
@@ -142,7 +154,7 @@ describe("extraction review", () => {
     await expect.poll(() => rows().length, settle).toBe(2);
     const shownAt = performance.now();
     await pause(VIEW_MS + 300);
-    await press("a");
+    await groupAccept();
     await expect.element(page.getByText("3 of 21 accepted"), settle).toBeVisible();
     const [group] = app.workbench.groupAccepts;
     expect(group?.fieldIds).toEqual(rows().map((r) => r.dataset["fieldId"]));
@@ -171,7 +183,7 @@ describe("extraction review", () => {
       // Back, the fresh reports wait: nothing has been on screen since the return.
       hold();
       setHidden(false);
-      await press("a");
+      await groupAccept();
       await expect.element(notice(), settle).toMatchTextContent("has been on screen long enough");
       expect(app.workbench.groupAccepts).toHaveLength(0);
       // Their time runs once the page has said they are in view again. A browser need not send a
@@ -188,7 +200,7 @@ describe("extraction review", () => {
       await frames(2); // the browser has seen the rows leave before they come back
       await showGroupRows();
       await pause(VIEW_MS + 100);
-      await press("a");
+      await groupAccept();
       await expect.element(page.getByText("3 of 21 accepted"), settle).toBeVisible();
       expect(app.workbench.groupAccepts[0]?.listViewedMs).toBeLessThan(HIDDEN_MS);
     },
@@ -243,17 +255,17 @@ describe("extraction review", () => {
       await pause(300);
       setHidden(false);
       await pause(VIEW_MS + 200);
-      await press("a");
+      await groupAccept();
       await expect.element(notice(), settle).toMatchTextContent("has been on screen long enough");
       expect(app.workbench.groupAccepts).toHaveLength(0);
       // Once the reports arrive, the rows count only when they are in view again.
       release();
       await pause(VIEW_MS + 200);
-      await press("a");
+      await groupAccept();
       await expect.element(notice(), settle).toMatchTextContent("has been on screen long enough");
       await showGroupRows();
       await pause(VIEW_MS + 100);
-      await press("a");
+      await groupAccept();
       await expect.element(page.getByText("3 of 21 accepted"), settle).toBeVisible();
     },
     BUDGET,

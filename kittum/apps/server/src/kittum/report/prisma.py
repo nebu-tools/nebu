@@ -4,9 +4,9 @@ Every count is the length of a list of item references (`PrismaFlow.members`), s
 the flow traces to the reports behind it and, through the bundle, to their decisions, events,
 and reviewers. `checks` states the sums that must hold; a broken one is reported, not hidden.
 
-The diagram leaves out PRISMA 2020's "records marked as ineligible by automation tools": no
-screening mode lets the AI exclude a record that no human saw, so the box could only ever say
-zero. What the AI did contribute is counted separately: exclusions the AI also proposed,
+The diagram keeps PRISMA 2020's "records marked as ineligible by automation tools" line, which
+always says zero: no screening mode lets the AI exclude a record that no human saw. What the AI
+did contribute is counted separately: exclusions the AI also proposed,
 exclusions decided after a reveal, and exclusions that stood after a blind extra screen the AI's
 disagreement triggered (whether the auditor upheld them or an adjudicator decided).
 
@@ -14,6 +14,7 @@ The diagram is drawn to be read at the size a report page or a screen shows it: 
 980 px wide drawing, so text stays at 14 px or more down to 860 px of width.
 """
 
+import re
 import textwrap
 from collections import Counter
 from html import escape
@@ -23,6 +24,8 @@ from uuid import UUID
 from kittum.core import Id, Record
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+
     from kittum.report.review import ItemResult, Review, StageResult
 
 
@@ -340,6 +343,15 @@ def _wrap(line: str) -> list[str]:
     return [part.replace("\u00a0", " ") for part in wrapped]
 
 
+_APOSTROPHE = re.compile(r"(?<=[A-Za-z])'(?=[A-Za-z])")
+
+
+def _text(line: str) -> str:
+    """A line as the figure prints it: typographic apostrophes (the figure goes into papers),
+    escaped for SVG."""
+    return escape(_APOSTROPHE.sub("\u2019", line))
+
+
 def _box(
     x: int, y: int, given: list[str], *, bold_first: bool = True, min_height: int = 0
 ) -> tuple[str, int]:
@@ -356,7 +368,7 @@ def _box(
         indent = 8 * (len(line) - len(line.lstrip(" ")))
         parts.append(
             f"<text x='{x + _PAD + indent}' y='{y + _PAD + _LINE * (n + 1) - 4}' {_FONT}{weight}>"
-            f"{escape(line)}</text>"
+            f"{_text(line)}</text>"
         )
     return "".join(parts), height
 
@@ -368,15 +380,73 @@ def _arrow(x1: int, y1: int, x2: int, y2: int) -> str:
     )
 
 
-def svg(f: PrismaFlow, title: str) -> str:
-    """The flow as a standalone SVG."""
+def retrieval_note(articles: int, registry: int) -> str:
+    """What "Reports not retrieved" means at this ledger event, with the open retrieval counted,
+    so a downloaded draft keeps its status: the words Retrieval and Progress use."""
+
+    def count(n: int, one: str, many: str) -> str:
+        return f"{n} {one if n == 1 else many}"
+
+    parts = [
+        *([count(articles, "article needs a PDF", "articles need a PDF")] if articles else []),
+        *(
+            [
+                count(
+                    registry,
+                    "registry record has no article yet",
+                    "registry records have no article yet",
+                )
+            ]
+            if registry
+            else []
+        ),
+    ]
+    return (
+        "Reports not retrieved: reports sought that had no full text in Kittum at this ledger"
+        f" event. Retrieval was still open: {' and '.join(parts)}."
+    )
+
+
+AI_LINE = "With AI involvement*"
+AI_NOTE = (
+    "* With AI involvement: people excluded the record, and the AI also proposed it with a quote"
+    " Kittum found, or a person saw the AI's reading first, or the AI's disagreement sent it to a"
+    " blind extra screen. Counted once per record; the AI-use disclosure has the details."
+)
+
+# Characters per line of the subtitle across the drawing, again in a monospaced fallback.
+_TITLE_CHARS = int((2 * _W + _GAP) / (16 * 0.6))
+
+
+def svg(
+    f: PrismaFlow,
+    title: str,
+    *,
+    subtitle: Sequence[str] = (),
+    reasons: Mapping[str, str] | None = None,
+    notes: Sequence[str] = (),
+    warning: str | None = None,
+    registry_not_retrieved: int = 0,
+) -> str:
+    """The flow as a standalone SVG: `title` in bold, then each `subtitle` line wrapped under it
+    (the review question the flow answers), and `warning` in red under that (an unverified
+    ledger). `reasons` names the exclusion reasons by criterion ID: a figure for publication
+    shows a short name, never the ID, and `notes` under the diagram give the full wording and
+    define the AI line, so the exported file explains itself. `registry_not_retrieved` splits the
+    reports not retrieved into articles still without a full text and trial registry entries."""
     left, right = _BAND + 20, _BAND + 20 + _W + _GAP
+    # Of the reports not retrieved, the trial registry entries: no article exists yet.
+    registry = min(registry_not_retrieved, f.reports_not_retrieved)
 
     def sources(*kinds: str) -> list[str]:
         """The sources of a PRISMA 2020 category, each under it with its own count."""
         return [f"  {s.name}: n = {s.records}" for s in f.identified_by_source if s.kind in kinds]
 
-    reasons = [f"  {r.criterion_id}: n = {r.reports}" for r in f.exclusion_reasons]
+    named = reasons or {}
+    reason_lines = [
+        f"  {named.get(r.criterion_id, r.criterion_id)}: n = {r.reports}"
+        for r in f.exclusion_reasons
+    ]
     rows: list[tuple[str, list[str], list[str]]] = [
         (
             "Identification",
@@ -392,6 +462,10 @@ def svg(f: PrismaFlow, title: str) -> str:
             [
                 "Records removed before screening:",
                 f"Duplicate records removed: n = {f.duplicates_removed}",
+                # PRISMA 2020's template lines. No screening mode lets the AI exclude a record
+                # that no person saw, so automation tools mark none ineligible.
+                "Records marked as ineligible by automation tools: n = 0",
+                "Records removed for other reasons: n = 0",
                 *(
                     [f"Found after the corpus was built: n = {f.records_outside_identity}"]
                     if f.records_outside_identity
@@ -411,14 +485,24 @@ def svg(f: PrismaFlow, title: str) -> str:
             ],
             [
                 f"Records excluded: n = {f.records_excluded}",
-                f"  AI took part in: n = {f.ai_title_abstract.excluded_with_ai_involvement}",
+                f"  {AI_LINE}: n = {f.ai_title_abstract.excluded_with_ai_involvement}",
                 *([f"In conflict: n = {f.records_unresolved}"] if f.records_unresolved else []),
             ],
         ),
         (
             "",
             [f"Reports sought for retrieval: n = {f.reports_sought}"],
-            [f"Reports not retrieved: n = {f.reports_not_retrieved}"],
+            [
+                f"Reports not retrieved: n = {f.reports_not_retrieved}",
+                *(
+                    [
+                        f"  Article, PDF needed: n = {f.reports_not_retrieved - registry}",
+                        f"  Registry record, no article yet: n = {registry}",
+                    ]
+                    if registry
+                    else []
+                ),
+            ],
         ),
         (
             "",
@@ -432,8 +516,8 @@ def svg(f: PrismaFlow, title: str) -> str:
             ],
             [
                 f"Reports excluded: n = {f.reports_excluded}",
-                *reasons,
-                f"  AI took part in: n = {f.ai_full_text.excluded_with_ai_involvement}",
+                *reason_lines,
+                f"  {AI_LINE}: n = {f.ai_full_text.excluded_with_ai_involvement}",
                 *(
                     [f"Insufficient information: n = {f.reports_awaiting_classification}"]
                     if f.reports_awaiting_classification
@@ -452,9 +536,20 @@ def svg(f: PrismaFlow, title: str) -> str:
         ),
     ]
     body: list[str] = [
-        f"<text x='{left}' y='30' {_FAMILY} font-size='19' font-weight='600'>{escape(title)}</text>"
+        f"<text class='title' x='{left}' y='30' {_FAMILY} font-size='19' font-weight='600'>"
+        f"{_text(title)}</text>"
     ]
-    y = 52
+    y = 30
+    for line in (part for given in subtitle for part in textwrap.wrap(given, _TITLE_CHARS)):
+        y += _LINE
+        body.append(f"<text class='title' x='{left}' y='{y}' {_FONT}>{_text(line)}</text>")
+    for line in textwrap.wrap(warning or "", _TITLE_CHARS):
+        y += _LINE
+        body.append(
+            f"<text class='warning' x='{left}' y='{y}' {_FONT} font-weight='600' "
+            f"fill='#b42318'>{_text(line)}</text>"
+        )
+    y += 22
     spans: list[tuple[str, int, int]] = []  # (band, top, bottom)
     previous_bottom: int | None = None
     for band, main, side in rows:
@@ -483,10 +578,23 @@ def svg(f: PrismaFlow, title: str) -> str:
             f"<text x='{cx}' y='{cy}' {_FONT} font-weight='600' text-anchor='middle' "
             f"transform='rotate(-90 {cx} {cy})'>{band}</text>"
         )
+    if notes:
+        y += 4
+        for note in notes:
+            for line in textwrap.wrap(note, _TITLE_CHARS, subsequent_indent="  "):
+                indent = 8 * (len(line) - len(line.lstrip(" ")))
+                y += _LINE
+                body.append(
+                    f"<text class='note' x='{8 + indent}' y='{y - 4}' {_FONT} fill='#3e4c59'>"
+                    f"{_text(line.strip())}</text>"
+                )
+            y += 6
+        y += 16
     width = right + _W + 20
+    label = ". ".join([title, *subtitle, *([warning] if warning else [])])
     return (
         f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{y}' "
-        f"viewBox='0 0 {width} {y}' role='img' aria-label='{escape(title)}'>"
+        f"viewBox='0 0 {width} {y}' role='img' aria-label='{_text(label)}'>"
         "<defs><marker id='arrow' markerWidth='8' markerHeight='8' refX='7' refY='4' "
         "orient='auto'><path d='M0,0 L8,4 L0,8 z' fill='#1f2933'/></marker></defs>"
         f"<rect width='{width}' height='{y}' fill='#ffffff'/>{''.join(body)}</svg>\n"

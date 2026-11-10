@@ -50,12 +50,13 @@ from kittum.screening import (
     SheetExported,
     SheetRow,
     criteria_for,
+    criterion_numbers,
     screening_table,
     topic_for,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     from openpyxl.worksheet.worksheet import Worksheet
 
@@ -230,30 +231,35 @@ _COMMON = (
     "doi",
     "registry_ids",
 )
+# Title and abstract first, then the AI's reading and the reviewer's own columns, so a screener
+# reads and decides a row without scrolling sideways; the bibliographic details follow.
 REVIEWER_COLUMNS = (
     "ref",
     "position",
-    *_COMMON[1:],
-    "state",
-    "decision",
-    "reason",
-    "comment",
-    "decided_at",
-    "second_opinion",
+    "title",
+    "abstract",
     "ai",
     "ai_quote",
     "ai_rationale",
-    "abstract",
+    "decision",
+    "reason",
+    "comment",
+    "state",
+    "decided_at",
+    "second_opinion",
+    *_COMMON[2:],
 )
 LEAD_COLUMNS = (
-    *_COMMON,
+    "ref",
+    "title",
+    "abstract",
     "outcome",
     "outcome_reason",
     "decisions",
     "ai_excludes",
     "ai_not_met",
     "flags",
-    "abstract",
+    *_COMMON[2:],
 )
 _ONLY = {
     "reviewer": set(REVIEWER_COLUMNS),
@@ -280,9 +286,15 @@ def _sheet_rows(ws: Worksheet, rows: Sequence[Sequence[Value]], widths: Sequence
 
 
 def _width(column: str) -> int:
-    return {"title": 60, "abstract": 80, "authors": 30, "journal": 24, "comment": 30}.get(
-        column, 14 if column in {"year", "position", "pmid"} else 20
-    )
+    return {
+        "title": 50,
+        "abstract": 100,
+        "authors": 30,
+        "journal": 24,
+        "comment": 30,
+        "ai_rationale": 40,
+        "ai_quote": 40,
+    }.get(column, 14 if column in {"year", "position", "pmid"} else 20)
 
 
 def build_workbook(
@@ -293,6 +305,7 @@ def build_workbook(
     *,
     created: datetime,
     editable: bool = False,
+    numbers: Mapping[str, int] | None = None,
 ) -> bytes:
     """The XLSX file: the cover sheet, the rows, and the criteria the reasons name. `editable`
     makes the decision, reason, and comment columns the reviewer's to fill in, with drop-down
@@ -320,7 +333,15 @@ def build_workbook(
     )
     for c in records[1]:
         c.font = Font(bold=True)
-    records.freeze_panes = "B2"
+    # Long texts wrap in their cells, top-aligned, so a row reads like the screening screen.
+    for n, c in enumerate(columns, start=1):
+        if c in {"title", "abstract", "ai_quote", "ai_rationale"}:
+            for cell in records.iter_rows(min_row=2, min_col=n, max_col=n):
+                cell[0].alignment = Alignment(wrap_text=True, vertical="top")
+    # The row's ID columns and its title stay in view while the rest scrolls.
+    records.freeze_panes = records.cell(
+        row=2, column=columns.index("title") + 2 if "title" in columns else 2
+    )
     records.auto_filter.ref = records.dimensions
     if editable:
         last = max(len(rows) + 1, 2)
@@ -357,7 +378,12 @@ def build_workbook(
         [
             ["Key", "Criterion ID", "Short label", "Criterion"],
             *(
-                [n, c.id, c.short_label, c.text.get("en") or next(iter(c.text.values()))]
+                [
+                    (numbers or {}).get(c.id, n),
+                    c.id,
+                    c.short_label,
+                    c.text.get("en") or next(iter(c.text.values())),
+                ]
                 for n, c in enumerate(criteria, start=1)
             ),
         ],
@@ -436,7 +462,9 @@ def working_export(
     ).fetchone()
     assert stage_row is not None
     protocol = get_version(tx, project_id, stage_row["protocol_version_id"]).version.protocol
-    criteria = criteria_for(topic_for(protocol, scope_id, stage_row["topic_id"]), scope_id, stage)
+    topic = topic_for(protocol, scope_id, stage_row["topic_id"])
+    criteria = criteria_for(topic, scope_id, stage)
+    numbers = criterion_numbers(topic)
     project = tx.execute("select name from project where id = %s", (project_id,)).fetchone()
     names = {m.actor_id: m.display_name for m in members(tx, project_id)}
     now = clock.now()
@@ -492,6 +520,7 @@ def working_export(
         criteria,
         created=now.astimezone(UTC).replace(tzinfo=None),
         editable=editable,
+        numbers=numbers,
     )
     sha256 = store.put(data)
     # What each row's editable cells showed, so an import can tell an edit from an old value.
@@ -708,11 +737,12 @@ def _sheet_rows_of(
     raw = store.get(payload["decisions_hash"])
     exported = {ref: SheetExported.model_validate(v) for ref, v in json.loads(raw).items()}
     protocol = get_version(tx, project_id, stage["protocol_version_id"]).version.protocol
-    criteria = criteria_for(
-        topic_for(protocol, stage["scope_id"], stage["topic_id"]), stage["scope_id"], stage["stage"]
-    )
+    topic = topic_for(protocol, stage["scope_id"], stage["topic_id"])
+    criteria = criteria_for(topic, stage["scope_id"], stage["stage"])
+    numbers = criterion_numbers(topic)
     by_name = {c.id.casefold(): c.id for c in criteria}
-    by_name |= {str(n): c.id for n, c in enumerate(criteria, start=1)}
+    # A criterion's number is its permanent one, as the Criteria sheet and the screens show it.
+    by_name |= {str(numbers.get(c.id, n)): c.id for n, c in enumerate(criteria, start=1)}
     outcomes = {o: o for o in _SHEET_OUTCOMES} | {
         _OUTCOME[o].casefold(): o for o in _SHEET_OUTCOMES
     }
