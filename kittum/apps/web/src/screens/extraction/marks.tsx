@@ -327,7 +327,7 @@ export const estimateFacts = ({
   }
   if (value) {
     const pattern = new RegExp(
-      `${escape(value)}\\s*[(\\[]\\s*(${NUMBER})\\s*(?:[;,–—]|to|-)\\s*(${NUMBER})\\s*[)\\]]`,
+      `(?<![\\d.,·])${escape(value)}\\s*[(\\[]\\s*(${NUMBER})\\s*(?:[;,–—]|to|-)\\s*(${NUMBER})\\s*[)\\]]`,
     );
     for (const span of sources) {
       const m = pattern.exec(span);
