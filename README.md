@@ -1,9 +1,11 @@
 # nebu
 
-Published projects:
+This repository is archived. Its projects moved to the
+[nebu-tools](https://github.com/nebu-tools) organization with their history and open issues:
 
-- [Janus](janus/README.md): extract structured data from PDFs, inspect the evidence, and compare or export the results.
+- [Janus](https://github.com/nebu-tools/janus): extract structured data from PDFs, inspect the
+  evidence, and compare or export the results.
+- [Kittum](https://github.com/nebu-tools/kittum): auditable, AI-assisted systematic literature
+  reviews.
 
-## Licence
-
-Nebu is licensed under the [GNU Affero General Public License v3.0 or later](LICENSE).
+Pull requests and the combined history stay here for reference.
